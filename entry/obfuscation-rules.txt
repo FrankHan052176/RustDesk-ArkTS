@@ -1,0 +1,6 @@
+# Keep empty for now.
+
+-enable-property-obfuscation
+-enable-toplevel-obfuscation
+-enable-filename-obfuscation
+-enable-export-obfuscation

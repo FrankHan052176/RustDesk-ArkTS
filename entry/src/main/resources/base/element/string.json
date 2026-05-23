@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "RustDesk HarmonyOS entry module"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "RustDesk HarmonyOS shell ability"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "RustDesk HMOS"
+    }
+  ]
+}

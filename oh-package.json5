@@ -1,0 +1,9 @@
+{
+  "modelVersion": "6.1.0",
+  "description": "RustDesk HarmonyOS ArkTS host app.",
+  "dependencies": {
+    "rustdesk-ohrs": "file:../rustdesk_native_har/package.har"
+  },
+  "devDependencies": {},
+  "dynamicDependencies": {}
+}

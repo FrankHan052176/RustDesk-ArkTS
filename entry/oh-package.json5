@@ -1,0 +1,11 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "RustDesk HarmonyOS entry module.",
+  "main": "",
+  "author": "",
+  "license": "",
+  "dependencies": {
+    "rustdesk-ohrs": "file:../../rustdesk_native_har/package.har"
+  }
+}

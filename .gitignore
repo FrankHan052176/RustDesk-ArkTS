@@ -1,0 +1,29 @@
+# IDE settings
+.idea/
+.vscode/
+.deveco/
+
+# Dependency directories
+node_modules/
+oh_modules/
+.ohpm/
+
+# Build artifacts
+build/
+.hvigor/
+.cxx/
+*.har
+*.hap
+*.app
+*.hsp
+*.so
+
+# Environment/local configuration
+local.properties
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
