@@ -33,20 +33,6 @@ export struct SettingsTab {
   build() {
     Scroll(this.scroller) {
       Column({ space: 16 }) {
-        Column({ space: 6 }) {
-          Text('连接设置')
-            .fontSize(28)
-            .fontWeight(FontWeight.Bold)
-            .fontColor($r('sys.color.ohos_id_color_text_primary'));
-
-          Text('只保留连接相关设置与原生桥状态。')
-            .fontSize(14)
-            .fontColor($r('sys.color.ohos_id_color_text_secondary'));
-        }
-        .alignItems(HorizontalAlign.Start)
-        .width('100%')
-        .padding({ left: 4, right: 4, top: 6, bottom: 10 });
-
         Column({ space: 10 }) {
           Text('密码记忆')
             .fontSize(18)
@@ -138,7 +124,7 @@ export struct SettingsTab {
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
-      .padding({ left: 20, right: 20, top: 18, bottom: 120 });
+      .padding({ left: 20, right: 20, top: 156, bottom: 120 });
     }
     .width('100%')
     .height('100%');

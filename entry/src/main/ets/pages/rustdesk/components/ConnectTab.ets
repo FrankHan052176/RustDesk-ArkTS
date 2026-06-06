@@ -28,15 +28,6 @@ export struct ConnectTab {
     Scroll(this.scroller) {
       Column({ space: 16 }) {
         Column({ space: 10 }) {
-          Text('Resk')
-            .fontSize(28)
-            .fontWeight(FontWeight.Bold)
-            .fontColor($r('sys.color.ohos_id_color_text_primary'));
-
-          Text('输入目标地址后开始连接，密码将在后续弹框中输入。')
-            .fontSize(14)
-            .fontColor($r('sys.color.ohos_id_color_text_secondary'));
-
           Row({ space: 10 }) {
             Text(`状态 ${this.sessionPhase}`)
               .fontSize(12)
@@ -129,7 +120,7 @@ export struct ConnectTab {
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
-      .padding({ left: 20, right: 20, top: 18, bottom: 120 });
+      .padding({ left: 20, right: 20, top: 156, bottom: 120 });
     }
     .width('100%')
     .height('100%');

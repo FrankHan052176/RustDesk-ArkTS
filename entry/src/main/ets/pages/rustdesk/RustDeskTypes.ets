@@ -69,6 +69,11 @@ export interface NativeEvent {
   fps?: string;
   delay?: string;
   codec_format?: string;
+  x?: string;
+  y?: string;
+  hotx?: string;
+  hoty?: string;
+  colors?: string;
 }
 
 export interface PeerDisplayInfo {
@@ -76,6 +81,9 @@ export interface PeerDisplayInfo {
   height: number;
   x: number;
   y: number;
+  original_width?: number;
+  original_height?: number;
+  scaled_width?: number;
 }
 
 export interface ResolutionInfo {
