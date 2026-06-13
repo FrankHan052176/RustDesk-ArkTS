@@ -81,9 +81,11 @@ export interface PeerDisplayInfo {
   height: number;
   x: number;
   y: number;
+  cursor_embedded?: number;
   original_width?: number;
   original_height?: number;
   scaled_width?: number;
+  scaled_height?: number;
 }
 
 export interface ResolutionInfo {
