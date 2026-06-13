@@ -3,6 +3,7 @@ import native from 'rustdesk-ohrs';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { display, window } from '@kit.ArkUI';
+import { image } from '@kit.ImageKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ConnectTab } from './rustdesk/components/ConnectTab';
 import { PasswordPromptDialog } from './rustdesk/components/PasswordPromptDialog';
@@ -10,14 +11,19 @@ import { SettingsTab } from './rustdesk/components/SettingsTab';
 import { RustDeskPreferences } from './rustdesk/RustDeskPreferences';
 import { RustDeskSurfaceController } from './rustdesk/RustDeskSurfaceController';
 import {
+  isLocalPointInsidePaintRect,
   mapHarmonyKeyCode,
+  mapLocalToRemote,
   mapMouseButton,
-  mapPointerToRemote,
-  mapRemoteToPointer,
-  resolvePreviewTransform,
+  mapRemoteToLocal,
+  resolveCoordinateSpace,
+  RustDeskCoordinateSpace,
+  LocalPointerPosition,
+  RemotePointerPosition,
   RustDeskKeyPayload,
   RustDeskMousePayload,
   RustDeskModifierKey,
+  RustDeskRect,
   RustDeskSize,
 } from './rustdesk/RustDeskInputMapper';
 import {
@@ -40,10 +46,27 @@ const TOUCHPAD_TAP_MAX_MS = 220;
 const TOUCHPAD_TAP_MAX_DISTANCE = 18;
 const TOUCHPAD_LONG_PRESS_MS = 550;
 const TOUCHPAD_DOUBLE_TAP_MAX_MS = 260;
-const TOUCHPAD_MOVE_SENSITIVITY = 1.4;
+const TOUCHPAD_MOVE_SENSITIVITY = 1.0;
 const TOUCHPAD_SCROLL_SENSITIVITY = 1.6;
+const RELATIVE_MOUSE_RAW_SENSITIVITY = 1.0;
+const RELATIVE_MOUSE_FALLBACK_SENSITIVITY = 1.0;
+const RELATIVE_MOUSE_FLUSH_MS = 8;
+const RELATIVE_MOUSE_MAX_DELTA = 10000;
+const RELATIVE_MOUSE_BUTTON_SUPPRESS_MS = 120;
+const ABSOLUTE_MOUSE_LOG_SAMPLE_EVERY = 10;
 const RELATIVE_MOVE_LOG_SAMPLE_EVERY = 8;
 const RELATIVE_TOUCH_LOG_SAMPLE_EVERY = 6;
+const PREFERRED_CODEC_REAPPLY_MS = 5000;
+const REMOTE_CURSOR_OPTION_REAPPLY_MS = 1000;
+
+interface RemoteCursorBitmap {
+  id: string;
+  pixelMap: image.PixelMap;
+  hotX: number;
+  hotY: number;
+  width: number;
+  height: number;
+}
 
 @Entry
 @Component
@@ -86,6 +109,8 @@ struct RustDeskIndex {
   @State previewSurfaceVisible: boolean = false;
   @State previewSurfaceGeneration: number = 0;
   @State relativeMouseMode: boolean = false;
+  @State previewViewWidth: number = 0;
+  @State previewViewHeight: number = 0;
 
   private runtimeInitialized: boolean = false;
   private pollTimer: number = -1;
@@ -95,15 +120,17 @@ struct RustDeskIndex {
   private lastRenderStatsPollAt: number = 0;
   private previewSurfaceId: string = '';
   private currentDisplay: number = 0;
+  private peerPlatform: string = '';
   private peerDisplays: PeerDisplayInfo[] = [];
   private supportedResolutions: ResolutionInfo[] = [];
   private remoteFpsText: string = '--';
   private remoteDelayText: string = '--';
   private remoteCodecText: string = '--';
+  private preferredCodec: string = 'h264';
+  private codecPreferenceApplied: boolean = false;
+  private lastCodecPreferenceAppliedAt: number = 0;
   private savedPassword: string = '';
   private passwordDialogVisible: boolean = false;
-  private previewViewWidth: number = 0;
-  private previewViewHeight: number = 0;
   private activeModifiers: Set<RustDeskModifierKey> = new Set();
   private touchpadPrimaryId: number = -1;
   private touchpadSecondaryId: number = -1;
@@ -125,12 +152,33 @@ struct RustDeskIndex {
   private relativeMouseLastX: number = 0;
   private relativeMouseLastY: number = 0;
   private relativeMouseHasLast: boolean = false;
+  private relativeMousePendingX: number = 0;
+  private relativeMousePendingY: number = 0;
+  private relativeMouseFlushTimer: number = -1;
+  private relativeMouseSuppressMoveUntil: number = 0;
+  private mouseButtonsDown: Set<string> = new Set();
   private sessionFullscreenApplied: boolean = false;
   private relativeMoveLogCounter: number = 0;
   private relativeTouchMoveLogCounter: number = 0;
+  private absoluteMoveLogCounter: number = 0;
+  private remoteCursorEventLogCounter: number = 0;
+  private relativeModeActivatedAt: number = 0;
+  private remoteCursorOptionApplied: boolean = false;
+  private remoteCursorOptionLastAppliedAt: number = 0;
+  private lastRemoteCursorValid: boolean = false;
+  private lastRemoteCursorX: number = 0;
+  private lastRemoteCursorY: number = 0;
+  private lastRemoteCursorAt: number = 0;
+  private remoteCursorCurrentId: string = '-1';
+  private remoteCursorCache: Map<string, RemoteCursorBitmap> = new Map();
   @State remoteCursorVisible: boolean = false;
   @State remoteCursorLeft: number = 0;
   @State remoteCursorTop: number = 0;
+  @State remoteCursorPixelMap: image.PixelMap | undefined = undefined;
+  @State remoteCursorBitmapWidth: number = 0;
+  @State remoteCursorBitmapHeight: number = 0;
+  @State remoteCursorHotX: number = 0;
+  @State remoteCursorHotY: number = 0;
 
   aboutToAppear(): void {
     this.previewController.onCreated = (surfaceId: string) => this.handlePreviewSurfaceCreated(surfaceId);
@@ -161,6 +209,7 @@ struct RustDeskIndex {
       this.apiServer = native.runtimeGetApiServer();
       this.nativeBuildMarker = native.buildMarker();
       const capabilityResponse = JSON.parse(native.runtimeGetDecoderCapabilities()) as DecoderCapabilityResponse;
+      this.preferredCodec = this.selectPreferredCodec(capabilityResponse.capabilities);
       this.decoderCapabilitiesSummary = capabilityResponse.capabilities
         .map((item: DecoderCapability) => `${item.codec}:${item.recommendedName || '-'} hw=${String(item.hardwareAvailable)} sw=${String(item.softwareAvailable)}`)
         .join(' | ');
@@ -365,26 +414,61 @@ struct RustDeskIndex {
     this.frameHeight = 0;
     this.previewViewWidth = 0;
     this.previewViewHeight = 0;
+    this.currentDisplay = 0;
+    this.peerPlatform = '';
+    this.peerDisplays = [];
+    this.supportedResolutions = [];
     this.previewSurfaceVisible = false;
     this.previewSurfaceGeneration = 0;
     this.renderFpsText = 'FPS --';
     this.remoteFpsText = '--';
     this.remoteDelayText = '--';
     this.remoteCodecText = '--';
+    this.codecPreferenceApplied = false;
+    this.lastCodecPreferenceAppliedAt = 0;
     this.relativeMouseMode = false;
-    this.relativeMouseHasLast = false;
+    this.resetRelativeMouseState(false);
+    this.mouseButtonsDown.clear();
     this.activeModifiers.clear();
     this.resetTouchpadState();
     this.remoteCursorVisible = false;
     this.remoteCursorLeft = 0;
     this.remoteCursorTop = 0;
+    this.releaseRemoteCursorCache();
+    this.remoteCursorCurrentId = '-1';
+    this.remoteCursorOptionApplied = false;
+    this.remoteCursorOptionLastAppliedAt = 0;
+    this.lastRemoteCursorValid = false;
+    this.lastRemoteCursorX = 0;
+    this.lastRemoteCursorY = 0;
+    this.lastRemoteCursorAt = 0;
+    this.relativeModeActivatedAt = 0;
+    this.remoteCursorEventLogCounter = 0;
     this.refreshQualitySummary();
   }
 
   private syncRelativeMouseMode(active: boolean): void {
-    this.relativeMouseHasLast = false;
+    if (!active) {
+      this.flushRelativeMouseMove();
+    }
+    this.resetRelativeMouseState(false);
     this.cancelPendingTouchpadTap();
     this.touchpadDragActive = false;
+    if (active) {
+      this.relativeModeActivatedAt = Date.now();
+      this.ensureRemoteCursorEnabled();
+      this.showRemoteCursorOverlayFromLastPosition();
+      this.sendRawMouseMessage(JSON.stringify({
+        relative_mouse_mode: '1',
+      }));
+      this.logRelativeDebug('mode', `active=true localMarker=sent ${this.overlayCursorDebugText('overlay')} ${this.remoteCursorDebugText()}`);
+      return;
+    }
+    this.relativeModeActivatedAt = 0;
+    this.sendRawMouseMessage(JSON.stringify({
+      relative_mouse_mode: '0',
+    }));
+    this.logRelativeDebug('mode', `active=false ${this.overlayCursorDebugText('overlay')} ${this.remoteCursorDebugText()}`);
   }
 
   private applySessionFullscreen(active: boolean): Promise<void> {
@@ -446,26 +530,19 @@ struct RustDeskIndex {
     const nextMode = !this.relativeMouseMode;
     this.relativeMouseMode = nextMode;
     this.syncRelativeMouseMode(nextMode);
-    if (nextMode) {
-      this.ensureRelativeCursorAnchor();
-    }
     this.sessionMessage = this.relativeMouseMode ? '已切换为相对鼠标模式' : '已切换为绝对鼠标模式';
   }
 
-  private getPreviewInputSize(): RustDeskSize {
-    const display = this.getCurrentDisplayInfo();
-    if (display && display.width > 0 && display.height > 0) {
-      return new RustDeskSize(display.width, display.height);
+  private getRemoteDisplayRect(): RustDeskRect | undefined {
+    const peerDisplay = this.getCurrentDisplayInfo();
+    if (peerDisplay && peerDisplay.width > 0 && peerDisplay.height > 0) {
+      return this.getRawDisplayRect(peerDisplay);
     }
-    return new RustDeskSize(Math.max(this.frameWidth, 1), Math.max(this.frameHeight, 1));
+    return undefined;
   }
 
-  private getPreviewContentSize(): RustDeskSize {
-    const display = this.getCurrentDisplayInfo();
-    if (display && display.original_width && display.original_height && display.original_width > 0 && display.original_height > 0) {
-      return new RustDeskSize(display.original_width, display.original_height);
-    }
-    return this.getPreviewInputSize();
+  private getRawDisplayRect(displayInfo: PeerDisplayInfo): RustDeskRect {
+    return new RustDeskRect(displayInfo.x, displayInfo.y, displayInfo.width, displayInfo.height);
   }
 
   private getCurrentDisplayInfo(): PeerDisplayInfo | undefined {
@@ -476,50 +553,206 @@ struct RustDeskIndex {
     return this.peerDisplays[index];
   }
 
+  private getDisplayScaleFactor(displayInfo: PeerDisplayInfo): number {
+    const scaledWidth = Number(displayInfo.scaled_width ?? 0);
+    const scaledHeight = Number(displayInfo.scaled_height ?? 0);
+    if (scaledWidth <= 0 || scaledHeight <= 0 || displayInfo.width <= 0 || displayInfo.height <= 0) {
+      return 1;
+    }
+    const widthScale = displayInfo.width / scaledWidth;
+    const heightScale = displayInfo.height / scaledHeight;
+    if (widthScale <= 1.01 || heightScale <= 1.01) {
+      return 1;
+    }
+    if (Math.abs(widthScale - heightScale) > 0.08) {
+      return 1;
+    }
+    return Math.max(widthScale, heightScale);
+  }
+
+  private mapLocalDeltaToRelativePointerDelta(deltaX: number, deltaY: number): RemotePointerPosition {
+    return { x: deltaX, y: deltaY };
+  }
+
   private getPreviewRotationAngle(): number {
     return 0;
   }
 
-  private getPreviewTransform() {
-    const contentSize = this.getPreviewContentSize();
+  private getPreviewViewSize(): RustDeskSize | undefined {
+    if (this.previewViewWidth > 0 && this.previewViewHeight > 0) {
+      return new RustDeskSize(this.previewViewWidth, this.previewViewHeight);
+    }
+    return undefined;
+  }
+
+  private getCoordinateSpace(): RustDeskCoordinateSpace | undefined {
+    const remoteRect = this.getRemoteDisplayRect();
     const viewSize = this.getPreviewViewSize();
-    return resolvePreviewTransform(
+    if (!remoteRect || !viewSize) {
+      return undefined;
+    }
+    return resolveCoordinateSpace(
       viewSize.width,
       viewSize.height,
-      contentSize.width,
-      contentSize.height,
+      remoteRect,
       this.getPreviewRotationAngle(),
     );
   }
 
+  private getRemoteCursorScale(): number {
+    const space = this.getCoordinateSpace();
+    if (!space) {
+      return 1;
+    }
+    const renderScale = space.paintRect.width / Math.max(space.remoteRect.width, 1);
+    return Math.min(Math.max(renderScale, 0.75), 2.0);
+  }
+
+  private isCurrentDisplayCursorEmbedded(): boolean {
+    const displayInfo = this.getCurrentDisplayInfo();
+    return Number(displayInfo?.cursor_embedded ?? 0) === 1;
+  }
+
+  private shouldDrawRemoteCursorOverlay(): boolean {
+    if (!this.remoteCursorVisible) {
+      return false;
+    }
+    return this.relativeMouseMode || !this.isCurrentDisplayCursorEmbedded();
+  }
+
+  private releaseRemoteCursorCache(): void {
+    this.remoteCursorPixelMap = undefined;
+    this.remoteCursorBitmapWidth = 0;
+    this.remoteCursorBitmapHeight = 0;
+    this.remoteCursorHotX = 0;
+    this.remoteCursorHotY = 0;
+    this.remoteCursorCache.forEach((cursor: RemoteCursorBitmap) => {
+      cursor.pixelMap.release().catch((error: BusinessError) => {
+        hilog.warn(DOMAIN, TAG, 'release cursor pixelmap failed: %{public}s', JSON.stringify(error) ?? '');
+      });
+    });
+    this.remoteCursorCache.clear();
+  }
+
   private getPreviewRenderSize(): RustDeskSize {
-    return this.getPreviewTransform().renderSize;
+    const space = this.getCoordinateSpace();
+    if (space) {
+      return space.renderSize;
+    }
+    const remoteRect = this.getRemoteDisplayRect();
+    if (remoteRect) {
+      return new RustDeskSize(remoteRect.width, remoteRect.height);
+    }
+    return new RustDeskSize(1, 1);
   }
 
   private logRelativeDebug(label: string, payload: string): void {
     hilog.info(DOMAIN, TAG, 'RelMouse debug [%{public}s] %{public}s', label, payload);
   }
 
-  private getPreviewViewSize(): RustDeskSize {
-    if (this.showPreviewModal) {
-      try {
-        const displayInfo = display.getDefaultDisplaySync();
-        const density = Math.max(displayInfo.densityPixels, 1);
-        const contentSize = this.getPreviewContentSize();
-        const contentLandscape = contentSize.width >= contentSize.height;
-        const majorAxis = Math.max(displayInfo.width, displayInfo.height) / density;
-        const minorAxis = Math.min(displayInfo.width, displayInfo.height) / density;
-        return contentLandscape
-          ? new RustDeskSize(majorAxis, minorAxis)
-          : new RustDeskSize(minorAxis, majorAxis);
-      } catch (_error) {
-        // fall through to layout-derived size
-      }
+  private remoteCursorDebugText(): string {
+    if (!this.lastRemoteCursorValid) {
+      return 'remoteActual=none';
     }
-    return new RustDeskSize(
-      Math.max(this.previewViewWidth || this.frameWidth, 1),
-      Math.max(this.previewViewHeight || this.frameHeight, 1),
+    const modeAgeText = this.relativeMouseMode && this.relativeModeActivatedAt > 0
+      ? ` modeAge=${Date.now() - this.relativeModeActivatedAt}ms`
+      : '';
+    return `remoteActual=(${this.lastRemoteCursorX.toFixed(0)},${this.lastRemoteCursorY.toFixed(0)}) age=${Date.now() - this.lastRemoteCursorAt}ms${modeAgeText}`;
+  }
+
+  private overlayCursorDebugText(label: string): string {
+    if (!this.remoteCursorVisible) {
+      return `${label}=none`;
+    }
+    return `${label}=actual(${this.remoteCursorLeft.toFixed(1)},${this.remoteCursorTop.toFixed(1)})`;
+  }
+
+  private clampRelativeMouseDelta(delta: number): number {
+    return Math.min(Math.max(delta, -RELATIVE_MOUSE_MAX_DELTA), RELATIVE_MOUSE_MAX_DELTA);
+  }
+
+  private truncateRelativeMouseDelta(delta: number): number {
+    return delta < 0 ? Math.ceil(delta) : Math.floor(delta);
+  }
+
+  private resetRelativeMouseState(flushPending: boolean = true): void {
+    if (flushPending) {
+      this.flushRelativeMouseMove();
+    }
+    if (this.relativeMouseFlushTimer !== -1) {
+      clearTimeout(this.relativeMouseFlushTimer);
+      this.relativeMouseFlushTimer = -1;
+    }
+    this.relativeMouseLastX = 0;
+    this.relativeMouseLastY = 0;
+    this.relativeMouseHasLast = false;
+    this.relativeMousePendingX = 0;
+    this.relativeMousePendingY = 0;
+    this.relativeMouseSuppressMoveUntil = 0;
+  }
+
+  private discardRelativeMouseMove(): void {
+    if (this.relativeMouseFlushTimer !== -1) {
+      clearTimeout(this.relativeMouseFlushTimer);
+      this.relativeMouseFlushTimer = -1;
+    }
+    this.relativeMousePendingX = 0;
+    this.relativeMousePendingY = 0;
+  }
+
+  private rebaseRelativeMouseAtLocalPoint(localX: number, localY: number, discardPending: boolean = true): void {
+    if (discardPending) {
+      this.discardRelativeMouseMove();
+    }
+    this.relativeMouseLastX = localX;
+    this.relativeMouseLastY = localY;
+    this.relativeMouseHasLast = true;
+  }
+
+  private mapLocalPointToRemotePosition(localX: number, localY: number): RemotePointerPosition | undefined {
+    const space = this.getCoordinateSpace();
+    if (!space) {
+      return undefined;
+    }
+    return mapLocalToRemote(space, localX, localY);
+  }
+
+  private mapRemotePositionToLocalPoint(remoteX: number, remoteY: number): LocalPointerPosition | undefined {
+    const space = this.getCoordinateSpace();
+    if (!space) {
+      return undefined;
+    }
+    return mapRemoteToLocal(space, remoteX, remoteY);
+  }
+
+  private clampRemoteCursorPosition(x: number, y: number): RemotePointerPosition {
+    const rect = this.getRemoteDisplayRect();
+    if (!rect) {
+      return { x, y };
+    }
+    const maxX = rect.left + Math.max(rect.width, 1) - 1;
+    const maxY = rect.top + Math.max(rect.height, 1) - 1;
+    return {
+      x: Math.round(Math.min(Math.max(x, rect.left), maxX)),
+      y: Math.round(Math.min(Math.max(y, rect.top), maxY)),
+    };
+  }
+
+  private updatePredictedRemoteCursorBy(deltaX: number, deltaY: number): void {
+    if (!this.lastRemoteCursorValid) {
+      return;
+    }
+    const predicted = this.clampRemoteCursorPosition(
+      this.lastRemoteCursorX + deltaX,
+      this.lastRemoteCursorY + deltaY,
     );
+    this.lastRemoteCursorX = predicted.x;
+    this.lastRemoteCursorY = predicted.y;
+    this.lastRemoteCursorAt = Date.now();
+    const local = this.mapRemotePositionToLocalPoint(predicted.x, predicted.y);
+    if (local) {
+      this.setCursorOverlayLocalPoint(local.x, local.y);
+    }
   }
 
   private sendMousePayload(payload: RustDeskMousePayload): void {
@@ -553,56 +786,87 @@ struct RustDeskIndex {
     }
   }
 
-  private sendRelativeMouseButton(button: string, isDown: boolean): void {
-    this.logRelativeDebug('button', `type=${isDown ? 'down' : 'up'} button=${button}`);
+  private sendRelativeMouseButton(button: string, isDown: boolean, flushPending: boolean = true): void {
+    if (flushPending) {
+      this.flushRelativeMouseMove();
+    }
+    this.logRelativeDebug(
+      'button',
+      `type=${isDown ? 'down' : 'up'} button=${button} flush=${flushPending} ${this.overlayCursorDebugText('overlay')} ${this.remoteCursorDebugText()}`,
+    );
     this.sendRawMouseMessage(JSON.stringify({
       type: isDown ? 'down' : 'up',
       buttons: button,
     }));
   }
 
-  private sendAbsoluteButtonAtCurrentCursor(button: string, isDown: boolean): void {
+  private sendRelativeMouseMoveNow(deltaX: number, deltaY: number): void {
+    const sent = this.sendRawMouseMessage(JSON.stringify({
+      type: 'move_relative',
+      x: String(deltaX),
+      y: String(deltaY),
+    }));
+    if (sent) {
+      this.updatePredictedRemoteCursorBy(deltaX, deltaY);
+    }
+  }
+
+  private scheduleRelativeMouseFlush(): void {
+    if (this.relativeMouseFlushTimer !== -1) {
+      return;
+    }
+    this.relativeMouseFlushTimer = setTimeout(() => {
+      this.relativeMouseFlushTimer = -1;
+      this.flushRelativeMouseMove();
+    }, RELATIVE_MOUSE_FLUSH_MS) as number;
+  }
+
+  private flushRelativeMouseMove(): void {
+    if (this.relativeMouseFlushTimer !== -1) {
+      clearTimeout(this.relativeMouseFlushTimer);
+      this.relativeMouseFlushTimer = -1;
+    }
+    const moveX = this.truncateRelativeMouseDelta(this.clampRelativeMouseDelta(this.relativeMousePendingX));
+    const moveY = this.truncateRelativeMouseDelta(this.clampRelativeMouseDelta(this.relativeMousePendingY));
+    if (moveX === 0 && moveY === 0) {
+      return;
+    }
+    this.relativeMousePendingX -= moveX;
+    this.relativeMousePendingY -= moveY;
+    this.sendRelativeMouseMoveNow(moveX, moveY);
+    if (Math.abs(this.relativeMousePendingX) >= 1 || Math.abs(this.relativeMousePendingY) >= 1) {
+      this.scheduleRelativeMouseFlush();
+    }
+  }
+
+  private queueRelativeMouseMove(remoteDeltaX: number, remoteDeltaY: number): void {
+    if (Math.abs(remoteDeltaX) < 0.01 && Math.abs(remoteDeltaY) < 0.01) {
+      return;
+    }
+    this.relativeMousePendingX = this.clampRelativeMouseDelta(this.relativeMousePendingX + remoteDeltaX);
+    this.relativeMousePendingY = this.clampRelativeMouseDelta(this.relativeMousePendingY + remoteDeltaY);
+    this.scheduleRelativeMouseFlush();
+  }
+
+  private sendButtonAtCurrentRemoteCursor(button: string, isDown: boolean): void {
     this.logRelativeDebug(
-      'abs_button',
-      `type=${isDown ? 'down' : 'up'} button=${button} cursor=(${this.remoteCursorLeft.toFixed(1)},${this.remoteCursorTop.toFixed(1)})`,
+      'cursor_button',
+      `type=${isDown ? 'down' : 'up'} button=${button} ${this.remoteCursorDebugText()}`,
     );
-    this.sendRemoteCursorPositionFromOverlay();
     const payload = new RustDeskMousePayload();
     payload.type = isDown ? 'down' : 'up';
     payload.buttons = button;
     this.sendMousePayload(payload);
   }
 
-  private sendRemoteCursorPositionFromOverlay(): void {
-    if (!this.activeSessionId || !this.remoteCursorVisible) {
+  private clickCurrentCursor(button: string): void {
+    if (this.relativeMouseMode) {
+      this.sendRelativeMouseButton(button, true, false);
+      this.sendRelativeMouseButton(button, false, false);
       return;
     }
-    const display = this.getCurrentDisplayInfo();
-    const contentSize = this.getPreviewContentSize();
-    const inputSize = this.getPreviewInputSize();
-    const viewSize = this.getPreviewViewSize();
-    const position = mapPointerToRemote(
-      this.remoteCursorLeft,
-      this.remoteCursorTop,
-      viewSize.width,
-      viewSize.height,
-      contentSize.width,
-      contentSize.height,
-      inputSize.width,
-      inputSize.height,
-      display?.x ?? 0,
-      display?.y ?? 0,
-      this.getPreviewRotationAngle(),
-    );
-    const payload = new RustDeskMousePayload();
-    payload.x = String(position.x);
-    payload.y = String(position.y);
-    this.sendMousePayload(payload);
-  }
-
-  private clickCurrentCursor(button: string): void {
-    this.sendAbsoluteButtonAtCurrentCursor(button, true);
-    this.sendAbsoluteButtonAtCurrentCursor(button, false);
+    this.sendButtonAtCurrentRemoteCursor(button, true);
+    this.sendButtonAtCurrentRemoteCursor(button, false);
   }
 
   private sendMouseClick(button: string): void {
@@ -621,108 +885,226 @@ struct RustDeskIndex {
     this.sendMousePayload(upPayload);
   }
 
-  private clampCursorToPreview(x: number, y: number): void {
-    const transform = this.getPreviewTransform();
-    const minX = transform.contentRect.left;
-    const maxX = transform.contentRect.left + transform.contentRect.width;
-    const minY = transform.contentRect.top;
-    const maxY = transform.contentRect.top + transform.contentRect.height;
-    this.remoteCursorLeft = Math.min(Math.max(x, minX), maxX);
-    this.remoteCursorTop = Math.min(Math.max(y, minY), maxY);
+  private ensureRemoteCursorEnabled(): void {
+    if (!this.activeSessionId) {
+      return;
+    }
+    const hasCursorEvent = this.lastRemoteCursorValid || this.remoteCursorCache.size > 0;
+    if (this.remoteCursorOptionApplied && hasCursorEvent) {
+      return;
+    }
+    const now = Date.now();
+    if (this.remoteCursorOptionLastAppliedAt > 0 && now - this.remoteCursorOptionLastAppliedAt < REMOTE_CURSOR_OPTION_REAPPLY_MS) {
+      return;
+    }
+    this.remoteCursorOptionLastAppliedAt = now;
+    try {
+      const response = this.parseResponse(native.sessionSetShowRemoteCursor(this.activeSessionId, true));
+      this.remoteCursorOptionApplied = response.ok;
+      if (!response.ok && response.message) {
+        this.logRelativeDebug('show_remote_cursor', response.message);
+      } else {
+        this.logRelativeDebug('show_remote_cursor', `sent ok=${response.ok} hasCursorEvent=${hasCursorEvent} message=${String(response.message ?? '')}`);
+      }
+    } catch (error) {
+      this.remoteCursorOptionApplied = false;
+      this.logRelativeDebug('show_remote_cursor', `failed=${String(error)}`);
+    }
+  }
+
+  private setCursorOverlayLocalPoint(x: number, y: number): void {
+    const space = this.getCoordinateSpace();
+    if (!space) {
+      return;
+    }
+    const minX = space.paintRect.left;
+    const maxX = space.paintRect.left + space.paintRect.width;
+    const minY = space.paintRect.top;
+    const maxY = space.paintRect.top + space.paintRect.height;
+    const cursorScale = this.getRemoteCursorScale();
+    const marginX = Math.max(this.remoteCursorBitmapWidth * cursorScale, 24);
+    const marginY = Math.max(this.remoteCursorBitmapHeight * cursorScale, 24);
+    if (!this.relativeMouseMode && (x < minX - marginX || x > maxX + marginX || y < minY - marginY || y > maxY + marginY)) {
+      this.remoteCursorVisible = false;
+      return;
+    }
+    this.remoteCursorLeft = x;
+    this.remoteCursorTop = y;
     this.remoteCursorVisible = true;
   }
 
-  private ensureRelativeCursorAnchor(): void {
-    if (this.remoteCursorVisible) {
+  private showRemoteCursorOverlayFromLastPosition(): void {
+    if (!this.lastRemoteCursorValid) {
+      this.remoteCursorVisible = false;
       return;
     }
-    const transform = this.getPreviewTransform();
-    this.clampCursorToPreview(
-      transform.contentRect.left + transform.contentRect.width / 2,
-      transform.contentRect.top + transform.contentRect.height / 2,
+    const position = this.mapRemotePositionToLocalPoint(this.lastRemoteCursorX, this.lastRemoteCursorY);
+    if (!position) {
+      return;
+    }
+    this.setCursorOverlayLocalPoint(position.x, position.y);
+    this.logRelativeDebug(
+      'cursor_anchor',
+      `source=lastRemote remote=(${this.lastRemoteCursorX},${this.lastRemoteCursorY}) local=(${position.x.toFixed(1)},${position.y.toFixed(1)}) ${this.remoteCursorDebugText()}`,
     );
   }
 
   private isPointInsidePreviewContent(x: number, y: number): boolean {
-    const transform = this.getPreviewTransform();
-    return x >= transform.contentRect.left
-      && x <= transform.contentRect.left + transform.contentRect.width
-      && y >= transform.contentRect.top
-      && y <= transform.contentRect.top + transform.contentRect.height;
+    const space = this.getCoordinateSpace();
+    return !!space && isLocalPointInsidePaintRect(space, x, y);
   }
 
   private updateCursorOverlayFromRemote(remoteX: number, remoteY: number): void {
-    if (this.relativeMouseMode) {
-      if (this.relativeMoveLogCounter % RELATIVE_MOVE_LOG_SAMPLE_EVERY === 0) {
-        this.logRelativeDebug('remote_cursor_ignored', `remote=(${remoteX},${remoteY}) local=(${this.remoteCursorLeft.toFixed(1)},${this.remoteCursorTop.toFixed(1)})`);
-      }
+    this.lastRemoteCursorValid = true;
+    this.remoteCursorOptionApplied = true;
+    this.lastRemoteCursorX = remoteX;
+    this.lastRemoteCursorY = remoteY;
+    this.lastRemoteCursorAt = Date.now();
+    const position = this.mapRemotePositionToLocalPoint(remoteX, remoteY);
+    if (!position) {
+      this.logRelativeDebug('cursor_position_no_space', `raw=(${remoteX},${remoteY}) mode=${this.relativeMouseMode ? 'relative' : 'absolute'}`);
       return;
     }
-    const display = this.getCurrentDisplayInfo();
-    const contentSize = this.getPreviewContentSize();
-    const inputSize = this.getPreviewInputSize();
-    const viewSize = this.getPreviewViewSize();
-    const position = mapRemoteToPointer(
-      remoteX,
-      remoteY,
-      viewSize.width,
-      viewSize.height,
-      contentSize.width,
-      contentSize.height,
-      inputSize.width,
-      inputSize.height,
-      display?.x ?? 0,
-      display?.y ?? 0,
-      this.getPreviewRotationAngle(),
-    );
-    this.clampCursorToPreview(position.x, position.y);
+    this.remoteCursorEventLogCounter += 1;
+    if (this.relativeMouseMode || this.remoteCursorEventLogCounter % ABSOLUTE_MOUSE_LOG_SAMPLE_EVERY === 0) {
+      this.logRelativeDebug(
+        'cursor_position',
+        `raw=(${remoteX},${remoteY}) local=(${position.x.toFixed(1)},${position.y.toFixed(1)}) ${this.overlayCursorDebugText('overlayBefore')} mode=${this.relativeMouseMode ? 'relative' : 'absolute'}`,
+      );
+    }
+    this.setCursorOverlayLocalPoint(position.x, position.y);
   }
 
-  private moveCursorOverlayBy(deltaX: number, deltaY: number): void {
-    this.ensureRelativeCursorAnchor();
-    this.clampCursorToPreview(this.remoteCursorLeft + deltaX, this.remoteCursorTop + deltaY);
+  private applyRemoteCursorBitmap(id: string): boolean {
+    const cursor = this.remoteCursorCache.get(id);
+    if (!cursor) {
+      this.remoteCursorPixelMap = undefined;
+      this.remoteCursorBitmapWidth = 0;
+      this.remoteCursorBitmapHeight = 0;
+      this.remoteCursorHotX = 0;
+      this.remoteCursorHotY = 0;
+      return false;
+    }
+    this.remoteCursorPixelMap = cursor.pixelMap;
+    this.remoteCursorBitmapWidth = cursor.width;
+    this.remoteCursorBitmapHeight = cursor.height;
+    this.remoteCursorHotX = cursor.hotX;
+    this.remoteCursorHotY = cursor.hotY;
+    this.showRemoteCursorOverlayFromLastPosition();
+    return true;
+  }
+
+  private updateRemoteCursorId(event: NativeEvent): void {
+    const id = String(event.id ?? '');
+    if (id.length === 0) {
+      return;
+    }
+    this.remoteCursorCurrentId = id;
+    this.remoteCursorOptionApplied = true;
+    const applied = this.applyRemoteCursorBitmap(id);
+    this.logRelativeDebug('cursor_id', `id=${id} bitmap=${applied ? 'hit' : 'miss'} ${this.remoteCursorDebugText()}`);
+  }
+
+  private updateRemoteCursorData(event: NativeEvent): void {
+    const id = String(event.id ?? '');
+    const width = Number(event.width ?? '0');
+    const height = Number(event.height ?? '0');
+    const hotX = Number(event.hotx ?? '0');
+    const hotY = Number(event.hoty ?? '0');
+    if (id.length === 0 || width <= 0 || height <= 0 || !event.colors) {
+      return;
+    }
+    let colors: number[] = [];
+    try {
+      colors = JSON.parse(event.colors) as number[];
+    } catch (error) {
+      this.logRelativeDebug('cursor_data', `parse_failed id=${id} error=${String(error)}`);
+      return;
+    }
+    const expectedLength = width * height * 4;
+    if (colors.length < expectedLength) {
+      this.logRelativeDebug('cursor_data', `bad_length id=${id} got=${colors.length} expected=${expectedLength}`);
+      return;
+    }
+    this.remoteCursorCurrentId = id;
+    this.remoteCursorOptionApplied = true;
+    const buffer = new ArrayBuffer(expectedLength);
+    const rgba = new Uint8Array(buffer);
+    for (let index = 0; index < expectedLength; index++) {
+      rgba[index] = Number(colors[index]) & 0xFF;
+    }
+    const options: image.InitializationOptions = {
+      editable: false,
+      pixelFormat: image.PixelMapFormat.RGBA_8888,
+      size: { width, height },
+      alphaType: image.AlphaType.UNPREMUL,
+    };
+    image.createPixelMap(buffer, options)
+      .then((pixelMap: image.PixelMap) => {
+        const previous = this.remoteCursorCache.get(id);
+        const cursor: RemoteCursorBitmap = {
+          id,
+          pixelMap,
+          hotX,
+          hotY,
+          width,
+          height,
+        };
+        this.remoteCursorCache.set(id, cursor);
+        if (this.remoteCursorCurrentId === id) {
+          this.applyRemoteCursorBitmap(id);
+        }
+        if (previous) {
+          previous.pixelMap.release().catch((error: BusinessError) => {
+            hilog.warn(DOMAIN, TAG, 'replace cursor pixelmap release failed: %{public}s', JSON.stringify(error) ?? '');
+          });
+        }
+        this.logRelativeDebug('cursor_data', `id=${id} size=${width}x${height} hot=(${hotX},${hotY})`);
+      })
+      .catch((error: BusinessError) => {
+        this.logRelativeDebug('cursor_data', `create_failed id=${id} error=${JSON.stringify(error) ?? String(error)}`);
+      });
   }
 
   private moveRelativeCursorBy(deltaX: number, deltaY: number): void {
-    const moveX = Math.round(deltaX * TOUCHPAD_MOVE_SENSITIVITY);
-    const moveY = Math.round(deltaY * TOUCHPAD_MOVE_SENSITIVITY);
-    if (moveX === 0 && moveY === 0) {
+    const mappedDelta = this.mapLocalDeltaToRelativePointerDelta(deltaX, deltaY);
+    const remoteDeltaX = mappedDelta.x * TOUCHPAD_MOVE_SENSITIVITY;
+    const remoteDeltaY = mappedDelta.y * TOUCHPAD_MOVE_SENSITIVITY;
+    if (Math.abs(remoteDeltaX) < 0.01 && Math.abs(remoteDeltaY) < 0.01) {
       return;
     }
-    this.moveCursorOverlayBy(moveX, moveY);
-    this.sendRemoteCursorPositionFromOverlay();
+    this.queueRelativeMouseMove(remoteDeltaX, remoteDeltaY);
   }
 
-  private moveRemoteCursorToLocalPoint(localX: number, localY: number): void {
+  private moveRemoteCursorToLocalPoint(localX: number, localY: number): boolean {
     if (!this.isPointInsidePreviewContent(localX, localY)) {
-      return;
+      return false;
     }
-    const display = this.getCurrentDisplayInfo();
-    const contentSize = this.getPreviewContentSize();
-    const inputSize = this.getPreviewInputSize();
-    const viewSize = this.getPreviewViewSize();
-    const position = mapPointerToRemote(
-      localX,
-      localY,
-      viewSize.width,
-      viewSize.height,
-      contentSize.width,
-      contentSize.height,
-      inputSize.width,
-      inputSize.height,
-      display?.x ?? 0,
-      display?.y ?? 0,
-      this.getPreviewRotationAngle(),
-    );
+    const position = this.mapLocalPointToRemotePosition(localX, localY);
+    if (!position) {
+      return false;
+    }
+    this.absoluteMoveLogCounter += 1;
+    if (this.absoluteMoveLogCounter % ABSOLUTE_MOUSE_LOG_SAMPLE_EVERY === 0) {
+      const space = this.getCoordinateSpace();
+      this.logRelativeDebug(
+        'abs_move',
+        space
+          ? `local=(${localX.toFixed(1)},${localY.toFixed(1)}) paintRect=(${space.paintRect.left.toFixed(1)},${space.paintRect.top.toFixed(1)},${space.paintRect.width.toFixed(1)},${space.paintRect.height.toFixed(1)}) remoteRect=(${space.remoteRect.left.toFixed(0)},${space.remoteRect.top.toFixed(0)},${space.remoteRect.width.toFixed(0)},${space.remoteRect.height.toFixed(0)}) remote=(${position.x},${position.y}) ${this.remoteCursorDebugText()}`
+          : `local=(${localX.toFixed(1)},${localY.toFixed(1)}) remote=(${position.x},${position.y}) ${this.remoteCursorDebugText()}`,
+      );
+    }
     const payload = new RustDeskMousePayload();
     payload.x = String(position.x);
     payload.y = String(position.y);
     this.sendMousePayload(payload);
-    this.clampCursorToPreview(localX, localY);
+    return true;
   }
 
   private moveRemoteCursorAndClick(localX: number, localY: number, button: string): void {
-    this.moveRemoteCursorToLocalPoint(localX, localY);
+    if (!this.moveRemoteCursorToLocalPoint(localX, localY)) {
+      return;
+    }
     this.sendMouseClick(button);
   }
 
@@ -765,8 +1147,9 @@ struct RustDeskIndex {
       }
       this.touchpadLongPressTriggered = true;
       if (this.relativeMouseMode) {
+        this.discardRelativeMouseMove();
         this.touchpadDragActive = true;
-        this.sendAbsoluteButtonAtCurrentCursor('left', true);
+        this.sendRelativeMouseButton('left', true, false);
       } else {
         this.moveRemoteCursorAndClick(this.touchpadPrimaryDownX, this.touchpadPrimaryDownY, 'right');
       }
@@ -777,7 +1160,8 @@ struct RustDeskIndex {
     this.cancelPendingTouchpadTap();
     this.touchpadPendingTapTimer = setTimeout(() => {
       this.touchpadPendingTapTimer = -1;
-      this.logRelativeDebug('single_tap_fire', `cursor=(${this.remoteCursorLeft.toFixed(1)},${this.remoteCursorTop.toFixed(1)})`);
+      this.discardRelativeMouseMove();
+      this.logRelativeDebug('single_tap_fire', `${this.overlayCursorDebugText('overlay')} ${this.remoteCursorDebugText()}`);
       this.clickCurrentCursor('left');
     }, TOUCHPAD_DOUBLE_TAP_MAX_MS);
   }
@@ -796,12 +1180,24 @@ struct RustDeskIndex {
     if (!this.activeSessionId) {
       return;
     }
+    event.stopPropagation();
+    if (event.sourceTool === SourceTool.MOUSE
+      || event.sourceTool === SourceTool.TOUCHPAD
+      || event.sourceTool === SourceTool.JOYSTICK) {
+      return;
+    }
     const changedTouches = event.changedTouches;
     switch (event.type) {
       case TouchType.Down:
         for (let index = 0; index < changedTouches.length; index++) {
           const touch = changedTouches[index];
           if (this.touchpadPrimaryId === -1) {
+            if (!this.relativeMouseMode && !this.isPointInsidePreviewContent(touch.x, touch.y)) {
+              continue;
+            }
+            if (this.relativeMouseMode) {
+              this.discardRelativeMouseMove();
+            }
             this.touchpadPrimaryId = touch.id;
             this.touchpadPrimaryDownX = touch.x;
             this.touchpadPrimaryDownY = touch.y;
@@ -872,6 +1268,9 @@ struct RustDeskIndex {
         this.touchpadTapMoved = true;
         this.cancelTouchpadLongPressTimer();
       }
+      if (this.touchpadTapMoved) {
+        this.moveRemoteCursorToLocalPoint(primaryTouch.x, primaryTouch.y);
+      }
       return;
     }
 
@@ -879,24 +1278,34 @@ struct RustDeskIndex {
     if (!primaryTouch) {
       return;
     }
+    const movedX = primaryTouch.x - this.touchpadPrimaryDownX;
+    const movedY = primaryTouch.y - this.touchpadPrimaryDownY;
+    const movedDistance = Math.sqrt(movedX * movedX + movedY * movedY);
+    if (!this.touchpadTapMoved && !this.touchpadDragActive) {
+      if (movedDistance > TOUCHPAD_TAP_MAX_DISTANCE) {
+        this.touchpadTapMoved = true;
+        this.cancelTouchpadLongPressTimer();
+        this.logRelativeDebug(
+          'touch_move_start',
+          `distance=${movedDistance.toFixed(2)} threshold=${TOUCHPAD_TAP_MAX_DISTANCE} touch=(${primaryTouch.x.toFixed(1)},${primaryTouch.y.toFixed(1)}) ${this.remoteCursorDebugText()}`,
+        );
+      }
+    }
     const deltaX = primaryTouch.x - this.touchpadPrimaryLastX;
     const deltaY = primaryTouch.y - this.touchpadPrimaryLastY;
     this.touchpadPrimaryLastX = primaryTouch.x;
     this.touchpadPrimaryLastY = primaryTouch.y;
-    const movedX = primaryTouch.x - this.touchpadPrimaryDownX;
-    const movedY = primaryTouch.y - this.touchpadPrimaryDownY;
-    if (!this.touchpadTapMoved && Math.sqrt(movedX * movedX + movedY * movedY) > TOUCHPAD_TAP_MAX_DISTANCE) {
-      this.touchpadTapMoved = true;
-      this.cancelTouchpadLongPressTimer();
-    }
     if (deltaX === 0 && deltaY === 0) {
       return;
     }
     this.relativeTouchMoveLogCounter += 1;
     if (this.relativeTouchMoveLogCounter % RELATIVE_TOUCH_LOG_SAMPLE_EVERY === 0) {
+      const mappedDelta = this.mapLocalDeltaToRelativePointerDelta(deltaX, deltaY);
+      const remoteDeltaX = mappedDelta.x * TOUCHPAD_MOVE_SENSITIVITY;
+      const remoteDeltaY = mappedDelta.y * TOUCHPAD_MOVE_SENSITIVITY;
       this.logRelativeDebug(
         'touch_move',
-        `touch=(${primaryTouch.x.toFixed(1)},${primaryTouch.y.toFixed(1)}) rawVp=(${deltaX.toFixed(2)},${deltaY.toFixed(2)}) overlayBefore=(${this.remoteCursorLeft.toFixed(1)},${this.remoteCursorTop.toFixed(1)}) drag=${this.touchpadDragActive}`,
+        `tool=${String(event.sourceTool)} touch=(${primaryTouch.x.toFixed(1)},${primaryTouch.y.toFixed(1)}) rawVp=(${deltaX.toFixed(2)},${deltaY.toFixed(2)}) remoteDelta=(${remoteDeltaX.toFixed(2)},${remoteDeltaY.toFixed(2)}) ${this.overlayCursorDebugText('overlayBefore')} drag=${this.touchpadDragActive} ${this.remoteCursorDebugText()}`,
       );
     }
     this.moveRelativeCursorBy(deltaX, deltaY);
@@ -926,27 +1335,29 @@ struct RustDeskIndex {
       const elapsed = Date.now() - this.touchpadPrimaryDownAt;
       this.logRelativeDebug(
         'touch_release',
-        `elapsed=${elapsed} moved=${this.touchpadTapMoved} longPress=${this.touchpadLongPressTriggered} drag=${this.touchpadDragActive} cursor=(${this.remoteCursorLeft.toFixed(1)},${this.remoteCursorTop.toFixed(1)})`,
+        `elapsed=${elapsed} moved=${this.touchpadTapMoved} longPress=${this.touchpadLongPressTriggered} drag=${this.touchpadDragActive} ${this.overlayCursorDebugText('overlay')} ${this.remoteCursorDebugText()}`,
       );
       if (this.relativeMouseMode && this.touchpadDragActive) {
-        this.sendAbsoluteButtonAtCurrentCursor('left', false);
+        this.sendRelativeMouseButton('left', false);
         this.resetTouchpadState();
         return;
       }
       if (!this.touchpadTapMoved && !this.touchpadLongPressTriggered && elapsed <= TOUCHPAD_TAP_MAX_MS) {
         if (this.relativeMouseMode) {
+          this.discardRelativeMouseMove();
           const isDoubleTap = this.touchpadLastTapAt > 0
             && Date.now() - this.touchpadLastTapAt <= TOUCHPAD_DOUBLE_TAP_MAX_MS;
           if (isDoubleTap) {
             this.cancelPendingTouchpadTap();
             this.touchpadLastTapAt = 0;
-            this.logRelativeDebug('double_tap', `cursor=(${this.remoteCursorLeft.toFixed(1)},${this.remoteCursorTop.toFixed(1)})`);
+            this.discardRelativeMouseMove();
+            this.logRelativeDebug('double_tap', `${this.overlayCursorDebugText('overlay')} ${this.remoteCursorDebugText()}`);
             this.clickCurrentCursor('right');
           } else {
             this.touchpadLastTapAt = Date.now();
             this.touchpadLastTapX = this.remoteCursorLeft;
             this.touchpadLastTapY = this.remoteCursorTop;
-            this.logRelativeDebug('single_tap_schedule', `cursor=(${this.remoteCursorLeft.toFixed(1)},${this.remoteCursorTop.toFixed(1)})`);
+            this.logRelativeDebug('single_tap_schedule', `${this.overlayCursorDebugText('overlay')} ${this.remoteCursorDebugText()}`);
             this.scheduleRelativeSingleTap();
           }
         } else {
@@ -958,6 +1369,9 @@ struct RustDeskIndex {
     }
 
     if (event.type === TouchType.Cancel || event.touches.length === 0) {
+      if (this.relativeMouseMode) {
+        this.discardRelativeMouseMove();
+      }
       this.resetTouchpadState();
     }
   }
@@ -997,60 +1411,74 @@ struct RustDeskIndex {
       return;
     }
     event.stopPropagation();
-    const display = this.getCurrentDisplayInfo();
-    const contentSize = this.getPreviewContentSize();
-    const inputSize = this.getPreviewInputSize();
-    const viewSize = this.getPreviewViewSize();
     if (event.action === MouseAction.Move || event.action === MouseAction.Hover) {
       if (this.relativeMouseMode) {
-        const rawDeltaXVp = event.rawDeltaX ?? 0;
-        const rawDeltaYVp = event.rawDeltaY ?? 0;
-        let overlayDeltaX = rawDeltaXVp;
-        let overlayDeltaY = rawDeltaYVp;
-        let source = 'raw';
-        if (overlayDeltaX === 0 && overlayDeltaY === 0 && this.relativeMouseHasLast) {
-          overlayDeltaX = event.x - this.relativeMouseLastX;
-          overlayDeltaY = event.y - this.relativeMouseLastY;
+        if (Date.now() < this.relativeMouseSuppressMoveUntil) {
+          this.relativeMouseLastX = event.x;
+          this.relativeMouseLastY = event.y;
+          this.relativeMouseHasLast = true;
+          this.discardRelativeMouseMove();
+          return;
+        }
+        const rawDeltaX = event.rawDeltaX ?? 0;
+        const rawDeltaY = event.rawDeltaY ?? 0;
+        const fallbackDeltaX = this.relativeMouseHasLast ? event.x - this.relativeMouseLastX : 0;
+        const fallbackDeltaY = this.relativeMouseHasLast ? event.y - this.relativeMouseLastY : 0;
+        const hasRawDelta = rawDeltaX !== 0 || rawDeltaY !== 0;
+        let remoteDeltaX = 0;
+        let remoteDeltaY = 0;
+        let source = 'none';
+
+        if (hasRawDelta) {
+          const mappedDelta = this.mapLocalDeltaToRelativePointerDelta(rawDeltaX, rawDeltaY);
+          remoteDeltaX = mappedDelta.x * RELATIVE_MOUSE_RAW_SENSITIVITY;
+          remoteDeltaY = mappedDelta.y * RELATIVE_MOUSE_RAW_SENSITIVITY;
+          source = 'raw';
+        } else if (this.relativeMouseHasLast) {
+          const mappedDelta = this.mapLocalDeltaToRelativePointerDelta(fallbackDeltaX, fallbackDeltaY);
+          remoteDeltaX = mappedDelta.x * RELATIVE_MOUSE_FALLBACK_SENSITIVITY;
+          remoteDeltaY = mappedDelta.y * RELATIVE_MOUSE_FALLBACK_SENSITIVITY;
           source = 'fallback';
         }
+
         this.relativeMouseLastX = event.x;
         this.relativeMouseLastY = event.y;
         this.relativeMouseHasLast = true;
-        if (overlayDeltaX === 0 && overlayDeltaY === 0) {
+        if (remoteDeltaX === 0 && remoteDeltaY === 0) {
           return;
         }
         this.relativeMoveLogCounter += 1;
         if (this.relativeMoveLogCounter % RELATIVE_MOVE_LOG_SAMPLE_EVERY === 0) {
           this.logRelativeDebug(
             'move',
-            `source=${source} event=(${event.x.toFixed(1)},${event.y.toFixed(1)}) rawVp=(${rawDeltaXVp.toFixed(2)},${rawDeltaYVp.toFixed(2)}) overlayVp=(${overlayDeltaX.toFixed(2)},${overlayDeltaY.toFixed(2)}) localBefore=(${this.remoteCursorLeft.toFixed(1)},${this.remoteCursorTop.toFixed(1)})`,
+            `source=${source} event=(${event.x.toFixed(1)},${event.y.toFixed(1)}) raw=(${rawDeltaX.toFixed(2)},${rawDeltaY.toFixed(2)}) fallbackVp=(${fallbackDeltaX.toFixed(2)},${fallbackDeltaY.toFixed(2)}) remoteDelta=(${remoteDeltaX.toFixed(2)},${remoteDeltaY.toFixed(2)}) pending=(${this.relativeMousePendingX.toFixed(2)},${this.relativeMousePendingY.toFixed(2)}) ${this.overlayCursorDebugText('overlayBefore')} ${this.remoteCursorDebugText()}`,
           );
         }
-        this.moveRelativeCursorBy(overlayDeltaX, overlayDeltaY);
+        this.queueRelativeMouseMove(remoteDeltaX, remoteDeltaY);
         return;
       }
       this.relativeMouseHasLast = false;
       if (!this.isPointInsidePreviewContent(event.x, event.y)) {
         return;
       }
-      const position = mapPointerToRemote(
-        event.x,
-        event.y,
-        viewSize.width,
-        viewSize.height,
-        contentSize.width,
-        contentSize.height,
-        inputSize.width,
-        inputSize.height,
-        display?.x ?? 0,
-        display?.y ?? 0,
-        this.getPreviewRotationAngle(),
-      );
+      const position = this.mapLocalPointToRemotePosition(event.x, event.y);
+      if (!position) {
+        return;
+      }
+      this.absoluteMoveLogCounter += 1;
+      if (this.absoluteMoveLogCounter % ABSOLUTE_MOUSE_LOG_SAMPLE_EVERY === 0) {
+        const space = this.getCoordinateSpace();
+        this.logRelativeDebug(
+          'abs_move',
+          space
+            ? `local=(${event.x.toFixed(1)},${event.y.toFixed(1)}) paintRect=(${space.paintRect.left.toFixed(1)},${space.paintRect.top.toFixed(1)},${space.paintRect.width.toFixed(1)},${space.paintRect.height.toFixed(1)}) remoteRect=(${space.remoteRect.left.toFixed(0)},${space.remoteRect.top.toFixed(0)},${space.remoteRect.width.toFixed(0)},${space.remoteRect.height.toFixed(0)}) remote=(${position.x},${position.y}) ${this.remoteCursorDebugText()}`
+            : `local=(${event.x.toFixed(1)},${event.y.toFixed(1)}) remote=(${position.x},${position.y}) ${this.remoteCursorDebugText()}`,
+        );
+      }
       const payload = new RustDeskMousePayload();
       payload.x = String(position.x);
       payload.y = String(position.y);
       this.sendMousePayload(payload);
-      this.clampCursorToPreview(event.x, event.y);
       return;
     }
     if (event.action !== MouseAction.Press && event.action !== MouseAction.Release) {
@@ -1060,18 +1488,48 @@ struct RustDeskIndex {
     if (!button) {
       return;
     }
-    if (!this.relativeMouseMode && !this.isPointInsidePreviewContent(event.x, event.y)) {
+    const isPress = event.action === MouseAction.Press;
+    const insidePreviewContent = this.isPointInsidePreviewContent(event.x, event.y);
+    if (this.relativeMouseMode) {
+      if (isPress && !insidePreviewContent) {
+        return;
+      }
+      if (!isPress && !this.mouseButtonsDown.has(button) && !insidePreviewContent) {
+        return;
+      }
+      this.rebaseRelativeMouseAtLocalPoint(event.x, event.y, false);
+      this.logRelativeDebug('click', `type=${isPress ? 'down' : 'up'} button=${button} ${this.overlayCursorDebugText('overlay')} ${this.remoteCursorDebugText()}`);
+      if (isPress) {
+        this.discardRelativeMouseMove();
+        this.mouseButtonsDown.add(button);
+      } else {
+        this.flushRelativeMouseMove();
+      }
+      this.relativeMouseSuppressMoveUntil = Date.now() + RELATIVE_MOUSE_BUTTON_SUPPRESS_MS;
+      this.sendRelativeMouseButton(button, isPress, false);
+      if (!isPress) {
+        this.mouseButtonsDown.delete(button);
+      }
       return;
     }
-    if (this.relativeMouseMode) {
-      this.logRelativeDebug('click', `type=${event.action === MouseAction.Press ? 'down' : 'up'} button=${button} local=(${this.remoteCursorLeft.toFixed(1)},${this.remoteCursorTop.toFixed(1)})`);
-      this.sendAbsoluteButtonAtCurrentCursor(button, event.action === MouseAction.Press);
+    if (isPress && !insidePreviewContent) {
+      return;
+    }
+    if (insidePreviewContent) {
+      this.moveRemoteCursorToLocalPoint(event.x, event.y);
+    }
+    if (isPress) {
+      this.mouseButtonsDown.add(button);
+    } else if (!this.mouseButtonsDown.has(button) && !insidePreviewContent) {
       return;
     }
     const payload = new RustDeskMousePayload();
-    payload.type = event.action === MouseAction.Press ? 'down' : 'up';
+    payload.type = isPress ? 'down' : 'up';
     payload.buttons = button;
     this.sendMousePayload(payload);
+    if (!isPress) {
+      this.mouseButtonsDown.delete(button);
+    }
   }
 
   private handlePreviewAxisEvent(event: AxisEvent): void {
@@ -1163,6 +1621,10 @@ struct RustDeskIndex {
     this.qualitySummary = `Remote fps ${this.remoteFpsText} | delay ${this.remoteDelayText} | codec ${this.remoteCodecText}`;
   }
 
+  private shortRemoteStatusText(): string {
+    return `fps ${this.remoteFpsText} | delay ${this.remoteDelayText} | codec ${this.remoteCodecText} | ${this.relativeMouseMode ? 'relative' : 'absolute'}`;
+  }
+
   private extractRemoteFps(raw: string | undefined): string | undefined {
     if (!raw || raw.length === 0) {
       return undefined;
@@ -1183,10 +1645,6 @@ struct RustDeskIndex {
     return undefined;
   }
 
-  private evenSize(value: number): number {
-    return Math.max(64, Math.round(value)) & ~1;
-  }
-
   private parseSupportedResolutions(raw: string | undefined): ResolutionInfo[] {
     if (!raw || raw.length === 0) {
       return [];
@@ -1198,33 +1656,22 @@ struct RustDeskIndex {
     }
   }
 
-  private chooseRemoteResolution(targetWidth: number, targetHeight: number): ResolutionInfo | undefined {
-    if (this.supportedResolutions.length === 0) {
-      return undefined;
+  private selectPreferredCodec(capabilities: DecoderCapability[]): string {
+    const h264 = capabilities.find((item: DecoderCapability) => item.codec === 'H264');
+    if (h264 && (h264.recommendedAvailable || h264.hardwareAvailable || h264.softwareAvailable)) {
+      return 'h264';
     }
-    const targetRatio = targetWidth / Math.max(targetHeight, 1);
-    const boundedCandidates = this.supportedResolutions.filter((candidate: ResolutionInfo) =>
-      candidate.width > 0 && candidate.height > 0 && candidate.width <= targetWidth && candidate.height <= targetHeight
-    );
-    const candidates = boundedCandidates.length > 0 ? boundedCandidates : this.supportedResolutions;
-    let best: ResolutionInfo | undefined = undefined;
-    let bestScore = Number.MAX_SAFE_INTEGER;
-    candidates.forEach((candidate: ResolutionInfo) => {
-      if (candidate.width <= 0 || candidate.height <= 0) {
-        return;
-      }
-      const ratioPenalty = Math.abs(candidate.width / candidate.height - targetRatio) * 1000;
-      const sizePenalty = Math.abs(candidate.width - targetWidth) + Math.abs(candidate.height - targetHeight);
-      const score = ratioPenalty + sizePenalty;
-      if (score < bestScore) {
-        best = candidate;
-        bestScore = score;
-      }
-    });
-    return best;
+    const h265 = capabilities.find((item: DecoderCapability) => item.codec === 'H265');
+    if (h265 && (h265.recommendedAvailable || h265.hardwareAvailable || h265.softwareAvailable)) {
+      return 'h265';
+    }
+    return 'auto';
   }
 
   private configureDisplayFromPeerInfo(event: NativeEvent): void {
+    if (event.platform && event.platform.length > 0) {
+      this.peerPlatform = String(event.platform);
+    }
     if (!event.displays) {
       return;
     }
@@ -1235,6 +1682,16 @@ struct RustDeskIndex {
         return;
       }
       this.currentDisplay = Number(event.current_display ?? '0');
+      this.ensureRemoteCursorEnabled();
+      hilog.info(
+        DOMAIN,
+        TAG,
+        'Display setup peer platform=%{public}s current=%{public}d displays=%{public}s resolutions=%{public}s',
+        this.peerPlatform,
+        this.currentDisplay,
+        JSON.stringify(this.peerDisplays),
+        JSON.stringify(this.supportedResolutions),
+      );
       this.applyDisplayConfiguration();
     } catch (error) {
       this.errorText = `Display setup failed: ${String(error)}`;
@@ -1247,30 +1704,38 @@ struct RustDeskIndex {
     }
     const currentDisplay = Math.min(this.currentDisplay, this.peerDisplays.length - 1);
     const primaryDisplay = this.peerDisplays[currentDisplay];
-    const requestedWidth = this.evenSize(
-      primaryDisplay.original_width && primaryDisplay.original_width > 0 ? primaryDisplay.original_width : primaryDisplay.width,
-    );
-    const requestedHeight = this.evenSize(
-      primaryDisplay.original_height && primaryDisplay.original_height > 0 ? primaryDisplay.original_height : primaryDisplay.height,
-    );
+    const rawRect = this.getRawDisplayRect(primaryDisplay);
+    const displayScale = this.getDisplayScaleFactor(primaryDisplay);
+    const renderWidth = Math.max(Math.round(rawRect.width), 1);
+    const renderHeight = Math.max(Math.round(rawRect.height), 1);
     this.updateSessionState(this.parseResponse(native.sessionSwitchDisplay(this.activeSessionId, JSON.stringify([currentDisplay]))));
-    this.updateSessionState(this.parseResponse(native.sessionUpdateSupportedDecodings(this.activeSessionId)));
     this.updateSessionState(this.parseResponse(native.sessionSetSize(
       this.activeSessionId,
       currentDisplay,
-      requestedWidth,
-      requestedHeight
+      renderWidth,
+      renderHeight
     )));
-    const remoteResolution = this.chooseRemoteResolution(requestedWidth, requestedHeight);
-    if (remoteResolution) {
-      this.updateSessionState(this.parseResponse(native.sessionChangeResolution(
-        this.activeSessionId,
-        currentDisplay,
-        remoteResolution.width,
-        remoteResolution.height
-      )));
-    }
-    this.frameStatus = `Requested remote size ${requestedWidth}x${requestedHeight}`;
+    hilog.info(
+      DOMAIN,
+      TAG,
+      'Display config peer platform=%{public}s display=%{public}d raw=%{public}dx%{public}d rawRect=(%{public}s,%{public}s,%{public}s,%{public}s) scale=%{public}s original=%{public}s scaled=%{public}s',
+      this.peerPlatform,
+      currentDisplay,
+      primaryDisplay.width,
+      primaryDisplay.height,
+      rawRect.left.toFixed(0),
+      rawRect.top.toFixed(0),
+      rawRect.width.toFixed(0),
+      rawRect.height.toFixed(0),
+      displayScale.toFixed(2),
+      primaryDisplay.original_width && primaryDisplay.original_height
+        ? `${primaryDisplay.original_width}x${primaryDisplay.original_height}`
+        : 'none',
+      primaryDisplay.scaled_width && primaryDisplay.scaled_height
+        ? `${primaryDisplay.scaled_width}x${primaryDisplay.scaled_height}`
+        : 'none',
+    );
+    this.frameStatus = `Remote raw ${renderWidth}x${renderHeight}`;
     this.requestVideoRefresh();
   }
 
@@ -1340,11 +1805,35 @@ struct RustDeskIndex {
       return;
     }
     try {
+      this.applyCodecPreference(false);
       this.updateSessionState(this.parseResponse(native.sessionSetImageQuality(this.activeSessionId, 'low')));
       this.updateSessionState(this.parseResponse(native.sessionSetCustomFps(this.activeSessionId, 90)));
       this.performanceTuningApplied = true;
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'applyPerformanceTuning failed: %{public}s', String(error));
+    }
+  }
+
+  private applyCodecPreference(force: boolean): void {
+    if (!this.activeSessionId || this.preferredCodec === 'auto') {
+      return;
+    }
+    const now = Date.now();
+    if (!force && this.codecPreferenceApplied) {
+      return;
+    }
+    if (force && this.lastCodecPreferenceAppliedAt > 0 && now - this.lastCodecPreferenceAppliedAt < PREFERRED_CODEC_REAPPLY_MS) {
+      return;
+    }
+    try {
+      const response = this.parseResponse(native.sessionSetCodecPreference(this.activeSessionId, this.preferredCodec));
+      this.codecPreferenceApplied = response.ok;
+      this.lastCodecPreferenceAppliedAt = now;
+      if (!response.ok && response.message) {
+        this.logRelativeDebug('codec_preference', response.message);
+      }
+    } catch (error) {
+      this.logRelativeDebug('codec_preference', `failed=${String(error)}`);
     }
   }
 
@@ -1360,14 +1849,17 @@ struct RustDeskIndex {
       events.forEach((event: NativeEvent) => {
         if (event.name === 'connection_ready') {
           this.connectionSummary = `secure=${String(event.secure)}, direct=${String(event.direct)}, stream=${String(event.stream_type)}`;
-          if (this.activeSessionId) {
-            this.updateSessionState(this.parseResponse(native.sessionUpdateSupportedDecodings(this.activeSessionId)));
-          }
+          this.ensureRemoteCursorEnabled();
+          this.applyCodecPreference(true);
           this.performanceTuningApplied = false;
         }
         if (event.name === 'peer_info') {
+          if (event.platform && event.platform.length > 0) {
+            this.peerPlatform = String(event.platform);
+          }
           this.connectionSummary = `peer=${String(event.hostname)}, platform=${String(event.platform)}, version=${String(event.version)}`;
           this.applyPerformanceTuning();
+          this.ensureRemoteCursorEnabled();
           if (!this.showPreviewModal || !this.previewSurfaceVisible) {
             this.enterPreviewMode(event);
           } else {
@@ -1384,8 +1876,17 @@ struct RustDeskIndex {
           }
           if (event.codec_format && event.codec_format.length > 0) {
             this.remoteCodecText = String(event.codec_format);
+            if (this.remoteCodecText.toLowerCase().includes('vp9') && this.preferredCodec !== 'auto') {
+              this.applyCodecPreference(true);
+            }
           }
           this.refreshQualitySummary();
+        }
+        if (event.name === 'cursor_data') {
+          this.updateRemoteCursorData(event);
+        }
+        if (event.name === 'cursor_id') {
+          this.updateRemoteCursorId(event);
         }
         if (event.name === 'cursor_position') {
           this.updateCursorOverlayFromRemote(Number(event.x ?? '0'), Number(event.y ?? '0'));
@@ -1406,6 +1907,7 @@ struct RustDeskIndex {
           this.handleRemoteDisconnect(message);
         }
       });
+      this.ensureRemoteCursorEnabled();
     } catch (error) {
       this.errorText = String(error);
     } finally {
@@ -1431,33 +1933,25 @@ struct RustDeskIndex {
         if (this.previewSurfaceVisible) {
           XComponent({
             id: `rustdesk-preview-surface-${this.previewSurfaceGeneration.toString()}`,
-            type: XComponentType.SURFACE,
+            type: XComponentType.TEXTURE,
             controller: this.previewController
           })
             .width(this.getPreviewRenderSize().width)
             .height(this.getPreviewRenderSize().height)
-            .backgroundColor('#000000');
+            .backgroundColor('#000000')
+            .zIndex(0);
         } else {
           Text('Preparing preview...')
             .fontSize(14)
             .fontColor('#FFFFFF');
         }
 
-        if (this.remoteCursorVisible) {
-          Path()
-            .width(18)
-            .height(24)
-            .commands('M1 1 L1 20 L6 15 L9 23 L12 22 L9 14 L16 14 Z')
-            .fill('#FFFFFF')
-            .stroke('#111111')
-            .strokeWidth(1.4)
-            .position({ x: this.remoteCursorLeft - 1, y: this.remoteCursorTop - 1 })
-            .hitTestBehavior(HitTestMode.None);
+        Column() {
         }
-      }
         .width('100%')
         .height('100%')
-        .backgroundColor('#000000')
+        .backgroundColor('#00000000')
+        .hitTestBehavior(HitTestMode.Block)
         .focusable(true)
         .defaultFocus(true)
         .onKeyEvent((event: KeyEvent) => this.handlePreviewKeyEvent(event))
@@ -1471,46 +1965,120 @@ struct RustDeskIndex {
           this.handlePreviewTouchEvent(event);
         })
         .onAreaChange((_oldArea: Area, newArea: Area) => {
-          this.previewViewWidth = newArea.width as number;
-          this.previewViewHeight = newArea.height as number;
-        });
+          const width = Number(newArea.width);
+          const height = Number(newArea.height);
+          if (width > 0) {
+            this.previewViewWidth = width;
+          }
+          if (height > 0) {
+            this.previewViewHeight = height;
+          }
+          this.showRemoteCursorOverlayFromLastPosition();
+        })
+        .zIndex(10);
 
-      Column({ space: 4 }) {
-        Text(this.qualitySummary)
-          .fontSize(12)
-          .fontColor('#FFFFFF');
-
-        Text(this.frameStatus)
-          .fontSize(12)
-          .fontColor('#FFFFFF');
-
-        Text(`Input: ${this.relativeMouseMode ? 'relative' : 'absolute'}`)
-          .fontSize(12)
-          .fontColor('#FFFFFF');
-      }
-        .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-        .backgroundColor('#7A111111')
-        .borderRadius(12)
-        .position({ x: 20, y: 20 });
-
-      Row() {
-        Row({ space: 10 }) {
-          Button(this.relativeMouseMode ? '相对鼠标' : '绝对鼠标')
-            .height(38)
-            .backgroundColor(this.relativeMouseMode ? '#3F6FE0' : '#46576B')
-            .fontColor($r('sys.color.ohos_id_color_foreground_contrary'))
-            .onClick(() => this.toggleRelativeMouseMode());
-
-          Button('断开连接')
-            .height(38)
-            .backgroundColor($r('sys.color.ohos_id_color_alert'))
-            .fontColor($r('sys.color.ohos_id_color_foreground_contrary'))
-            .onClick(() => this.closeSession('已手动断开连接'));
+        if (this.shouldDrawRemoteCursorOverlay() && this.remoteCursorPixelMap) {
+          Image(this.remoteCursorPixelMap)
+            .width(this.remoteCursorBitmapWidth * this.getRemoteCursorScale())
+            .height(this.remoteCursorBitmapHeight * this.getRemoteCursorScale())
+            .objectFit(ImageFit.Fill)
+            .position({
+              x: this.remoteCursorLeft - this.remoteCursorHotX * this.getRemoteCursorScale(),
+              y: this.remoteCursorTop - this.remoteCursorHotY * this.getRemoteCursorScale()
+            })
+            .hitTestBehavior(HitTestMode.None)
+            .zIndex(20);
+        } else if (this.shouldDrawRemoteCursorOverlay()) {
+          Path()
+            .width(18)
+            .height(24)
+            .commands('M1 1 L1 20 L6 15 L9 23 L12 22 L9 14 L16 14 Z')
+            .fill('#FFFFFF')
+            .stroke('#111111')
+            .strokeWidth(1.4)
+            .opacity(1)
+            .position({ x: this.remoteCursorLeft - 1, y: this.remoteCursorTop - 1 })
+            .hitTestBehavior(HitTestMode.None)
+            .zIndex(20);
         }
       }
         .width('100%')
-        .justifyContent(FlexAlign.End)
-        .padding({ top: 20, right: 20, left: 20 });
+        .height('100%')
+        .backgroundColor('#000000');
+
+      Column({ space: 6 }) {
+        Row({ space: 8 }) {
+          Circle()
+            .width(7)
+            .height(7)
+            .fill(this.relativeMouseMode ? '#2F6BFF' : '#2DD17A');
+
+          Text(this.renderFpsText)
+            .fontSize(12)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#FFFFFF')
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1);
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center);
+
+        Text(this.shortRemoteStatusText())
+          .fontSize(11)
+          .fontColor('#D7DDE7')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%');
+
+        Text(this.frameStatus)
+          .fontSize(11)
+          .fontColor('#B9C1CF')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%');
+      }
+        .width(320)
+        .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+        .backgroundColor('#C0111724')
+        .borderRadius(8)
+        .border({ width: 1, color: '#33FFFFFF' })
+        .hitTestBehavior(HitTestMode.None)
+        .position({ x: 16, y: 16 })
+        .zIndex(30);
+
+      Row() {
+        Row({ space: 8 }) {
+          Button(this.relativeMouseMode ? '相对模式' : '绝对模式')
+            .height(34)
+            .width(92)
+            .backgroundColor(this.relativeMouseMode ? '#2F6BFF' : '#263246')
+            .fontColor('#FFFFFF')
+            .fontSize(13)
+            .fontWeight(FontWeight.Medium)
+            .borderRadius(8)
+            .onClick(() => this.toggleRelativeMouseMode());
+
+          Button('断开')
+            .height(34)
+            .width(74)
+            .backgroundColor('#FFF0EE')
+            .fontColor('#C7372F')
+            .fontSize(13)
+            .fontWeight(FontWeight.Medium)
+            .borderRadius(8)
+            .onClick(() => this.closeSession('已手动断开连接'));
+        }
+        .padding({ left: 8, right: 8, top: 8, bottom: 8 })
+        .backgroundColor('#C0111724')
+        .borderRadius(8)
+        .border({ width: 1, color: '#33FFFFFF' });
+      }
+      .width('100%')
+      .justifyContent(FlexAlign.End)
+      .padding({ top: 20, right: 20, left: 20 })
+      .hitTestBehavior(HitTestMode.Transparent)
+      .zIndex(30);
     }
     .width('100%')
     .height('100%');
@@ -1528,6 +2096,9 @@ struct RustDeskIndex {
               connectionSummary: this.connectionSummary,
               sessionMessage: this.sessionMessage,
               sessionPhase: this.sessionPhase,
+              qualitySummary: this.qualitySummary,
+              frameStatus: this.frameStatus,
+              renderFpsText: this.renderFpsText,
               rememberPassword: this.rememberPassword,
               canDisconnect: this.activeSessionId.length > 0,
               scroller: this.connectScroller,
@@ -1569,8 +2140,8 @@ struct RustDeskIndex {
       .titleBar({
         content: {
           title: {
-            mainTitle: this.currentTabIndex === 0 ? 'Resk' : '连接设置',
-            subTitle: this.currentTabIndex === 0 ? '输入 IP 连接远端设备' : '只保留连接相关设置与原生桥状态。'
+            mainTitle: this.currentTabIndex === 0 ? 'RustDesk HMOS' : 'Native Bridge',
+            subTitle: this.currentTabIndex === 0 ? '远控工作台' : '桥接与解码状态'
           }
         }
       })
