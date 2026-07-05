@@ -1,8 +1,8 @@
-import { HdsNavigation, HdsNavigationTitleMode, HdsTabs } from '@kit.UIDesignKit';
+import { HdsNavigation, HdsNavigationTitleMode, HdsTabs, HdsTabsController, ScrollEffectType, hdsMaterial } from '@kit.UIDesignKit';
 import native from 'rustdesk-ohrs';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { display, window } from '@kit.ArkUI';
+import { display, window, LengthMetrics } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ConnectTab } from './rustdesk/components/ConnectTab';
@@ -72,7 +72,7 @@ struct RustDeskIndex {
   @State notes: string = '';
   @State apiServer: string = '';
   @State nativeBuildMarker: string = '';
-  @State decoderCapabilitiesSummary: string = '';
+  @State decoderCapabilities: DecoderCapability[] = [];
   @State errorText: string = '';
 
   @State peerTarget: string = '10.52.176.1';
@@ -138,7 +138,8 @@ struct RustDeskIndex {
   @State remoteCursorBitmapHeight: number = 0;
   @State remoteCursorHotX: number = 0;
   @State remoteCursorHotY: number = 0;
-
+  @State isMiniBarExpanded: boolean = false;
+  private hdsTabsController: HdsTabsController = new HdsTabsController();
   aboutToAppear(): void {
     this.previewController.onCreated = (surfaceId: string) => this.handlePreviewSurfaceCreated(surfaceId);
     this.previewController.onChanged = (_surfaceId: string, rect: SurfaceRect) => this.handlePreviewSurfaceChanged(rect);
@@ -194,9 +195,7 @@ struct RustDeskIndex {
       this.nativeBuildMarker = native.buildMarker();
       const capabilityResponse = JSON.parse(native.runtimeGetDecoderCapabilities()) as DecoderCapabilityResponse;
       this.preferredCodec = this.selectPreferredCodec(capabilityResponse.capabilities);
-      this.decoderCapabilitiesSummary = capabilityResponse.capabilities
-        .map((item: DecoderCapability) => `${item.codec}:${item.recommendedName || '-'} hw=${String(item.hardwareAvailable)} sw=${String(item.softwareAvailable)}`)
-        .join(' | ');
+      this.decoderCapabilities = capabilityResponse.capabilities;
       this.sessionMessage = String(response['message'] ?? 'Runtime initialized');
       this.refreshNativeState();
     } catch (error) {
@@ -1506,77 +1505,107 @@ struct RustDeskIndex {
         .height('100%')
         .backgroundColor('#000000');
 
-      Column({ space: 6 }) {
-        Row({ space: 8 }) {
-          Circle()
-            .width(7)
-            .height(7)
-            .fill(this.relativeMouseMode ? '#2F6BFF' : '#2DD17A');
 
-          Text(this.renderFpsText)
-            .fontSize(12)
-            .fontWeight(FontWeight.Medium)
-            .fontColor('#FFFFFF')
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .layoutWeight(1);
-        }
-        .width('100%')
-        .alignItems(VerticalAlign.Center);
 
-        Text(this.shortRemoteStatusText())
-          .fontSize(11)
-          .fontColor('#D7DDE7')
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%');
-
-        Text(this.frameStatus)
-          .fontSize(11)
-          .fontColor('#B9C1CF')
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%');
-      }
-        .width(320)
-        .padding({ left: 12, right: 12, top: 9, bottom: 9 })
-        .backgroundColor('#C0111724')
-        .borderRadius(8)
-        .border({ width: 1, color: '#33FFFFFF' })
-        .hitTestBehavior(HitTestMode.None)
-        .position({ x: 16, y: 16 })
-        .zIndex(30);
-
+      // 收纳式悬浮迷你栏 (Collapsible Mini bar)
       Row() {
-        Row({ space: 8 }) {
-          Button(this.getPointerModeName())
-            .height(34)
-            .width(92)
-            .backgroundColor(this.relativeMouseMode ? '#2F6BFF' : '#263246')
-            .fontColor('#FFFFFF')
-            .fontSize(13)
-            .fontWeight(FontWeight.Medium)
-            .borderRadius(8)
-            .onClick(() => this.toggleRelativeMouseMode());
+        if (this.isMiniBarExpanded) {
+          Row({ space: 12 }) {
+            // 极简状态指示器
+            Row({ space: 6 }) {
+              Circle()
+                .width(6)
+                .height(6)
+                .fill(this.relativeMouseMode ? '#2F6BFF' : '#2DD17A');
+              Text(this.renderFpsText)
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .fontColor($r('sys.color.ohos_id_color_text_primary'));
+            }
+            .padding({ left: 6 })
+            .hitTestBehavior(HitTestMode.None);
 
-          Button('断开')
-            .height(34)
-            .width(74)
-            .backgroundColor('#FFF0EE')
-            .fontColor('#C7372F')
-            .fontSize(13)
-            .fontWeight(FontWeight.Medium)
-            .borderRadius(8)
-            .onClick(() => this.closeSession('已手动断开连接'));
+            Divider()
+              .vertical(true)
+              .height(14)
+              .color($r('sys.color.ohos_id_color_text_secondary'))
+              .opacity(0.3);
+
+            // 核心控制按钮
+            Row({ space: 6 }) {
+              Button(this.getPointerModeName())
+                .height(32)
+                .width(84)
+                .backgroundColor(this.relativeMouseMode ? $r('sys.color.ohos_id_color_component_activated') : $r('sys.color.ohos_id_color_button_normal'))
+                .fontColor(this.relativeMouseMode ? $r('sys.color.ohos_id_color_foreground_contrary') : $r('sys.color.ohos_id_color_text_primary'))
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .borderRadius(16)
+                .onClick(() => this.toggleRelativeMouseMode());
+
+              Button('断开')
+                .height(32)
+                .width(64)
+                .backgroundColor($r('sys.color.ohos_id_color_button_normal'))
+                .fontColor($r('sys.color.ohos_id_color_warning'))
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .borderRadius(16)
+                .onClick(() => this.closeSession('已手动断开连接'));
+                
+              // 收起按钮
+              Stack() {
+                SymbolGlyph($r('sys.symbol.chevron_up'))
+                  .fontSize(20)
+                  .fontColor([$r('sys.color.ohos_id_color_text_secondary')])
+              }
+              .width(32)
+              .height(32)
+              .backgroundColor($r('sys.color.ohos_id_color_button_normal'))
+              .borderRadius(16)
+              .onClick(() => {
+                animateTo({ duration: 300, curve: Curve.FastOutSlowIn }, () => {
+                  this.isMiniBarExpanded = false;
+                });
+              });
+            }
+          }
+          .height(44)
+          .padding({ left: 12, right: 6 })
+          .margin({ top: 8 })
+          .backgroundColor($r('sys.color.ohos_id_color_background_transparent'))
+          .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK)
+          .borderRadius(22)
+          .shadow(ShadowStyle.OUTER_DEFAULT_MD)
+          .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.95, y: 0.95 })));
+        } else {
+          // 收纳状态：极窄的顶部托盘
+          Row() {
+            Stack()
+              .width(36)
+              .height(4)
+              .backgroundColor($r('sys.color.ohos_id_color_text_secondary'))
+              .borderRadius(2)
+              .opacity(0.6);
+          }
+          .width(64)
+          .height(20)
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor($r('sys.color.ohos_id_color_background_transparent'))
+          .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK)
+          .borderRadius({ topLeft: 0, topRight: 0, bottomLeft: 10, bottomRight: 10 })
+          .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+          .onClick(() => {
+            animateTo({ duration: 300, curve: Curve.FastOutSlowIn }, () => {
+              this.isMiniBarExpanded = true;
+            });
+          })
+          .transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: -10 })));
         }
-        .padding({ left: 8, right: 8, top: 8, bottom: 8 })
-        .backgroundColor('#C0111724')
-        .borderRadius(8)
-        .border({ width: 1, color: '#33FFFFFF' });
       }
       .width('100%')
-      .justifyContent(FlexAlign.End)
-      .padding({ top: 20, right: 20, left: 20 })
+      .justifyContent(FlexAlign.Center)
+      .position({ x: 0, y: 0 })
       .hitTestBehavior(HitTestMode.Transparent)
       .zIndex(30);
     }
@@ -1595,21 +1624,33 @@ struct RustDeskIndex {
     .onKeyEvent((event: KeyEvent) => this.handlePreviewRootKeyEvent(event));
   }
 
+  @Builder
+  TabBuilder(index: number, name: string, icon: Resource) {
+    Column() {
+      SymbolGlyph(icon)
+        .fontSize(24)
+        .fontColor([this.currentTabIndex === index ? $r('sys.color.ohos_id_color_component_activated') : $r('sys.color.ohos_id_color_text_secondary')])
+        .fontWeight(this.currentTabIndex === index ? FontWeight.Bold : FontWeight.Medium)
+      Text(name)
+        .fontSize(10)
+        .fontColor(this.currentTabIndex === index ? $r('sys.color.ohos_id_color_component_activated') : $r('sys.color.ohos_id_color_text_secondary'))
+        .fontWeight(this.currentTabIndex === index ? FontWeight.Bold : FontWeight.Medium)
+        .margin({ top: 4 })
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+  }
+
   build() {
     if (this.showPreviewModal) {
       this.previewModalBuilder();
     } else {
       HdsNavigation(this.pageInfos) {
-        HdsTabs({ barPosition: BarPosition.End, index: this.currentTabIndex }) {
+        HdsTabs({ controller: this.hdsTabsController }) {
           TabContent() {
             ConnectTab({
               target: this.peerTarget,
-              connectionSummary: this.connectionSummary,
-              sessionMessage: this.sessionMessage,
-              sessionPhase: this.sessionPhase,
-              qualitySummary: this.qualitySummary,
-              frameStatus: this.frameStatus,
-              renderFpsText: this.renderFpsText,
               rememberPassword: this.rememberPassword,
               canDisconnect: this.activeSessionId.length > 0,
               scroller: this.connectScroller,
@@ -1617,7 +1658,8 @@ struct RustDeskIndex {
               onConnect: () => this.connectSession(),
               onDisconnect: () => this.closeSession('已手动断开连接')
             })
-          }.tabBar(new BottomTabBarStyle($r('app.media.startIcon'), '连接'))
+          }
+          .tabBar(this.TabBuilder(0, '控制台', $r('sys.symbol.house')))
 
           TabContent() {
             SettingsTab({
@@ -1626,9 +1668,8 @@ struct RustDeskIndex {
               health: this.health,
               integrationStage: this.integrationStage,
               upstreamRepo: this.upstreamRepo,
-              apiServer: this.apiServer,
               buildMarker: this.nativeBuildMarker,
-              decoderSummary: this.decoderCapabilitiesSummary,
+              decoderCapabilities: this.decoderCapabilities,
               notes: this.notes,
               errorText: this.errorText,
               scroller: this.settingsScroller,
@@ -1639,26 +1680,56 @@ struct RustDeskIndex {
                 this.preferences?.clearPassword();
               }
             })
-          }.tabBar(new BottomTabBarStyle($r('app.media.startIcon'), '设置'))
+          }
+          .tabBar(this.TabBuilder(1, '设置', $r('sys.symbol.gearshape')))
         }
+        .barOverlap(true)
+        .barPosition(BarPosition.End)
+        .vertical(false)
+        .scrollable(false)
+        .animationDuration(300)
         .onChange((index: number) => {
           this.currentTabIndex = index;
+        })
+        .barFloatingStyle({
+          barWidth: { smallWidth: 200, mediumWidth: 300, largeWidth: 400 },
+          barBottomMargin: 24,
+          gradientMask: { maskColor: '#00F1F3F5', maskHeight: 92 },
+          systemMaterialEffect: {
+            materialType: hdsMaterial.MaterialType.IMMERSIVE,
+            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+          }
         })
         .width('100%')
         .height('100%')
       }
       .titleMode(HdsNavigationTitleMode.FREE)
+      .hideBackButton(true)
       .titleBar({
         content: {
           title: {
             mainTitle: this.currentTabIndex === 0 ? 'RustDesk HMOS' : 'Native Bridge',
             subTitle: this.currentTabIndex === 0 ? '远控工作台' : '桥接与解码状态'
           }
-        }
+        },
+        style: {
+          scrollEffectOpts: {
+            enableScrollEffect: true,
+            scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
+            blurEffectiveStartOffset: LengthMetrics.vp(0),
+            blurEffectiveEndOffset: LengthMetrics.vp(56)
+          },
+          systemMaterialEffect: {
+            materialType: hdsMaterial.MaterialType.ADAPTIVE,
+            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+          }
+        },
+        avoidLayoutSafeArea: true
       })
       .bindToScrollable([this.currentTabIndex === 0 ? this.connectScroller : this.settingsScroller])
       .width('100%')
       .height('100%')
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       .backgroundColor($r('sys.color.ohos_id_color_background'));
     }
   }

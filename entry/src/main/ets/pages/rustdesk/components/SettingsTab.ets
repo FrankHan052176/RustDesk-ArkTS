@@ -1,4 +1,5 @@
 import { Chip, ChipSize, LengthMetrics } from '@kit.ArkUI';
+import { DecoderCapability } from '../RustDeskTypes';
 
 interface StatusChipOptions {
   text: string;
@@ -13,9 +14,8 @@ export interface SettingsTabProps {
   health: string;
   integrationStage: string;
   upstreamRepo: string;
-  apiServer: string;
   buildMarker: string;
-  decoderSummary: string;
+  decoderCapabilities: DecoderCapability[];
   notes: string;
   errorText: string;
   scroller: Scroller;
@@ -30,9 +30,8 @@ export struct SettingsTab {
   @Prop health: string = 'waiting...';
   @Prop integrationStage: string = 'unknown';
   @Prop upstreamRepo: string = '';
-  @Prop apiServer: string = '';
   @Prop buildMarker: string = '';
-  @Prop decoderSummary: string = '';
+  @Prop decoderCapabilities: DecoderCapability[] = [];
   @Prop notes: string = '';
   @Prop errorText: string = '';
   scroller: Scroller = new Scroller();
@@ -46,20 +45,6 @@ export struct SettingsTab {
   private bridgeReady(): boolean {
     const health = this.health.toLowerCase();
     return health.includes('ready') || health.includes('ok') || this.integrationStage.includes('bind');
-  }
-
-  private bridgeTone(): string {
-    if (this.hasError()) {
-      return '#C7372F';
-    }
-    return this.bridgeReady() ? '#16875A' : '#A06000';
-  }
-
-  private bridgeBg(): string {
-    if (this.hasError()) {
-      return '#FFF0EE';
-    }
-    return this.bridgeReady() ? '#E9F7F0' : '#FFF2CF';
   }
 
   @Builder
@@ -93,223 +78,190 @@ export struct SettingsTab {
   @Builder
   private SectionHeader(title: string) {
     Text(title)
-      .fontSize(13)
+      .fontSize(14)
       .fontWeight(FontWeight.Medium)
-      .fontColor('#111827')
-      .maxLines(1)
-      .textOverflow({ overflow: TextOverflow.Ellipsis })
-      .width('100%');
+      .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+      .width('100%')
+      .padding({ left: 8, bottom: 4 });
   }
 
   @Builder
-  private InfoRow(label: string, value: string) {
-    Row({ space: 12 }) {
+  private InfoRow(label: string, value: string, showBorder: boolean = true) {
+    Row() {
       Text(label)
-        .width(96)
-        .fontSize(12)
-        .fontColor('#737D8F')
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis });
-
+        .width(80)
+        .fontSize(15)
+        .fontColor($r('sys.color.ohos_id_color_text_primary'))
       Text(value || '--')
         .layoutWeight(1)
-        .fontSize(13)
-        .fontColor('#1F2937')
-        .lineHeight(18)
+        .fontSize(14)
+        .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+        .textAlign(TextAlign.End)
         .maxLines(2)
-        .textOverflow({ overflow: TextOverflow.Ellipsis });
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
     }
     .width('100%')
-    .height(38)
-    .alignItems(VerticalAlign.Center);
+    .height(48)
+    .border({ width: { bottom: showBorder ? 0.5 : 0 }, color: $r('sys.color.ohos_id_color_list_separator') })
   }
 
   @Builder
-  private CompactMetric(label: string, value: string, tone: string) {
-    Column({ space: 4 }) {
-      Text(label)
-        .fontSize(11)
-        .fontColor('#737D8F')
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .width('100%');
+  private DecoderRow(item: DecoderCapability, isLast: boolean) {
+    Column() {
+      Row() {
+        Column({ space: 4 }) {
+          Text(item.codec)
+            .fontSize(15)
+            .fontColor($r('sys.color.ohos_id_color_text_primary'))
+          Text(item.recommendedName || '默认实现')
+            .fontSize(12)
+            .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
 
-      Text(value || '--')
-        .fontSize(14)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(tone)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .width('100%');
+        Row({ space: 8 }) {
+          if (item.hardwareAvailable) {
+            this.StatusChip({
+              text: '硬解',
+              color: '#16875A',
+              backgroundColor: '#E9F7F0',
+              activated: false
+            })
+          }
+          if (item.softwareAvailable) {
+            this.StatusChip({
+              text: '软解',
+              color: '#2F6BFF',
+              backgroundColor: '#EAF1FF',
+              activated: false
+            })
+          }
+          if (!item.hardwareAvailable && !item.softwareAvailable) {
+            this.StatusChip({
+              text: '不支持',
+              color: '#C7372F',
+              backgroundColor: '#FFF0EE',
+              activated: false
+            })
+          }
+        }
+      }
+      .width('100%')
+      .padding({ top: 12, bottom: 12 })
+      .border({ width: { bottom: isLast ? 0 : 0.5 }, color: $r('sys.color.ohos_id_color_list_separator') })
     }
-    .height(56)
-    .layoutWeight(1)
-    .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-    .backgroundColor('#F7F9FC')
-    .borderRadius(8)
-    .border({ width: 1, color: '#E6EAF0' });
+    .width('100%')
   }
 
   build() {
     Scroll(this.scroller) {
-      Column({ space: 12 }) {
-        Row() {
-          Row({ space: 10 }) {
-            Stack() {
-              Text('N')
-                .fontSize(17)
-                .fontWeight(FontWeight.Bold)
-                .fontColor('#FFFFFF');
-            }
-            .width(38)
-            .height(38)
-            .backgroundColor('#182033')
-            .borderRadius(8)
-            .alignContent(Alignment.Center);
-
-            Column({ space: 2 }) {
-              Text('Native Bridge')
-                .fontSize(20)
-                .fontWeight(FontWeight.Bold)
-                .fontColor('#121826')
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis });
-
-              Text(this.health || 'waiting...')
-                .fontSize(12)
-                .fontColor('#697386')
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-                .width('100%');
-            }
-            .layoutWeight(1)
-            .alignItems(HorizontalAlign.Start);
-          }
-          .layoutWeight(1);
-
-          this.StatusChip({
-            text: this.hasError() ? '异常' : (this.bridgeReady() ? '可用' : '检查中'),
-            color: this.bridgeTone(),
-            backgroundColor: this.bridgeBg(),
-            activated: this.bridgeReady() && !this.hasError()
-          });
+      Column({ space: 16 }) {
+        // App Info header
+        Column({ space: 8 }) {
+          Image($r('app.media.startIcon'))
+            .width(64)
+            .height(64)
+            .borderRadius(16)
+          Text('RustDesk HMOS')
+            .fontSize(20)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('sys.color.ohos_id_color_text_primary'))
+          Text(this.nativeVersion)
+            .fontSize(14)
+            .fontColor($r('sys.color.ohos_id_color_text_secondary'))
         }
         .width('100%')
-        .alignItems(VerticalAlign.Center);
+        .alignItems(HorizontalAlign.Center)
+        .padding({ top: 32, bottom: 16 })
 
-        Row({ space: 8 }) {
-          this.CompactMetric('Stage', this.integrationStage || '--', '#2F6BFF');
-          this.CompactMetric('Password', this.rememberPassword ? 'Saved' : 'None', this.rememberPassword ? '#16875A' : '#5C6676');
+        // Bridge Status Card
+        Column({ space: 8 }) {
+          this.SectionHeader('核心状态');
+          
+          Column({ space: 0 }) {
+            this.InfoRow('健康状态', this.health || 'waiting...', true)
+            this.InfoRow('集成阶段', this.integrationStage, true)
+            this.InfoRow('上游仓库', this.upstreamRepo, false)
+          }
+          .backgroundColor($r('sys.color.ohos_id_color_list_card_bg'))
+          .borderRadius($r('sys.float.ohos_id_corner_radius_card'))
+          .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+          .padding({ left: 16, right: 16 })
         }
         .width('100%');
 
-        Column({ space: 10 }) {
-          Row() {
-            this.SectionHeader('运行信息');
+        // Technical Details Card
+        Column({ space: 8 }) {
+          this.SectionHeader('技术详情');
 
-            Button('刷新')
-              .height(34)
-              .width(72)
-              .backgroundColor('#EAF1FF')
-              .fontColor('#2F6BFF')
-              .fontSize(13)
-              .fontWeight(FontWeight.Medium)
-              .borderRadius(8)
-              .stateEffect(true)
-              .onClick(() => this.onRefresh());
+          Column({ space: 0 }) {
+            this.InfoRow('构建标识', this.buildMarker, this.decoderCapabilities.length > 0)
+            
+            ForEach(this.decoderCapabilities, (item: DecoderCapability, index: number) => {
+              this.DecoderRow(item, index === this.decoderCapabilities.length - 1)
+            }, (item: DecoderCapability) => item.codec)
+            
+            if (this.decoderCapabilities.length === 0) {
+              this.InfoRow('解码器', '无配置', false)
+            }
           }
-          .width('100%')
-          .alignItems(VerticalAlign.Center);
-
-          Divider().color('#EEF1F5').strokeWidth(1);
-          this.InfoRow('Version', this.nativeVersion);
-          this.InfoRow('API Server', this.apiServer || 'unknown');
-          this.InfoRow('Build', this.buildMarker || 'unknown');
-          this.InfoRow('Upstream', this.upstreamRepo || 'unknown');
+          .backgroundColor($r('sys.color.ohos_id_color_list_card_bg'))
+          .borderRadius($r('sys.float.ohos_id_corner_radius_card'))
+          .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+          .padding({ left: 16, right: 16 })
         }
-        .width('100%')
-        .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-        .backgroundColor('#FFFFFF')
-        .borderRadius(8)
-        .border({ width: 1, color: '#E2E7EF' });
-
-        Column({ space: 10 }) {
-          this.SectionHeader('解码链路');
-          Divider().color('#EEF1F5').strokeWidth(1);
-
-          Text(this.decoderSummary || 'unknown')
-            .fontSize(12)
-            .lineHeight(18)
-            .fontColor('#475569')
-            .maxLines(4)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%');
-
-          if (this.notes.trim().length > 0) {
-            Divider().color('#EEF1F5').strokeWidth(1);
-
-            Text(this.notes)
-              .fontSize(13)
-              .lineHeight(19)
-              .fontColor('#1F2937')
-              .maxLines(4)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .width('100%');
-          }
-        }
-        .width('100%')
-        .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-        .backgroundColor('#FFFFFF')
-        .borderRadius(8)
-        .border({ width: 1, color: '#E2E7EF' });
-
-        Column({ space: 10 }) {
-          this.SectionHeader('凭据');
-          Divider().color('#EEF1F5').strokeWidth(1);
-          this.InfoRow('Password', this.rememberPassword ? '已保存' : '未保存');
-
-          Button('清除保存密码')
-            .height(42)
-            .width('100%')
-            .borderRadius(8)
-            .backgroundColor(this.rememberPassword ? '#FFF0EE' : '#ECEFF4')
-            .fontColor(this.rememberPassword ? '#C7372F' : '#737D8F')
-            .fontSize(14)
-            .fontWeight(FontWeight.Medium)
-            .enabled(this.rememberPassword)
-            .stateEffect(true)
-            .onClick(() => this.onForgetPassword());
-        }
-        .width('100%')
-        .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-        .backgroundColor('#FFFFFF')
-        .borderRadius(8)
-        .border({ width: 1, color: '#E2E7EF' });
+        .width('100%');
 
         if (this.hasError()) {
-          Column({ space: 10 }) {
-            this.SectionHeader('最近错误');
-            Divider().color('#FFD8D3').strokeWidth(1);
-
-            Text(this.errorText)
-              .fontSize(13)
-              .lineHeight(19)
-              .fontColor('#B42318')
-              .width('100%');
+          Column({ space: 8 }) {
+            this.SectionHeader('系统日志');
+            
+            Column() {
+              Text(this.errorText)
+                .fontSize(13)
+                .fontColor($r('sys.color.ohos_id_color_warning'))
+                .width('100%')
+                .lineHeight(18)
+            }
+            .backgroundColor($r('sys.color.ohos_id_color_list_card_bg'))
+            .borderRadius($r('sys.float.ohos_id_corner_radius_card'))
+            .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+            .padding(16)
           }
-          .width('100%')
-          .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-          .backgroundColor('#FFF8F7')
-          .borderRadius(8)
-          .border({ width: 1, color: '#FFD8D3' });
+          .width('100%');
         }
+
+        // Actions
+        Column({ space: 12 }) {
+          Button('刷新底层状态')
+            .width('100%')
+            .height(48)
+            .backgroundColor($r('sys.color.ohos_id_color_button_normal'))
+            .fontColor($r('sys.color.ohos_id_color_text_primary'))
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .onClick(() => this.onRefresh())
+
+          if (this.rememberPassword) {
+            Button('清除已保存的密码')
+              .width('100%')
+              .height(48)
+              .backgroundColor($r('sys.color.ohos_id_color_button_normal'))
+              .fontColor($r('sys.color.ohos_id_color_warning'))
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .onClick(() => this.onForgetPassword())
+          }
+        }
+        .width('100%')
+        .padding({ top: 16 })
       }
       .width('100%')
-      .alignItems(HorizontalAlign.Start)
-      .padding({ left: 16, right: 16, top: 104, bottom: 104 });
+      .padding({ left: 16, right: 16, top: 160, bottom: 120 })
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#F5F7FA');
+    .backgroundColor($r('sys.color.ohos_id_color_sub_background'));
   }
 }

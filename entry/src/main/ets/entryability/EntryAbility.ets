@@ -24,6 +24,12 @@ export default class EntryAbility extends UIAbility {
           hilog.error(DOMAIN, TAG, 'Failed to obtain main window: %{public}s', JSON.stringify(windowError) ?? '');
           return;
         }
+        mainWindow.setWindowLayoutFullScreen(true).then(() => {
+          hilog.info(DOMAIN, TAG, 'Succeeded in setting the window layout to full-screen mode.');
+        }).catch((err: BusinessError) => {
+          hilog.error(DOMAIN, TAG, 'Failed to set the window layout to full-screen mode. Cause:' + JSON.stringify(err));
+        });
+
         mainWindow.setPreferredOrientation(window.Orientation.AUTO_ROTATION)
           .then(() => {
             hilog.info(DOMAIN, TAG, 'Window preferred orientation set to auto rotation');

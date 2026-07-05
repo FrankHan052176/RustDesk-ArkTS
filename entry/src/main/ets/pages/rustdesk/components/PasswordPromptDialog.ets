@@ -66,7 +66,8 @@ export struct PasswordPromptDialog {
       .width('82%')
       .padding(20)
       .backgroundColor($r('sys.color.ohos_id_color_dialog_bg'))
-      .borderRadius(24);
+      .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
+      .borderRadius($r('sys.float.ohos_id_corner_radius_dialog'));
     }
     .width('100%')
     .height('100%')
