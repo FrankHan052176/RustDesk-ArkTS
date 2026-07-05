@@ -95,6 +95,20 @@ export class RustDeskKeyPayload {
   }
 }
 
+export class RustDeskFlutterKeyPayload {
+  character: string;
+  usb_hid: number;
+  lock_modes: number;
+  down_or_up: boolean;
+
+  constructor(character: string, usbHid: number, lockModes: number, downOrUp: boolean) {
+    this.character = character;
+    this.usb_hid = usbHid;
+    this.lock_modes = lockModes;
+    this.down_or_up = downOrUp;
+  }
+}
+
 const KEYCODE_0 = 2000;
 const KEYCODE_9 = 2009;
 const KEYCODE_A = 2017;
@@ -223,6 +237,126 @@ export function mapHarmonyKeyCode(keyCode: number): RustDeskKeyMapping | undefin
       return { name: 'VK_DECIMAL' };
     case 2119:
       return { name: 'VK_RETURN' };
+    default:
+      return undefined;
+  }
+}
+
+export function mapHarmonyKeyCodeToUsbHid(keyCode: number): number | undefined {
+  if (keyCode >= KEYCODE_A && keyCode <= KEYCODE_Z) {
+    return 0x04 + keyCode - KEYCODE_A;
+  }
+  if (keyCode >= 2001 && keyCode <= KEYCODE_9) {
+    return 0x1E + keyCode - 2001;
+  }
+  if (keyCode === KEYCODE_0) {
+    return 0x27;
+  }
+  if (keyCode >= KEYCODE_F1 && keyCode <= KEYCODE_F12) {
+    return 0x3A + keyCode - KEYCODE_F1;
+  }
+  if (keyCode === KEYCODE_NUMPAD0) {
+    return 0x62;
+  }
+  if (keyCode >= KEYCODE_NUMPAD0 + 1 && keyCode <= KEYCODE_NUMPAD9) {
+    return 0x59 + keyCode - (KEYCODE_NUMPAD0 + 1);
+  }
+
+  switch (keyCode) {
+    case 2012:
+      return 0x52;
+    case 2013:
+      return 0x51;
+    case 2014:
+      return 0x50;
+    case 2015:
+      return 0x4F;
+    case 2016:
+      return 0x28;
+    case 2043:
+      return 0x36;
+    case 2044:
+      return 0x37;
+    case 2045:
+      return 0xE2;
+    case 2046:
+      return 0xE6;
+    case 2047:
+      return 0xE1;
+    case 2048:
+      return 0xE5;
+    case 2049:
+      return 0x2B;
+    case 2050:
+      return 0x2C;
+    case 2054:
+      return 0x28;
+    case 2055:
+      return 0x2A;
+    case 2056:
+      return 0x35;
+    case 2057:
+      return 0x2D;
+    case 2058:
+      return 0x2E;
+    case 2059:
+      return 0x2F;
+    case 2060:
+      return 0x30;
+    case 2061:
+      return 0x31;
+    case 2062:
+      return 0x33;
+    case 2063:
+      return 0x34;
+    case 2064:
+      return 0x38;
+    case 2066:
+      return 0x2E;
+    case 2068:
+      return 0x4B;
+    case 2069:
+      return 0x4E;
+    case 2070:
+      return 0x29;
+    case 2071:
+      return 0x4C;
+    case 2072:
+      return 0xE0;
+    case 2073:
+      return 0xE4;
+    case 2074:
+      return 0x39;
+    case 2075:
+      return 0x47;
+    case 2076:
+      return 0xE3;
+    case 2077:
+      return 0xE7;
+    case 2079:
+      return 0x46;
+    case 2080:
+      return 0x48;
+    case 2081:
+      return 0x4A;
+    case 2082:
+      return 0x4D;
+    case 2083:
+      return 0x49;
+    case 2102:
+      return 0x53;
+    case 2113:
+      return 0x54;
+    case 2114:
+      return 0x55;
+    case 2115:
+      return 0x56;
+    case 2116:
+      return 0x57;
+    case 2117:
+      return 0x63;
+    case 2119:
+      return 0x58;
     default:
       return undefined;
   }
