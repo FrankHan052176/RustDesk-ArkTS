@@ -8,23 +8,14 @@ export const PASSWORD_TIMEOUT_MS = 60000;
 export interface BridgeSummary {
   integrationStage: string;
   upstreamRepo: string;
-  upstreamPath?: string;
-  nativeCrate: string;
-  nativePackage: string;
-  plannedModules: string[];
-  nextSteps: string[];
   notes: string;
 }
 
 export interface SessionSnapshot {
   sessionId: string;
   coreSessionId?: string;
-  peerTarget: string;
-  normalizedPeerId: string;
   phase: string;
-  lastAction: string;
   lastError?: string;
-  selectedDisplays: number[];
 }
 
 export interface ActionResponse {
@@ -46,10 +37,13 @@ export interface RenderStatsSnapshot {
   totalFrames: number;
   lastFrameAgeMs: number;
   hasRenderedFrame: boolean;
+  decodeLatencyMs?: number;
+  avgDecodeLatencyMs?: number;
 }
 
 export interface NativeEvent {
   name: string;
+  content?: string;
   type?: string;
   secure?: string;
   direct?: string;
@@ -74,6 +68,18 @@ export interface NativeEvent {
   hotx?: string;
   hoty?: string;
   colors?: string;
+  gpu_texture?: boolean;
+  speed?: string;
+  target_bitrate?: string;
+  chroma?: string;
+  value?: string;
+  is_local?: string;
+  file_num?: string;
+  finished_size?: string;
+  err?: string;
+  read_path?: string;
+  is_upload?: string;
+  is_identical?: string;
 }
 
 export interface PeerDisplayInfo {
@@ -93,21 +99,17 @@ export interface ResolutionInfo {
   height: number;
 }
 
-export interface DecoderCapability {
-  codec: string;
-  mime: string;
-  recommendedAvailable: boolean;
-  recommendedName: string;
-  recommendedIsHardware: boolean;
-  hardwareAvailable: boolean;
-  hardwareName: string;
-  softwareAvailable: boolean;
-  softwareName: string;
-}
-
-export interface DecoderCapabilityResponse {
-  buildMarker: string;
-  capabilities: DecoderCapability[];
+export class DecoderCapability {
+  codec: string = '';
+  mime: string = '';
+  mimeAvailable: boolean = false;
+  recommendedAvailable: boolean = false;
+  recommendedName: string = '';
+  recommendedIsHardware: boolean = false;
+  hardwareAvailable: boolean = false;
+  hardwareName: string = '';
+  softwareAvailable: boolean = false;
+  softwareName: string = '';
 }
 
 export interface SavedConnectionSettings {

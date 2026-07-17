@@ -10,7 +10,443 @@
     },
     {
       "name": "EntryAbility_label",
-      "value": "RustDesk HMOS"
+      "value": "RustDesk"
+    },
+    {
+      "name": "navigation_home_title",
+      "value": "连接设备"
+    },
+    {
+      "name": "navigation_home_subtitle",
+      "value": "输入设备 ID，快速开始远程协作"
+    },
+    {
+      "name": "read_pasteboard_permission_reason",
+      "value": "用于在远程控制会话中同步文本剪贴板。"
+    },
+    {
+      "name": "device_directory_title",
+      "value": "设备中心"
+    },
+    {
+      "name": "device_directory_subtitle",
+      "value": "从最近设备、通讯簿或局域网快速发起独立会话"
+    },
+    {
+      "name": "device_source_recent",
+      "value": "最近"
+    },
+    {
+      "name": "device_source_address_book",
+      "value": "通讯簿"
+    },
+    {
+      "name": "device_source_lan",
+      "value": "局域网"
+    },
+    {
+      "name": "device_search_placeholder",
+      "value": "搜索 ID、别名或设备名"
+    },
+    {
+      "name": "device_scan_lan",
+      "value": "扫描局域网"
+    },
+    {
+      "name": "device_scanning_lan",
+      "value": "正在扫描局域网设备"
+    },
+    {
+      "name": "device_pull_scan_lan",
+      "value": "下拉扫描局域网设备"
+    },
+    {
+      "name": "device_release_scan_lan",
+      "value": "松开开始扫描"
+    },
+    {
+      "name": "device_pull_scan_lan_hint",
+      "value": "在列表顶部下拉即可重新扫描"
+    },
+    {
+      "name": "device_empty_recent",
+      "value": "还没有最近设备，完成一次连接后会自动出现在这里。"
+    },
+    {
+      "name": "device_empty_address_book",
+      "value": "当前服务器没有可用的通讯簿缓存。"
+    },
+    {
+      "name": "device_empty_lan",
+      "value": "没有发现局域网设备，可尝试重新扫描。"
+    },
+    {
+      "name": "device_empty_search",
+      "value": "没有找到匹配的设备，试试设备 ID、别名或主机名。"
+    },
+    {
+      "name": "device_action_remote",
+      "value": "远控"
+    },
+    {
+      "name": "device_action_camera",
+      "value": "摄像头"
+    },
+    {
+      "name": "device_action_files",
+      "value": "文件"
+    },
+    {
+      "name": "device_action_remove",
+      "value": "移除"
+    },
+    {
+      "name": "settings_server_title",
+      "value": "服务器与网络"
+    },
+    {
+      "name": "settings_server_subtitle",
+      "value": "官方公共服务或自定义 ID / Relay / API"
+    },
+    {
+      "name": "settings_server_official",
+      "value": "官方服务器"
+    },
+    {
+      "name": "settings_server_custom",
+      "value": "自定义服务器"
+    },
+    {
+      "name": "settings_id_server",
+      "value": "ID Server"
+    },
+    {
+      "name": "settings_relay_server",
+      "value": "Relay Server"
+    },
+    {
+      "name": "settings_api_server",
+      "value": "API Server"
+    },
+    {
+      "name": "settings_server_key",
+      "value": "Key"
+    },
+    {
+      "name": "settings_server_test",
+      "value": "验证配置"
+    },
+    {
+      "name": "settings_server_save",
+      "value": "保存并应用"
+    },
+    {
+      "name": "settings_server_effective_api",
+      "value": "当前 API"
+    },
+    {
+      "name": "settings_server_effective_api_auto",
+      "value": "由内核自动选择"
+    },
+    {
+      "name": "settings_server_remote_capability",
+      "value": "ID / Relay 配置"
+    },
+    {
+      "name": "settings_server_account_capability",
+      "value": "账户与通讯簿"
+    },
+    {
+      "name": "settings_server_remote_ready",
+      "value": "地址解析通过"
+    },
+    {
+      "name": "settings_server_remote_auto",
+      "value": "由内核自动选择公共节点"
+    },
+    {
+      "name": "settings_server_remote_pending",
+      "value": "尚未检查地址"
+    },
+    {
+      "name": "settings_server_account_ready",
+      "value": "服务可用"
+    },
+    {
+      "name": "settings_server_account_pending",
+      "value": "API 未验证或尚未登录"
+    },
+    {
+      "name": "settings_server_account_unconfigured",
+      "value": "未配置 API，不影响远控"
+    },
+    {
+      "name": "settings_id_server_placeholder",
+      "value": "例如 hbbs.example.com:21116"
+    },
+    {
+      "name": "settings_relay_server_placeholder",
+      "value": "可选，例如 hbbr.example.com:21117"
+    },
+    {
+      "name": "settings_api_server_placeholder",
+      "value": "可选，例如 https://api.example.com"
+    },
+    {
+      "name": "settings_server_key_placeholder",
+      "value": "可选，服务器公钥"
+    },
+    {
+      "name": "settings_server_testing",
+      "value": "正在验证…"
+    },
+    {
+      "name": "settings_server_saving",
+      "value": "正在保存…"
+    },
+    {
+      "name": "settings_server_validation_note",
+      "value": "这里只检查格式和地址解析，不代表端口或账户 API 已连通；实际远控能力以建立会话为准。"
+    },
+    {
+      "name": "settings_server_error_id_required",
+      "value": "自定义模式至少需要填写 ID Server。"
+    },
+    {
+      "name": "settings_server_error_id_space",
+      "value": "ID Server 不能包含空格。"
+    },
+    {
+      "name": "settings_server_error_relay_space",
+      "value": "Relay Server 不能包含空格。"
+    },
+    {
+      "name": "settings_server_error_api_scheme",
+      "value": "API Server 需要以 http:// 或 https:// 开头。"
+    },
+    {
+      "name": "settings_server_public_hint",
+      "value": "官方模式会清空自定义字段，由内核自动选择公共 ID 与 Relay 节点。"
+    },
+    {
+      "name": "settings_server_custom_hint",
+      "value": "自建开源服务器可能只提供远控，不一定包含账户与通讯簿 API。"
+    },
+    {
+      "name": "settings_defaults_title",
+      "value": "新会话默认行为"
+    },
+    {
+      "name": "settings_defaults_subtitle",
+      "value": "悬浮栏中的常用功能会从这些默认值开始"
+    },
+    {
+      "name": "settings_pointer_mode",
+      "value": "控制模式"
+    },
+    {
+      "name": "settings_pointer_mouse",
+      "value": "模拟鼠标"
+    },
+    {
+      "name": "settings_pointer_touchpad",
+      "value": "触摸板"
+    },
+    {
+      "name": "settings_remote_audio",
+      "value": "默认播放远端音频"
+    },
+    {
+      "name": "settings_clipboard_sync",
+      "value": "默认同步剪贴板"
+    },
+    {
+      "name": "settings_transform_gestures",
+      "value": "允许缩放、偏移与旋转手势"
+    },
+    {
+      "name": "settings_toolbar_expanded",
+      "value": "进入会话时展开悬浮栏"
+    },
+    {
+      "name": "settings_quality_default",
+      "value": "默认画质"
+    },
+    {
+      "name": "settings_codec_preference",
+      "value": "首选编码器"
+    },
+    {
+      "name": "settings_codec_auto",
+      "value": "自动"
+    },
+    {
+      "name": "settings_codec_hint",
+      "value": "自动模式会根据双方能力选择；手动首选项仅在当前设备支持时生效。"
+    },
+    {
+      "name": "settings_quality_speed",
+      "value": "流畅"
+    },
+    {
+      "name": "settings_quality_balanced",
+      "value": "均衡"
+    },
+    {
+      "name": "settings_quality_best",
+      "value": "最佳"
+    },
+    {
+      "name": "settings_diagnostics_title",
+      "value": "诊断信息"
+    },
+    {
+      "name": "settings_diagnostics_show",
+      "value": "展开诊断"
+    },
+    {
+      "name": "settings_diagnostics_hide",
+      "value": "收起诊断"
+    },
+    {
+      "name": "settings_account_title",
+      "value": "账户与通讯簿"
+    },
+    {
+      "name": "settings_account_subtitle",
+      "value": "登录当前 API 服务并同步设备通讯簿"
+    },
+    {
+      "name": "settings_account_signed_out",
+      "value": "未登录"
+    },
+    {
+      "name": "settings_account_signed_in",
+      "value": "已登录"
+    },
+    {
+      "name": "settings_account_awaiting_verification",
+      "value": "等待验证"
+    },
+    {
+      "name": "settings_account_login_hint",
+      "value": "账户能力由当前服务器的 API 提供；仅配置 ID / Relay 的自建服务器可能不支持登录。"
+    },
+    {
+      "name": "settings_account_username",
+      "value": "用户名"
+    },
+    {
+      "name": "settings_account_username_placeholder",
+      "value": "用户名或邮箱"
+    },
+    {
+      "name": "settings_account_password",
+      "value": "密码"
+    },
+    {
+      "name": "settings_account_password_placeholder",
+      "value": "输入账户密码"
+    },
+    {
+      "name": "settings_account_password_note",
+      "value": "密码仅用于本次登录请求，提交后会立即从界面内存中清除，不会写入本地偏好设置。"
+    },
+    {
+      "name": "settings_account_login",
+      "value": "登录"
+    },
+    {
+      "name": "settings_account_logging_in",
+      "value": "正在登录…"
+    },
+    {
+      "name": "settings_account_email_title",
+      "value": "验证登录邮箱"
+    },
+    {
+      "name": "settings_account_email_hint",
+      "value": "输入服务器发送到以下邮箱的验证码。"
+    },
+    {
+      "name": "settings_account_totp_title",
+      "value": "双重身份验证"
+    },
+    {
+      "name": "settings_account_totp_hint",
+      "value": "输入身份验证器当前生成的一次性验证码。"
+    },
+    {
+      "name": "settings_account_verification_code",
+      "value": "验证码"
+    },
+    {
+      "name": "settings_account_code_placeholder",
+      "value": "输入验证码"
+    },
+    {
+      "name": "settings_account_verify",
+      "value": "验证并登录"
+    },
+    {
+      "name": "settings_account_verifying",
+      "value": "正在验证…"
+    },
+    {
+      "name": "settings_account_cancel",
+      "value": "取消验证"
+    },
+    {
+      "name": "settings_account_default_user",
+      "value": "RustDesk 用户"
+    },
+    {
+      "name": "settings_account_not_provided",
+      "value": "未提供"
+    },
+    {
+      "name": "settings_account_signed_in_hint",
+      "value": "当前服务器账户"
+    },
+    {
+      "name": "settings_account_email",
+      "value": "邮箱"
+    },
+    {
+      "name": "settings_account_sync",
+      "value": "同步通讯簿"
+    },
+    {
+      "name": "settings_account_syncing",
+      "value": "正在同步…"
+    },
+    {
+      "name": "settings_account_logout",
+      "value": "退出登录"
+    },
+    {
+      "name": "settings_account_api_unavailable",
+      "value": "当前未提供账户 API"
+    },
+    {
+      "name": "settings_back",
+      "value": "返回"
+    },
+    {
+      "name": "settings_menu_diagnostics_subtitle",
+      "value": "核心状态、编解码能力与运行日志"
+    },
+    {
+      "name": "settings_status_needs_attention",
+      "value": "需处理"
+    },
+    {
+      "name": "settings_status_ready",
+      "value": "已就绪"
+    },
+    {
+      "name": "settings_status_checking",
+      "value": "检查中"
     }
   ]
 }

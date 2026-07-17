@@ -55,6 +55,10 @@ export class RustDeskCoordinateSpace {
   paintRect: RustDeskRect;
   renderSize: RustDeskSize;
   rotation: number;
+  viewScale: number;
+  viewOffsetX: number;
+  viewOffsetY: number;
+  viewRotation: number;
 
   constructor(
     remoteRect: RustDeskRect,
@@ -62,12 +66,20 @@ export class RustDeskCoordinateSpace {
     paintRect: RustDeskRect,
     renderSize: RustDeskSize,
     rotation: number,
+    viewScale: number = 1,
+    viewOffsetX: number = 0,
+    viewOffsetY: number = 0,
+    viewRotation: number = 0,
   ) {
     this.remoteRect = remoteRect;
     this.viewSize = viewSize;
     this.paintRect = paintRect;
     this.renderSize = renderSize;
     this.rotation = rotation;
+    this.viewScale = viewScale;
+    this.viewOffsetX = viewOffsetX;
+    this.viewOffsetY = viewOffsetY;
+    this.viewRotation = viewRotation;
   }
 }
 
@@ -445,10 +457,11 @@ export function resolveCoordinateSpace(
 }
 
 export function isLocalPointInsidePaintRect(space: RustDeskCoordinateSpace, localX: number, localY: number): boolean {
-  return localX >= space.paintRect.left
-    && localX <= space.paintRect.left + space.paintRect.width
-    && localY >= space.paintRect.top
-    && localY <= space.paintRect.top + space.paintRect.height;
+  const basePoint = mapViewPointToBase(space, localX, localY);
+  return basePoint.x >= space.paintRect.left
+    && basePoint.x <= space.paintRect.left + space.paintRect.width
+    && basePoint.y >= space.paintRect.top
+    && basePoint.y <= space.paintRect.top + space.paintRect.height;
 }
 
 function clampToRange(value: number, min: number, max: number): number {
@@ -459,18 +472,78 @@ function remoteSpanEnd(start: number, size: number): number {
   return start + Math.max(size, 1) - 1;
 }
 
+function safeViewScale(space: RustDeskCoordinateSpace): number {
+  return Number.isFinite(space.viewScale) && space.viewScale > 0 ? space.viewScale : 1;
+}
+
+function rotateVector(x: number, y: number, angle: number): LocalPointerPosition {
+  const radians = angle * Math.PI / 180;
+  const cosine = Math.cos(radians);
+  const sine = Math.sin(radians);
+  return {
+    x: x * cosine - y * sine,
+    y: x * sine + y * cosine,
+  };
+}
+
+function mapViewPointToBase(
+  space: RustDeskCoordinateSpace,
+  localX: number,
+  localY: number,
+): LocalPointerPosition {
+  const centerX = space.viewSize.width / 2;
+  const centerY = space.viewSize.height / 2;
+  const translatedX = localX - space.viewOffsetX - centerX;
+  const translatedY = localY - space.viewOffsetY - centerY;
+  const unrotated = rotateVector(translatedX, translatedY, -space.viewRotation);
+  const scale = safeViewScale(space);
+  return {
+    x: centerX + unrotated.x / scale,
+    y: centerY + unrotated.y / scale,
+  };
+}
+
+function mapBasePointToView(
+  space: RustDeskCoordinateSpace,
+  localX: number,
+  localY: number,
+): LocalPointerPosition {
+  const centerX = space.viewSize.width / 2;
+  const centerY = space.viewSize.height / 2;
+  const scale = safeViewScale(space);
+  const rotated = rotateVector((localX - centerX) * scale, (localY - centerY) * scale, space.viewRotation);
+  return {
+    x: centerX + rotated.x + space.viewOffsetX,
+    y: centerY + rotated.y + space.viewOffsetY,
+  };
+}
+
+export function mapViewDeltaToBase(
+  space: RustDeskCoordinateSpace,
+  deltaX: number,
+  deltaY: number,
+): LocalPointerPosition {
+  const unrotated = rotateVector(deltaX, deltaY, -space.viewRotation);
+  const scale = safeViewScale(space);
+  return {
+    x: unrotated.x / scale,
+    y: unrotated.y / scale,
+  };
+}
+
 export function mapLocalToRemote(
   space: RustDeskCoordinateSpace,
   localX: number,
   localY: number,
 ): RemotePointerPosition {
+  const basePoint = mapViewPointToBase(space, localX, localY);
   const normalizedPaintX = clampToRange(
-    (localX - space.paintRect.left) / Math.max(space.paintRect.width, 1),
+    (basePoint.x - space.paintRect.left) / Math.max(space.paintRect.width, 1),
     0,
     1,
   );
   const normalizedPaintY = clampToRange(
-    (localY - space.paintRect.top) / Math.max(space.paintRect.height, 1),
+    (basePoint.y - space.paintRect.top) / Math.max(space.paintRect.height, 1),
     0,
     1,
   );
@@ -533,9 +606,14 @@ export function mapRemoteToLocal(
     default:
       break;
   }
-  return {
+  const basePoint: LocalPointerPosition = {
     x: Math.round(space.paintRect.left + normalizedPaintX * space.paintRect.width),
     y: Math.round(space.paintRect.top + normalizedPaintY * space.paintRect.height),
+  };
+  const viewPoint = mapBasePointToView(space, basePoint.x, basePoint.y);
+  return {
+    x: Math.round(viewPoint.x),
+    y: Math.round(viewPoint.y),
   };
 }
 

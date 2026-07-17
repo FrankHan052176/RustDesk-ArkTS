@@ -2,8 +2,10 @@
   "modelVersion": "6.1.0",
   "description": "RustDesk HarmonyOS ArkTS host app.",
   "dependencies": {
-    "rustdesk-ohrs": "file:../rustdesk_native_har/package.har"
+    "rustdesk-ohrs": "file:./rustdesk-ohrs.har"
   },
-  "devDependencies": {},
+  "devDependencies": {
+    "@ohos/hypium": "1.0.25"
+  },
   "dynamicDependencies": {}
 }

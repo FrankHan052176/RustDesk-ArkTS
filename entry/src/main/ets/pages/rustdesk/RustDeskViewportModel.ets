@@ -28,6 +28,10 @@ export class RustDeskViewportModel {
   private surfaceWidth: number = 0;
   private surfaceHeight: number = 0;
   private rotation: number = 0;
+  private viewScale: number = 1;
+  private viewOffsetX: number = 0;
+  private viewOffsetY: number = 0;
+  private viewRotation: number = 0;
 
   reset(): void {
     this.displays = [];
@@ -37,6 +41,10 @@ export class RustDeskViewportModel {
     this.surfaceWidth = 0;
     this.surfaceHeight = 0;
     this.rotation = 0;
+    this.viewScale = 1;
+    this.viewOffsetX = 0;
+    this.viewOffsetY = 0;
+    this.viewRotation = 0;
   }
 
   setPeerDisplays(displays: PeerDisplayInfo[], currentDisplay: number): void {
@@ -60,6 +68,21 @@ export class RustDeskViewportModel {
 
   setRotation(rotation: number): void {
     this.rotation = rotation;
+  }
+
+  setViewTransform(scale: number, offsetX: number, offsetY: number, rotation: number): void {
+    this.viewScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+    this.viewOffsetX = Number.isFinite(offsetX) ? offsetX : 0;
+    this.viewOffsetY = Number.isFinite(offsetY) ? offsetY : 0;
+    this.viewRotation = Number.isFinite(rotation) ? rotation : 0;
+  }
+
+  selectDisplay(index: number): boolean {
+    if (!Number.isFinite(index)) return false;
+    const normalized = Math.floor(index);
+    if (normalized < 0 || normalized >= this.displays.length) return false;
+    this.currentDisplay = normalized;
+    return true;
   }
 
   getCurrentDisplayIndex(): number {
@@ -107,12 +130,17 @@ export class RustDeskViewportModel {
     if (!remoteRect || this.viewportWidth <= 0 || this.viewportHeight <= 0) {
       return undefined;
     }
-    return resolveCoordinateSpace(
+    const space = resolveCoordinateSpace(
       this.viewportWidth,
       this.viewportHeight,
       remoteRect,
       this.rotation,
     );
+    space.viewScale = this.viewScale;
+    space.viewOffsetX = this.viewOffsetX;
+    space.viewOffsetY = this.viewOffsetY;
+    space.viewRotation = this.viewRotation;
+    return space;
   }
 
   getRenderSize(): RustDeskSize {

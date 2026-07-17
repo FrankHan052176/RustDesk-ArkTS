@@ -5,7 +5,5 @@
   "main": "",
   "author": "",
   "license": "",
-  "dependencies": {
-    "rustdesk-ohrs": "file:../../rustdesk_native_har/package.har"
-  }
+  "dependencies": {}
 }

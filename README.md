@@ -53,7 +53,7 @@ rustdesk_arkts_app/
 │   ├── hvigorfile.ts                 # 模块构建脚本
 │   └── oh-package.json5              # 模块依赖配置
 │
-├── package.har                       # RustDesk Rust 内核 HAR（项目内本地依赖）
+├── rustdesk-ohrs.har                # RustDesk Rust 内核 HAR（项目内本地依赖）
 ├── hvigor/                           # Hvigor 配置
 │   └── hvigor-config.json5
 ├── build-profile.json5               # 应用产品、SDK 和模块定义
@@ -136,7 +136,9 @@ rustdesk_arkts_app/
 | DevEco Studio | 建议使用当前最新版 |
 | HarmonyOS SDK | target `6.0.2(22)` |
 | ohpm / hvigor | 使用 DevEco Studio 随附版本 |
-| RustDesk 内核 HAR | `package.har` |
+| RustDesk 内核 HAR | `rustdesk-ohrs.har` |
+
+模拟器 `x86_64` 调试时，建议先把 `rustdesk_native_har/package-x64.har` 刷到项目根目录的 `rustdesk-ohrs.har`。
 
 ### 安装依赖
 
@@ -148,14 +150,14 @@ ohpm install
 当前项目级依赖中，RustDesk 内核使用项目内本地 HAR：
 
 ```json5
-"rustdesk-ohrs": "file:package.har"
+"rustdesk-ohrs": "file:./rustdesk-ohrs.har"
 ```
 
 ### 构建 HAP 包
 
 ```bash
 # 在工程根目录执行
-hvigorw --mode module -p module=entry@default assembleHap
+hvigorw assembleApp
 
 # 产物路径
 entry/build/default/outputs/default/entry-default-signed.hap
@@ -171,6 +173,7 @@ entry/build/default/outputs/default/entry-default-signed.hap
 
 ```bash
 hdc install entry/build/default/outputs/default/entry-default-signed.hap
+hdc shell aa start -b top.frankhan.resk -m entry -a EntryAbility
 ```
 
 ## 🧩 RustDesk 内核 HAR 开发说明
@@ -180,13 +183,17 @@ hdc install entry/build/default/outputs/default/entry-default-signed.hap
 本项目通过 `rustdesk-ohrs` 模块集成 Rust 核心逻辑。内核 HAR 文件通常位于项目根目录：
 
 ```bash
-rustdesk_arkts_app/package.har
+rustdesk_arkts_app/rustdesk-ohrs.har
 ```
 
 ### 开发流程
 
 1. **修改 ArkTS 代码**：在 `entry/src/main/ets/` 下开发 UI、交互和业务逻辑
-2. **更新内核接口**：如 Rust 层接口有变动，需替换 `package.har` 并重新执行 `ohpm install`
+2. **更新内核接口**：如 Rust 层接口有变动，先执行 `scripts/refresh-native-har.sh` 同步最新 HAR，再重新执行 `ohpm install`
+   - 物理 arm64 设备：
+     `NATIVE_HAR_PATH=../rustdesk_native_har/package.har ./scripts/refresh-native-har.sh`
+   - 模拟器 / x86_64：
+     `NATIVE_HAR_PATH=../rustdesk_native_har/package-x64.har ./scripts/refresh-native-har.sh`
 3. **调试渲染**：重点关注 `RustDeskSurfaceController` 与 Rust 层的交互，确保 SurfaceId 正确传递
 
 ## 📄 许可证

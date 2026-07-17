@@ -18,11 +18,14 @@
         "srcEntry": "./ets/entryability/EntryAbility.ets",
         "description": "$string:EntryAbility_desc",
         "label": "$string:EntryAbility_label",
-        "icon": "$media:startIcon",
+        "icon": "$media:resk",
         "startWindowIcon": "$media:startIcon",
         "startWindowBackground": "$color:start_window_background",
         "orientation": "auto_rotation",
         "preferMultiWindowOrientation": "landscape_auto",
+        "backgroundModes": [
+          "dataTransfer"
+        ],
         "exported": true,
         "skills": [
           {
@@ -38,7 +41,35 @@
     ],
     "requestPermissions": [
       {
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
+      },
+      {
         "name": "ohos.permission.INTERNET",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
+      },
+      {
+        "name": "ohos.permission.READ_PASTEBOARD",
+        "reason": "$string:read_pasteboard_permission_reason",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
+      },
+      {
+        "name": "ohos.permission.INTERCEPT_INPUT_EVENT",
         "usedScene": {
           "abilities": [
             "EntryAbility"
