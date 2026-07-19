@@ -1,4 +1,5 @@
 import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
+import { FloatingActionSurface, FloatingGlassSurface } from './FloatingSurface';
 import { ServerConfig, ServerMode } from '../RustDeskDirectoryTypes';
 import { FloatingSegmentedControl } from './FloatingSegmentedControl';
 
@@ -21,8 +22,6 @@ export struct ServerSettingsCard {
   @Local viewportWidth: number = 390;
   @Local validationMessage: ResourceStr = '';
   @Local validationField: string = '';
-  @Local focusedField: string = '';
-  @Local pressedControlId: string = '';
   @Event onConfigChange: (config: ServerConfig) => void = (_config: ServerConfig) => {};
   @Event onValidate: (config: ServerConfig) => void = (_config: ServerConfig) => {};
   @Event onSave: (config: ServerConfig) => void = (_config: ServerConfig) => {};
@@ -198,84 +197,35 @@ export struct ServerSettingsCard {
     return $r('app.string.settings_server_effective_api_auto');
   }
 
-  private pressBlurScale(controlId: string): number {
-    return this.pressedControlId === controlId ? 0.18 : 0.72;
-  }
-
-  private animatePress(controlId: string, active: boolean): void {
-    this.getUIContext().animateTo({
-      duration: active ? 160 : 280,
-      curve: Curve.Friction,
-    }, () => {
-      if (active) {
-        this.pressedControlId = controlId;
-      } else if (this.pressedControlId === controlId) {
-        this.pressedControlId = '';
-      }
-    });
-  }
-
   @Builder
   private ServerInput(controlId: string, placeholder: ResourceStr, value: string,
     onChange: (value: string) => void) {
     Stack() {
-      Row() {
-        TextInput({ text: value, placeholder: placeholder })
-          .width('100%')
-          .height('100%')
-          .fontSize($r('app.float.font_body'))
-          .fontColor($r('app.color.text_primary'))
-          .placeholderColor($r('app.color.text_tertiary'))
-          .caretColor($r('app.color.brand_primary'))
-          .backgroundColor($r('app.color.transparent'))
-          .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_16') })
-          .maxLength(512)
-          .onFocus(() => this.focusedField = controlId)
-          .onBlur(() => {
-            if (this.focusedField === controlId) {
-              this.focusedField = '';
-            }
-          })
-          .onChange(onChange);
-      }
-      .width('100%')
-      .height('100%')
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.contentReceiver());
-
-      if (this.focusedField === controlId || this.validationField === controlId) {
-        Rect()
-          .width('100%')
-          .height('100%')
-          .radius($r('app.float.radius_14'))
-          .fill($r('app.color.transparent'))
-          .stroke(this.validationField === controlId
-            ? $r('app.color.error')
-            : $r('app.color.focus_ring'))
-          .strokeWidth(2)
-          .hitTestBehavior(HitTestMode.None);
+      FloatingGlassSurface() {
+        Row() {
+          TextInput({ text: value, placeholder: placeholder })
+            .width('100%')
+            .height('100%')
+            .fontSize($r('app.float.font_body'))
+            .fontColor($r('app.color.text_primary'))
+            .placeholderColor($r('app.color.text_tertiary'))
+            .caretColor($r('app.color.brand_primary'))
+            .borderWidth(0)
+            .backgroundColor($r('app.color.transparent'))
+            .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_16') })
+            .maxLength(512)
+            .onChange(onChange);
+        }
+        .width('100%')
+        .height('100%')
+        .borderRadius($r('app.float.radius_14'))
+        .clip(true);
       }
     }
     .width('100%')
     .height($r('app.float.control_regular'))
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.72,
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
-    .shadow(ShadowStyle.OUTER_DEFAULT_MD)
     .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver());
+    .clip(false);
   }
 
   @Builder
@@ -461,7 +411,7 @@ export struct ServerSettingsCard {
     .backgroundColor($r('app.color.glass_surface'))
     .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
       adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.72,
+      scale: 0.48,
     })
     .linearGradient({
       angle: 142,
@@ -478,65 +428,35 @@ export struct ServerSettingsCard {
   }
 
   @Builder
-  private ActionButton(controlId: string, label: ResourceStr, primary: boolean, enabled: boolean,
+  private ActionButton(label: ResourceStr, primary: boolean, enabled: boolean,
     onClick: () => void) {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Stack() {
-        Rect()
-          .width('100%')
-          .height('100%')
-          .radius($r('app.float.radius_14'))
-          .fill(enabled
-            ? (primary ? $r('app.color.brand_primary') : $r('app.color.brand_primary_soft'))
-            : $r('app.color.disabled_background'))
-          .opacity(1);
-
-        Text(label)
-          .fontSize($r('app.float.font_body'))
-          .fontWeight(FontWeight.Medium)
-          .fontColor(enabled
-            ? (primary ? $r('app.color.text_inverse') : $r('app.color.brand_primary'))
-            : $r('app.color.disabled_text'));
+    Stack() {
+      FloatingActionSurface({
+        actionEnabled: enabled,
+        touchLight: true,
+        lightPeakIntensity: 0.62,
+        onActivate: onClick,
+      }) {
+        Row() {
+          Text(label)
+            .fontSize($r('app.float.font_body'))
+            .fontWeight(FontWeight.Medium)
+            .fontColor(enabled
+              ? (primary ? $r('app.color.text_inverse') : $r('app.color.brand_primary'))
+              : $r('app.color.disabled_text'));
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor(enabled
+          ? (primary ? $r('app.color.brand_primary') : $r('app.color.brand_primary_soft'))
+          : $r('app.color.disabled_background'))
+        .borderRadius($r('app.float.radius_14'))
+        .clip(true);
       }
-      .width('100%')
-      .height('100%')
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.interactiveContent(
-        enabled && this.pressedControlId === controlId,
-        $r('app.color.point_light'),
-        0.58,
-      ));
     }
     .width('100%')
-    .height($r('app.float.control_regular'))
-    .padding(0)
-    .enabled(enabled)
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: enabled ? this.pressBlurScale(controlId) : 0.72,
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
-    .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-    .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver())
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.animatePress(controlId, true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.animatePress(controlId, false);
-      }
-    })
-    .onClick(onClick);
+    .height($r('app.float.control_regular'));
   }
 
   @Builder
@@ -545,7 +465,6 @@ export struct ServerSettingsCard {
       Row({ space: $r('app.float.space_12') }) {
         Column() {
           this.ActionButton(
-            'validate-server',
             this.validating
               ? $r('app.string.settings_server_testing')
               : $r('app.string.settings_server_test'),
@@ -558,7 +477,6 @@ export struct ServerSettingsCard {
 
         Column() {
           this.ActionButton(
-            'save-server',
             this.saving
               ? $r('app.string.settings_server_saving')
               : $r('app.string.settings_server_save'),
@@ -573,7 +491,6 @@ export struct ServerSettingsCard {
     } else {
       Column({ space: $r('app.float.space_12') }) {
         this.ActionButton(
-          'validate-server',
           this.validating
             ? $r('app.string.settings_server_testing')
             : $r('app.string.settings_server_test'),
@@ -582,7 +499,6 @@ export struct ServerSettingsCard {
           () => this.requestValidation(),
         )
         this.ActionButton(
-          'save-server',
           this.saving
             ? $r('app.string.settings_server_saving')
             : $r('app.string.settings_server_save'),

@@ -6,10 +6,11 @@ import {
   hdsMaterial,
 } from '@kit.UIDesignKit';
 import { LengthMetrics } from '@kit.ArkUI';
-import { AccountState, ServerConfig, SessionDefaults } from '../RustDeskDirectoryTypes';
+import { AccountLoginProvider, AccountState, ServerConfig, SessionDefaults } from '../RustDeskDirectoryTypes';
 import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
 import { DecoderCapability } from '../RustDeskTypes';
 import { AccountSettingsCard } from './AccountSettingsCard';
+import { FloatingActionSurface } from './FloatingSurface';
 import { ServerSettingsCard } from './ServerSettingsCard';
 import { SessionDefaultsCard } from './SessionDefaultsCard';
 
@@ -27,6 +28,7 @@ export interface SettingsTabProps {
   serverSaving: boolean;
   sessionDefaults: SessionDefaults;
   accountState: AccountState;
+  accountLoginProviders: AccountLoginProvider[];
   notes: string;
   errorText: string;
   scroller: Scroller;
@@ -40,6 +42,8 @@ export interface SettingsTabProps {
   onAccountLogin: (username: string, password: string) => void;
   onAccountVerify: (code: string) => void;
   onAccountCancelChallenge: () => void;
+  onAccountOidcLogin: (provider: string) => void;
+  onAccountOidcCancel: () => void;
   onAddressBookSync: () => void;
   onAccountLogout: () => void;
   onRefresh: () => void;
@@ -58,6 +62,7 @@ export struct SettingsTab {
   @Param serverSaving: boolean = false;
   @Param sessionDefaults: SessionDefaults = new SessionDefaults();
   @Param accountState: AccountState = new AccountState();
+  @Param accountLoginProviders: AccountLoginProvider[] = [];
   @Param notes: string = '';
   @Param errorText: string = '';
   @Param wideLayout: boolean = false;
@@ -69,7 +74,6 @@ export struct SettingsTab {
   @Local sheetViewportHeight: number = 0;
   @Local selectedSection: SettingsSection = 'server';
   @Local settingsSheetVisible: boolean = false;
-  @Local pressedControlId: string = '';
   @Local sessionDefaultsDraft: SessionDefaults = new SessionDefaults();
   @Param scroller: Scroller = new Scroller();
   private sheetScroller: Scroller = new Scroller();
@@ -80,6 +84,8 @@ export struct SettingsTab {
   @Event onAccountLogin: (username: string, password: string) => void = (_username: string, _password: string) => {};
   @Event onAccountVerify: (code: string) => void = (_code: string) => {};
   @Event onAccountCancelChallenge: () => void = () => {};
+  @Event onAccountOidcLogin: (provider: string) => void = (_provider: string) => {};
+  @Event onAccountOidcCancel: () => void = () => {};
   @Event onAddressBookSync: () => void = () => {};
   @Event onAccountLogout: () => void = () => {};
   @Event onRefresh: () => void = () => {};
@@ -239,23 +245,6 @@ export struct SettingsTab {
     return '正在检查核心服务与设备能力';
   }
 
-  private pressBlurScale(controlId: string): number {
-    return this.pressedControlId === controlId ? 0.18 : 0.72;
-  }
-
-  private animatePress(controlId: string, active: boolean): void {
-    this.getUIContext().animateTo({
-      duration: active ? 160 : 280,
-      curve: Curve.Friction,
-    }, () => {
-      if (active) {
-        this.pressedControlId = controlId;
-      } else if (this.pressedControlId === controlId) {
-        this.pressedControlId = '';
-      }
-    });
-  }
-
   @Builder
   private SettingsToolRow(
     section: SettingsSection,
@@ -265,74 +254,58 @@ export struct SettingsTab {
     accentColor: ResourceColor,
     accentBackground: ResourceColor,
   ) {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Row({ space: $r('app.float.space_12') }) {
-        Stack({ alignContent: Alignment.Center }) {
-          SymbolGlyph(icon)
-            .fontSize($r('app.float.icon_regular'))
-            .fontColor([accentColor]);
+    Stack() {
+      FloatingActionSurface({
+        touchLight: true,
+        lightColor: accentColor,
+        lightPeakIntensity: 0.66,
+        onActivate: () => this.selectSection(section),
+      }) {
+        Row({ space: $r('app.float.space_12') }) {
+          Stack({ alignContent: Alignment.Center }) {
+            SymbolGlyph(icon)
+              .fontSize($r('app.float.icon_regular'))
+              .fontColor([accentColor]);
+          }
+          .width($r('app.float.control_small'))
+          .height($r('app.float.control_small'))
+          .backgroundColor(accentBackground)
+          .borderRadius($r('app.float.radius_14'))
+          .clip(true);
+
+          Column({ space: $r('app.float.space_2') }) {
+            Text(title)
+              .width('100%')
+              .fontSize($r('app.float.font_body_large'))
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.text_primary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis });
+            Text(summary)
+              .width('100%')
+              .fontSize($r('app.float.font_label'))
+              .fontColor($r('app.color.text_secondary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis });
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start);
+
+          SymbolGlyph($r('sys.symbol.chevron_right'))
+            .fontSize($r('app.float.icon_small'))
+            .fontColor([$r('app.color.text_tertiary')]);
         }
-        .width($r('app.float.control_small'))
-        .height($r('app.float.control_small'))
-        .backgroundColor(accentBackground)
+        .width('100%')
+        .height('100%')
+        .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_12') })
+        .alignItems(VerticalAlign.Center)
         .borderRadius($r('app.float.radius_14'))
-        .clip(true)
-        .visualEffect(RustDeskGlassEffect.contentReceiver());
-
-        Column({ space: $r('app.float.space_2') }) {
-          Text(title)
-            .width('100%')
-            .fontSize($r('app.float.font_body_large'))
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis });
-          Text(summary)
-            .width('100%')
-            .fontSize($r('app.float.font_label'))
-            .fontColor($r('app.color.text_secondary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis });
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start);
-
-        SymbolGlyph($r('sys.symbol.chevron_right'))
-          .fontSize($r('app.float.icon_small'))
-          .fontColor([$r('app.color.text_tertiary')]);
+        .clip(true);
       }
-      .width('100%')
-      .height('100%')
-      .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_12') })
-      .alignItems(VerticalAlign.Center)
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.interactiveContent(
-        this.pressedControlId === `settings-${section}`,
-        accentColor,
-        0.42,
-      ));
     }
     .width('100%')
     .height(72)
-    .padding(0)
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.pressBlurScale(`settings-${section}`),
-    })
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-    .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver())
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.animatePress(`settings-${section}`, true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.animatePress(`settings-${section}`, false);
-      }
-    })
-    .onClick(() => this.selectSection(section));
+    .borderRadius($r('app.float.radius_14'));
   }
 
   @Builder
@@ -457,7 +430,7 @@ export struct SettingsTab {
     .backgroundColor($r('app.color.glass_surface'))
     .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
       adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.72,
+      scale: 0.48,
     })
     .linearGradient({
       angle: 142,
@@ -497,7 +470,7 @@ export struct SettingsTab {
       .backgroundColor($r('app.color.glass_surface'))
       .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
         adaptiveColor: AdaptiveColor.DEFAULT,
-        scale: 0.72,
+        scale: 0.48,
       })
       .linearGradient({
         angle: 142,
@@ -543,7 +516,7 @@ export struct SettingsTab {
       .backgroundColor($r('app.color.glass_surface'))
       .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
         adaptiveColor: AdaptiveColor.DEFAULT,
-        scale: 0.72,
+        scale: 0.48,
       })
       .linearGradient({
         angle: 142,
@@ -661,7 +634,7 @@ export struct SettingsTab {
       .backgroundColor($r('app.color.glass_surface'))
       .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
         adaptiveColor: AdaptiveColor.DEFAULT,
-        scale: 0.72,
+        scale: 0.48,
       })
       .linearGradient({
         angle: 142,
@@ -718,55 +691,29 @@ export struct SettingsTab {
 
   @Builder
   private DiagnosticRefreshButton() {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Stack() {
-        Rect()
-          .width('100%')
-          .height($r('app.float.control_regular'))
-          .radius($r('app.float.radius_14'))
-          .fill($r('app.color.brand_primary'));
-        Text('刷新底层状态')
-          .fontSize($r('app.float.font_body'))
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_inverse'));
+    Stack() {
+      FloatingActionSurface({
+        touchLight: true,
+        onActivate: () => this.onRefresh(),
+      }) {
+        Row() {
+          Text('刷新底层状态')
+            .fontSize($r('app.float.font_body'))
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_inverse'));
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor($r('app.color.brand_primary'))
+        .borderRadius($r('app.float.radius_14'))
+        .clip(true);
       }
-      .width('100%')
-      .height($r('app.float.control_regular'))
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.interactiveContent(
-        this.pressedControlId === 'diagnostic-refresh',
-        $r('app.color.point_light'),
-      ));
     }
     .width('100%')
     .height($r('app.float.control_regular'))
-    .padding(0)
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.pressBlurScale('diagnostic-refresh'),
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
-    .shadow(ShadowStyle.OUTER_DEFAULT_MD)
     .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver())
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.animatePress('diagnostic-refresh', true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.animatePress('diagnostic-refresh', false);
-      }
-    })
-    .onClick(() => this.onRefresh());
+    .clip(false);
   }
 
   @Builder
@@ -823,10 +770,14 @@ export struct SettingsTab {
     } else if (this.selectedSection === 'account') {
       AccountSettingsCard({
         showHeader: false,
+        officialServer: this.serverConfig.mode === 'official',
         accountState: this.accountState,
+        loginProviders: this.accountLoginProviders,
         onLogin: (username: string, password: string) => this.onAccountLogin(username, password),
         onVerify: (code: string) => this.onAccountVerify(code),
         onCancelChallenge: () => this.onAccountCancelChallenge(),
+        onOidcLogin: (provider: string) => this.onAccountOidcLogin(provider),
+        onOidcCancel: () => this.onAccountOidcCancel(),
         onSync: () => this.onAddressBookSync(),
         onLogout: () => this.onAccountLogout(),
       })

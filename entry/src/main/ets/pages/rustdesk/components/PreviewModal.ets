@@ -1,4 +1,5 @@
 import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
+import { FloatingDepthOverlay, FloatingPressDepthShell } from './FloatingDepth';
 
 export interface PreviewModalProps {
   visible: boolean;
@@ -46,6 +47,10 @@ export struct PreviewModal {
 
         Row({ space: $r('app.float.space_12') }) {
           Stack() {
+            FloatingDepthOverlay({
+              radius: $r('app.float.radius_18'),
+            });
+
             Column({ space: $r('app.float.space_4') }) {
               Text(this.qualitySummary)
                 .fontSize($r('app.float.font_label'))
@@ -78,7 +83,7 @@ export struct PreviewModal {
           .backgroundColor($r('app.color.glass_surface'))
           .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
             adaptiveColor: AdaptiveColor.DEFAULT,
-            scale: 0.72,
+            scale: 0.48,
           })
           .linearGradient({
             angle: 142,
@@ -93,61 +98,79 @@ export struct PreviewModal {
           .shadow(ShadowStyle.OUTER_DEFAULT_MD)
           .visualEffect(RustDeskGlassEffect.featherReceiver());
 
-          Button({ type: ButtonType.Normal, stateEffect: false }) {
-            Stack() {
-              Row()
+          Stack() {
+            FloatingPressDepthShell({
+              pressed: this.disconnectPressed,
+              radius: $r('app.float.radius_14'),
+              shadowColor: $r('app.color.depth_shadow_level2'),
+            }) {
+              Button({ type: ButtonType.Normal, stateEffect: false }) {
+                Stack() {
+                  Row()
+                    .width('100%')
+                    .height('100%')
+                    .backgroundColor($r('app.color.error'));
+
+                  FloatingDepthOverlay({
+                    pressed: this.disconnectPressed,
+                    radius: $r('app.float.radius_14'),
+                  });
+
+                  Row() {
+                    Text('断开连接')
+                      .fontSize($r('app.float.font_body'))
+                      .fontWeight(FontWeight.Medium)
+                      .fontColor($r('app.color.white'));
+                  }
+                  .width('100%')
+                  .height('100%')
+                  .justifyContent(FlexAlign.Center)
+                  .borderRadius($r('app.float.radius_14'))
+                  .clip(true)
+                  .visualEffect(RustDeskGlassEffect.interactiveContent(
+                    this.disconnectPressed,
+                    $r('app.color.error'),
+                    0.66,
+                  ));
+                }
                 .width('100%')
                 .height('100%')
-                .backgroundColor($r('app.color.error'));
-              Row() {
-                Text('断开连接')
-                  .fontSize($r('app.float.font_body'))
-                  .fontWeight(FontWeight.Medium)
-                  .fontColor($r('app.color.white'));
+                .borderRadius($r('app.float.radius_14'))
+                .clip(true);
               }
               .width('100%')
               .height('100%')
-              .justifyContent(FlexAlign.Center)
+              .padding(0)
+              .backgroundColor($r('app.color.glass_surface'))
+              .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
+                adaptiveColor: AdaptiveColor.DEFAULT,
+                scale: this.disconnectPressed ? 0.18 : 0.48,
+              })
+              .linearGradient({
+                angle: 142,
+                colors: [
+                  [$r('app.color.glass_gradient_high'), 0],
+                  [$r('app.color.glass_gradient_mid'), 0.48],
+                  [$r('app.color.glass_gradient_accent'), 1],
+                ],
+              })
               .borderRadius($r('app.float.radius_14'))
               .clip(true)
-              .visualEffect(RustDeskGlassEffect.interactiveContent(
-                this.disconnectPressed,
-                $r('app.color.error'),
-                0.66,
-              ));
+              .visualEffect(RustDeskGlassEffect.featherReceiver())
+              .onTouch((event: TouchEvent) => {
+                if (event.type === TouchType.Down) {
+                  this.animateDisconnectBlur(true);
+                } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+                  this.animateDisconnectBlur(false);
+                }
+              })
+              .onClick(() => this.onDisconnect());
             }
-            .width('100%')
-            .height('100%')
-            .borderRadius($r('app.float.radius_14'))
-            .clip(true);
           }
+          .width(112)
           .height($r('app.float.control_regular'))
-          .padding(0)
-          .backgroundColor($r('app.color.glass_surface'))
-          .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-            adaptiveColor: AdaptiveColor.DEFAULT,
-            scale: this.disconnectPressed ? 0.18 : 0.72,
-          })
-          .linearGradient({
-            angle: 142,
-            colors: [
-              [$r('app.color.glass_gradient_high'), 0],
-              [$r('app.color.glass_gradient_mid'), 0.48],
-              [$r('app.color.glass_gradient_accent'), 1],
-            ],
-          })
           .borderRadius($r('app.float.radius_14'))
-          .clip(true)
-          .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-          .visualEffect(RustDeskGlassEffect.featherReceiver())
-          .onTouch((event: TouchEvent) => {
-            if (event.type === TouchType.Down) {
-              this.animateDisconnectBlur(true);
-            } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-              this.animateDisconnectBlur(false);
-            }
-          })
-          .onClick(() => this.onDisconnect());
+          .clip(false);
         }
         .width('100%')
         .padding({

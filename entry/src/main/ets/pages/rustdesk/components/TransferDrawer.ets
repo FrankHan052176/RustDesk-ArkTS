@@ -1,15 +1,23 @@
 import { LocalFileEntry, RemoteFileEntry, TransferItem } from '../RustDeskSessionTypes';
 import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
+import { RemoteFilePath } from '../RemoteFilePath';
+import { FloatingDepthOverlay } from './FloatingDepth';
+import { FloatingActionSurface } from './FloatingSurface';
 
 export interface TransferDrawerProps {
+  scroller: Scroller;
+  titleSpacerHeight: number;
   downloadRootPath: string;
   rootStatus: string;
+  sessionReady: boolean;
+  sessionStatus: string;
   localEntries: LocalFileEntry[];
   remoteDirectory: string;
   remoteEntries: RemoteFileEntry[];
   selectedLocalName: string;
   selectedRemoteName: string;
   transfers: TransferItem[];
+  bottomAvoidInset: number;
   onSelectLocal: (name: string) => void;
   onSelectRemote: (name: string) => void;
   onUpload: () => void;
@@ -23,16 +31,20 @@ export interface TransferDrawerProps {
 
 @ComponentV2
 export struct TransferDrawer {
+  @Param scroller: Scroller = new Scroller();
+  @Param titleSpacerHeight: number = 0;
   @Param downloadRootPath: string = '';
   @Param rootStatus: string = '';
+  @Param sessionReady: boolean = false;
+  @Param sessionStatus: string = '正在连接';
   @Param localEntries: LocalFileEntry[] = [];
   @Param remoteDirectory: string = '/';
   @Param remoteEntries: RemoteFileEntry[] = [];
   @Param selectedLocalName: string = '';
   @Param selectedRemoteName: string = '';
   @Param transfers: TransferItem[] = [];
+  @Param bottomAvoidInset: number = 0;
   @Local viewportWidth: number = 390;
-  @Local pressedControl: string = '';
   @Local adjustingControl: string = '';
   @Event onSelectLocal: (name: string) => void = (_name: string) => {};
   @Event onSelectRemote: (name: string) => void = (_name: string) => {};
@@ -59,7 +71,7 @@ export struct TransferDrawer {
   }
 
   private isDirectory(entry: RemoteFileEntry): boolean {
-    return entry.entry_type !== 0;
+    return RemoteFilePath.isDirectoryType(entry.entry_type);
   }
 
   private entrySize(entry: RemoteFileEntry): string {
@@ -71,6 +83,13 @@ export struct TransferDrawer {
     const total = item.totalBytes > 0 ? this.formatBytes(item.totalBytes) : '未知大小';
     const speed = item.speedBytesPerSecond > 0 ? `${this.formatBytes(item.speedBytesPerSecond)}/秒` : '等待速度';
     return `${this.stateText(item.state)} · ${transferred} / ${total} · ${speed}`;
+  }
+
+  private transferProgressValue(item: TransferItem): number {
+    if (item.totalBytes <= 0) {
+      return 0;
+    }
+    return Math.min(Math.max(item.transferredBytes, 0), item.totalBytes);
   }
 
   private stateText(state: string): string {
@@ -92,38 +111,29 @@ export struct TransferDrawer {
     return '已取消';
   }
 
-  private parentPath(): string {
-    const current = this.remoteDirectory.trim().replace(/\/+$/, '');
-    if (current.length === 0 || current === '/') {
-      return '/';
-    }
-    const separator = current.lastIndexOf('/');
-    return separator <= 0 ? '/' : current.substring(0, separator);
-  }
-
   private useWideLayout(): boolean {
     return this.viewportWidth >= 920;
   }
 
-  private clickBlurScale(key: string): number {
-    return this.pressedControl === key ? 0.18 : 0.72;
+  private mobileEntrySurfaceHeight(entryCount: number): number {
+    return entryCount > 0 ? entryCount * 56 : 96;
   }
 
   private selectionBlurScale(prefix: string): number {
-    return this.adjustingControl.startsWith(prefix) ? 0.18 : 0.72;
+    return this.adjustingControl.startsWith(prefix) ? 0.90 : 0.48;
   }
 
-  private animateClickBlur(key: string, active: boolean): void {
-    this.getUIContext().animateTo({
-      duration: active ? 160 : 280,
-      curve: Curve.Friction,
-    }, () => {
-      if (active) {
-        this.pressedControl = key;
-      } else if (this.pressedControl === key) {
-        this.pressedControl = '';
-      }
-    });
+  private actionEnabled(key: string): boolean {
+    if (key === 'upload') {
+      return this.sessionReady && this.selectedLocalName.length > 0;
+    }
+    if (key === 'download') {
+      return this.sessionReady && this.selectedRemoteName.length > 0;
+    }
+    if (key === 'remote-back') {
+      return this.sessionReady;
+    }
+    return true;
   }
 
   private animateSelectionBlur(key: string, active: boolean): void {
@@ -140,70 +150,34 @@ export struct TransferDrawer {
   }
 
   @Builder
-  private FloatingAction(key: string, label: string, emphasized: boolean, enabled: boolean, onClick: () => void) {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Stack() {
-        if (emphasized) {
-          Row()
-            .width('100%')
-            .height('100%')
-            .backgroundColor($r('app.color.brand_primary'));
-        }
+  private FloatingAction(key: string, label: string, emphasized: boolean, onClick: () => void) {
+    Stack() {
+      FloatingActionSurface({
+        actionEnabled: this.actionEnabled(key),
+        compact: true,
+        stopTouchPropagation: true,
+        onActivate: onClick,
+      }) {
         Row() {
           Text(label)
             .fontSize($r('app.float.font_label'))
             .fontWeight(FontWeight.Medium)
-            .fontColor(enabled
+            .fontColor(this.actionEnabled(key)
               ? (emphasized ? $r('app.color.white') : $r('app.color.text_primary'))
               : $r('app.color.disabled_text'));
         }
         .width('100%')
         .height('100%')
         .justifyContent(FlexAlign.Center)
+        .backgroundColor(emphasized ? $r('app.color.brand_primary') : $r('app.color.transparent'))
         .borderRadius($r('app.float.radius_14'))
-        .clip(true)
-        .visualEffect(RustDeskGlassEffect.interactiveContent(
-          this.pressedControl === key,
-          $r('app.color.point_light'),
-          0.56,
-        ));
+        .clip(true);
       }
-      .width('100%')
-      .height('100%')
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true);
     }
+    .width(68)
     .height($r('app.float.control_small'))
-    .padding(0)
-    .enabled(enabled)
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.clickBlurScale(key),
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
     .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-    .visualEffect(RustDeskGlassEffect.featherReceiver())
-    .onTouch((event: TouchEvent) => {
-      if (!enabled) {
-        return;
-      }
-      if (event.type === TouchType.Down) {
-        this.animateClickBlur(key, true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.animateClickBlur(key, false);
-      }
-    })
-    .onClick(onClick);
+    .clip(false);
   }
 
   @Builder
@@ -359,6 +333,24 @@ export struct TransferDrawer {
       Text(this.transferDetail(item))
         .fontSize($r('app.float.font_label'))
         .fontColor($r('app.color.text_secondary'));
+      if (item.state === 'queued' || item.state === 'running') {
+        if (item.totalBytes > 0) {
+          Progress({
+            value: this.transferProgressValue(item),
+            total: item.totalBytes,
+            type: ProgressType.Linear,
+          })
+            .width('100%')
+            .height(4)
+            .color($r('app.color.brand_primary'))
+            .backgroundColor($r('app.color.surface_secondary'));
+        } else {
+          LoadingProgress()
+            .width($r('app.float.icon_regular'))
+            .height($r('app.float.icon_regular'))
+            .color($r('app.color.brand_primary'));
+        }
+      }
       if (item.errorText.length > 0) {
         Text(item.errorText)
           .fontSize($r('app.float.font_label'))
@@ -367,14 +359,14 @@ export struct TransferDrawer {
       }
       if (item.state === 'awaiting_override') {
         Row({ space: $r('app.float.space_8') }) {
-          this.FloatingAction(`override-${item.id}`, '覆盖', true, true,
+          this.FloatingAction(`override-${item.id}`, '覆盖', true,
             () => this.onResolveOverride(item.id, true))
-          this.FloatingAction(`skip-${item.id}`, '跳过', false, true,
+          this.FloatingAction(`skip-${item.id}`, '跳过', false,
             () => this.onResolveOverride(item.id, false))
         }
         .width('100%');
       } else if (item.state === 'queued' || item.state === 'running') {
-        this.FloatingAction(`cancel-${item.id}`, '取消', false, true, () => this.onCancel(item.id))
+        this.FloatingAction(`cancel-${item.id}`, '取消', false, () => this.onCancel(item.id))
       }
     }
     .width('100%')
@@ -384,7 +376,28 @@ export struct TransferDrawer {
   }
 
   @Builder
-  private LocalPaneContent() {
+  private LocalEntriesContent() {
+    Column({ space: 0 }) {
+      ForEach(this.localEntries, (entry: LocalFileEntry, index: number) => {
+        this.LocalEntry(entry, index < this.localEntries.length - 1);
+      }, (entry: LocalFileEntry) => entry.path)
+      if (this.localEntries.length === 0) {
+        Text('下载位置中没有可直接上传的文件')
+          .width('100%')
+          .fontSize($r('app.float.font_body'))
+          .fontColor($r('app.color.text_secondary'))
+          .textAlign(TextAlign.Center)
+          .padding($r('app.float.space_20'))
+          .visualEffect(RustDeskGlassEffect.contentReceiver());
+      }
+    }
+    .width('100%')
+    .borderRadius($r('app.float.radius_14'))
+    .clip(true);
+  }
+
+  @Builder
+  private LocalPaneContent(fillAvailable: boolean) {
     Row({ space: $r('app.float.space_8') }) {
       Column({ space: $r('app.float.space_2') }) {
         Text('本机文件')
@@ -400,7 +413,7 @@ export struct TransferDrawer {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start);
 
-      this.FloatingAction('upload', '上传', true, this.selectedLocalName.length > 0, () => this.onUpload())
+      this.FloatingAction('upload', '上传', true, () => this.onUpload())
     }
     .width('100%')
     .alignItems(VerticalAlign.Center);
@@ -418,69 +431,91 @@ export struct TransferDrawer {
       .borderRadius($r('app.float.radius_10'));
 
     Stack() {
-      Scroll() {
-        Column({ space: 0 }) {
-          ForEach(this.localEntries, (entry: LocalFileEntry, index: number) => {
-            this.LocalEntry(entry, index < this.localEntries.length - 1);
-          }, (entry: LocalFileEntry) => entry.path)
-          if (this.localEntries.length === 0) {
-            Text('下载位置中没有可直接上传的文件')
-              .width('100%')
-              .fontSize($r('app.float.font_body'))
-              .fontColor($r('app.color.text_secondary'))
-              .textAlign(TextAlign.Center)
-              .padding($r('app.float.space_20'))
-              .visualEffect(RustDeskGlassEffect.contentReceiver());
+      Stack() {
+        FloatingDepthOverlay({
+          radius: $r('app.float.radius_14'),
+        });
+
+        if (fillAvailable) {
+          Scroll() {
+            this.LocalEntriesContent();
           }
+          .width('100%')
+          .height('100%')
+          .scrollBar(BarState.Off);
+        } else {
+          this.LocalEntriesContent();
         }
-        .width('100%')
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true);
       }
       .width('100%')
       .height('100%')
-      .scrollBar(BarState.Off);
+      .backgroundColor($r('app.color.glass_surface'))
+      .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
+        adaptiveColor: AdaptiveColor.DEFAULT,
+        scale: this.selectionBlurScale('local-'),
+      })
+      .linearGradient({
+        angle: 142,
+        colors: [
+          [$r('app.color.glass_gradient_high'), 0],
+          [$r('app.color.glass_gradient_mid'), 0.48],
+          [$r('app.color.glass_gradient_accent'), 1],
+        ],
+      })
+      .borderRadius($r('app.float.radius_14'))
+      .clip(true)
+      .shadow(ShadowStyle.OUTER_DEFAULT_MD)
+      .visualEffect(RustDeskGlassEffect.featherReceiver());
     }
-    .layoutWeight(1)
+    .height(fillAvailable ? 0 : this.mobileEntrySurfaceHeight(this.localEntries.length) + 16)
+    .layoutWeight(fillAvailable ? 1 : 0)
     .width('100%')
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.selectionBlurScale('local-'),
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
-    .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-    .visualEffect(RustDeskGlassEffect.featherReceiver());
+    .padding({
+      left: $r('app.float.space_16'),
+      right: $r('app.float.space_16'),
+      top: $r('app.float.space_8'),
+      bottom: $r('app.float.space_8'),
+    });
   }
 
   @Builder
-  private RemotePaneContent() {
+  private RemoteEntriesContent() {
+    Column({ space: 0 }) {
+      ForEach(this.remoteEntries, (entry: RemoteFileEntry, index: number) => {
+        this.RemoteEntry(entry, index < this.remoteEntries.length - 1);
+      }, (entry: RemoteFileEntry) => `${entry.entry_type}-${entry.name}`)
+      if (this.remoteEntries.length === 0) {
+        Text('远端目录为空或正在加载')
+          .width('100%')
+          .fontSize($r('app.float.font_body'))
+          .fontColor($r('app.color.text_secondary'))
+          .textAlign(TextAlign.Center)
+          .padding($r('app.float.space_20'))
+          .visualEffect(RustDeskGlassEffect.contentReceiver());
+      }
+    }
+    .width('100%')
+    .borderRadius($r('app.float.radius_14'))
+    .clip(true);
+  }
+
+  @Builder
+  private RemotePaneContent(fillAvailable: boolean) {
     Row({ space: $r('app.float.space_8') }) {
       Column({ space: $r('app.float.space_2') }) {
         Text('远端文件')
           .fontSize($r('app.float.font_body_large'))
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'));
-        Text('选择文件夹继续浏览')
+        Text(this.sessionStatus)
           .fontSize($r('app.float.font_caption'))
           .fontColor($r('app.color.text_secondary'));
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start);
 
-      this.FloatingAction('remote-back', '上级', false, this.parentPath() !== this.remoteDirectory,
-        () => this.onRemoteBack())
-      this.FloatingAction('download', '下载', true, this.selectedRemoteName.length > 0,
-        () => this.onDownload())
+      this.FloatingAction('remote-back', '上级', false, () => this.onRemoteBack())
+      this.FloatingAction('download', '下载', true, () => this.onDownload())
     }
     .width('100%')
     .alignItems(VerticalAlign.Center);
@@ -498,52 +533,78 @@ export struct TransferDrawer {
       .borderRadius($r('app.float.radius_10'));
 
     Stack() {
-      Scroll() {
-        Column({ space: 0 }) {
-          ForEach(this.remoteEntries, (entry: RemoteFileEntry, index: number) => {
-            this.RemoteEntry(entry, index < this.remoteEntries.length - 1);
-          }, (entry: RemoteFileEntry) => `${entry.entry_type}-${entry.name}`)
-          if (this.remoteEntries.length === 0) {
-            Text('远端目录为空或正在加载')
-              .width('100%')
-              .fontSize($r('app.float.font_body'))
-              .fontColor($r('app.color.text_secondary'))
-              .textAlign(TextAlign.Center)
-              .padding($r('app.float.space_20'))
-              .visualEffect(RustDeskGlassEffect.contentReceiver());
+      Stack() {
+        FloatingDepthOverlay({
+          radius: $r('app.float.radius_14'),
+        });
+
+        if (fillAvailable) {
+          Scroll() {
+            this.RemoteEntriesContent();
           }
+          .width('100%')
+          .height('100%')
+          .scrollBar(BarState.Off);
+        } else {
+          this.RemoteEntriesContent();
         }
-        .width('100%')
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true);
       }
       .width('100%')
       .height('100%')
-      .scrollBar(BarState.Off);
+      .backgroundColor($r('app.color.glass_surface'))
+      .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
+        adaptiveColor: AdaptiveColor.DEFAULT,
+        scale: this.selectionBlurScale('remote-'),
+      })
+      .linearGradient({
+        angle: 142,
+        colors: [
+          [$r('app.color.glass_gradient_high'), 0],
+          [$r('app.color.glass_gradient_mid'), 0.48],
+          [$r('app.color.glass_gradient_accent'), 1],
+        ],
+      })
+      .borderRadius($r('app.float.radius_14'))
+      .clip(true)
+      .shadow(ShadowStyle.OUTER_DEFAULT_MD)
+      .visualEffect(RustDeskGlassEffect.featherReceiver());
     }
-    .layoutWeight(1)
+    .height(fillAvailable ? 0 : this.mobileEntrySurfaceHeight(this.remoteEntries.length) + 16)
+    .layoutWeight(fillAvailable ? 1 : 0)
     .width('100%')
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.selectionBlurScale('remote-'),
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
-    .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-    .visualEffect(RustDeskGlassEffect.featherReceiver());
+    .padding({
+      left: $r('app.float.space_16'),
+      right: $r('app.float.space_16'),
+      top: $r('app.float.space_8'),
+      bottom: $r('app.float.space_8'),
+    });
   }
 
   @Builder
-  private TransferPaneContent() {
+  private TransferRowsContent() {
+    Column() {
+      ForEach(this.transfers, (item: TransferItem) => {
+        this.TransferRow(item);
+      }, (item: TransferItem) =>
+        `${item.id}-${item.fileNum}-${item.state}-${Math.round(item.transferredBytes)}-${Math.round(item.speedBytesPerSecond)}`)
+      if (this.transfers.length === 0) {
+        Column({ space: $r('app.float.space_8') }) {
+          Text('⇄')
+            .fontSize($r('app.float.font_title_large'))
+            .fontColor($r('app.color.text_tertiary'));
+          Text('暂无传输任务')
+            .fontSize($r('app.float.font_body'))
+            .fontColor($r('app.color.text_secondary'));
+        }
+        .width('100%')
+        .padding({ top: $r('app.float.space_32'), bottom: $r('app.float.space_32') });
+      }
+    }
+    .width('100%');
+  }
+
+  @Builder
+  private TransferPaneContent(fillAvailable: boolean) {
     Row() {
       Text('传输任务')
         .layoutWeight(1)
@@ -558,89 +619,91 @@ export struct TransferDrawer {
     .width('100%')
     .margin({ bottom: $r('app.float.space_8') });
 
-    Scroll() {
-      Column() {
-        ForEach(this.transfers, (item: TransferItem) => {
-          this.TransferRow(item);
-        }, (item: TransferItem) => item.id.toString())
-        if (this.transfers.length === 0) {
-          Column({ space: $r('app.float.space_8') }) {
-            Text('⇄')
-              .fontSize($r('app.float.font_title_large'))
-              .fontColor($r('app.color.text_tertiary'));
-            Text('暂无传输任务')
-              .fontSize($r('app.float.font_body'))
-              .fontColor($r('app.color.text_secondary'));
-          }
-          .width('100%')
-          .padding({ top: $r('app.float.space_32'), bottom: $r('app.float.space_32') });
-        }
+    if (fillAvailable) {
+      Scroll() {
+        this.TransferRowsContent();
       }
-      .width('100%');
+      .layoutWeight(1)
+      .width('100%')
+      .scrollBar(BarState.Off);
+    } else {
+      this.TransferRowsContent();
     }
-    .layoutWeight(1)
-    .width('100%')
-    .scrollBar(BarState.Off);
   }
 
   build() {
     Stack() {
       if (this.useWideLayout()) {
-        Row({ space: $r('app.float.space_16') }) {
-          Column() {
-            this.LocalPaneContent();
+        Column() {
+          Blank()
+            .width('100%')
+            .height(this.titleSpacerHeight)
+            .flexShrink(0);
+
+          Row({ space: $r('app.float.space_16') }) {
+            Column() {
+              this.LocalPaneContent(true);
+            }
+            .layoutWeight(1)
+            .height('100%');
+
+            Column()
+              .width(1)
+              .height('100%')
+              .backgroundColor($r('app.color.divider'));
+
+            Column() {
+              this.RemotePaneContent(true);
+            }
+            .layoutWeight(1)
+            .height('100%');
+
+            Column()
+              .width(1)
+              .height('100%')
+              .backgroundColor($r('app.color.divider'));
+
+            Column() {
+              this.TransferPaneContent(true);
+            }
+            .width(this.viewportWidth >= 1280 ? 300 : 260)
+            .height('100%');
           }
           .layoutWeight(1)
-          .height('100%');
-
-          Column()
-            .width(1)
-            .height('100%')
-            .backgroundColor($r('app.color.divider'));
-
-          Column() {
-            this.RemotePaneContent();
-          }
-          .layoutWeight(1)
-          .height('100%');
-
-          Column()
-            .width(1)
-            .height('100%')
-            .backgroundColor($r('app.color.divider'));
-
-          Column() {
-            this.TransferPaneContent();
-          }
-          .width(this.viewportWidth >= 1280 ? 300 : 260)
-          .height('100%');
+          .width('100%')
+          .alignItems(VerticalAlign.Top);
         }
         .width('100%')
         .height('100%')
-        .alignItems(VerticalAlign.Top);
+        .alignItems(HorizontalAlign.Start);
       } else {
-        Scroll() {
-          Column({ space: $r('app.float.space_24') }) {
-            Column() {
-              this.LocalPaneContent();
-            }
-            .width('100%')
-            .height(300);
+        Scroll(this.scroller) {
+          Column() {
+            Blank()
+              .width('100%')
+              .height(this.titleSpacerHeight)
+              .flexShrink(0);
 
-            Column() {
-              this.RemotePaneContent();
-            }
-            .width('100%')
-            .height(360);
+            Column({ space: $r('app.float.space_24') }) {
+              Column() {
+                this.LocalPaneContent(false);
+              }
+              .width('100%');
 
-            Column() {
-              this.TransferPaneContent();
+              Column() {
+                this.RemotePaneContent(false);
+              }
+              .width('100%');
+
+              Column() {
+                this.TransferPaneContent(false);
+              }
+              .width('100%');
             }
             .width('100%')
-            .height(260);
+            .padding({ bottom: 24 + this.bottomAvoidInset });
           }
           .width('100%')
-          .padding({ bottom: $r('app.float.space_8') });
         }
         .width('100%')
         .height('100%')

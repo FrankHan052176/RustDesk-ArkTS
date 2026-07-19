@@ -1,6 +1,7 @@
 import { SessionOverlayPanel } from '../SessionOverlayState';
 import { SessionToolbarMetrics } from '../SessionToolbarMetrics';
 import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
+import { FloatingDepthOverlay, FloatingPressDepthShell } from './FloatingDepth';
 
 export interface SessionToolbarProps {
   relativeMouseMode: boolean;
@@ -120,6 +121,12 @@ export struct SessionToolbar {
             .height('100%')
             .backgroundColor($r('app.color.brand_primary'));
         }
+
+        FloatingDepthOverlay({
+          compact: true,
+          radius: $r('app.float.radius_14'),
+        });
+
         Row() {
           Text(label)
             .fontSize($r('app.float.font_label'))
@@ -178,6 +185,12 @@ export struct SessionToolbar {
             .height('100%')
             .backgroundColor($r('app.color.brand_primary'));
         }
+
+        FloatingDepthOverlay({
+          compact: true,
+          radius: $r('app.float.radius_14'),
+        });
+
         Row() {
           Text(this.relativeMouseMode ? '触摸板' : '模拟鼠标')
             .fontSize($r('app.float.font_label'))
@@ -233,6 +246,12 @@ export struct SessionToolbar {
           .backgroundColor($r('app.color.brand_primary_soft'))
           .opacity(0.52);
       }
+
+      FloatingDepthOverlay({
+        compact: true,
+        radius: $r('app.float.radius_14'),
+      });
+
       Row({ space: $r('app.float.space_8') }) {
         Text(this.audioAvailable ? '音频' : '准备中')
           .layoutWeight(1)
@@ -293,125 +312,161 @@ export struct SessionToolbar {
     enabled: boolean,
     onClick: () => void,
   ) {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Stack() {
-        if (selected) {
-          Row()
+    Stack() {
+      FloatingPressDepthShell({
+        pressed: enabled && !adjustment && this.pressedControl === key,
+        compact: true,
+        radius: $r('app.float.radius_10'),
+      }) {
+        Button({ type: ButtonType.Normal, stateEffect: false }) {
+          Stack() {
+            if (selected) {
+              Row()
+                .width('100%')
+                .height('100%')
+                .backgroundColor($r('app.color.brand_primary'));
+            }
+
+            FloatingDepthOverlay({
+              pressed: enabled && !adjustment && this.pressedControl === key,
+              compact: true,
+              radius: $r('app.float.radius_10'),
+            });
+
+            Row() {
+              Text(label)
+                .fontSize($r('app.float.font_caption'))
+                .fontWeight(FontWeight.Medium)
+                .fontColor(enabled
+                  ? (selected ? $r('app.color.white') : $r('app.color.text_primary'))
+                  : $r('app.color.disabled_text'));
+            }
             .width('100%')
             .height('100%')
-            .backgroundColor($r('app.color.brand_primary'));
-        }
-        Row() {
-          Text(label)
-            .fontSize($r('app.float.font_caption'))
-            .fontWeight(FontWeight.Medium)
-            .fontColor(enabled
-              ? (selected ? $r('app.color.white') : $r('app.color.text_primary'))
-              : $r('app.color.disabled_text'));
+            .justifyContent(FlexAlign.Center)
+            .borderRadius($r('app.float.radius_10'))
+            .clip(true)
+            .visualEffect(RustDeskGlassEffect.interactiveContent(
+              this.controlLightIntensity(key, selected, adjustment) > 0,
+              $r('app.color.point_light'),
+              this.controlLightIntensity(key, selected, adjustment),
+            ));
+          }
+          .width('100%')
+          .height('100%')
+          .borderRadius($r('app.float.radius_10'))
+          .clip(true);
         }
         .width('100%')
         .height('100%')
-        .justifyContent(FlexAlign.Center)
+        .padding(0)
+        .enabled(enabled)
+        .backgroundColor($r('app.color.glass_surface'))
+        .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
+          adaptiveColor: AdaptiveColor.DEFAULT,
+          scale: adjustment
+            ? (this.adjustingControl === key ? 0.90 : 0.48)
+            : (this.pressedControl === key ? 0.18 : 0.48),
+        })
         .borderRadius($r('app.float.radius_10'))
         .clip(true)
-        .visualEffect(RustDeskGlassEffect.interactiveContent(
-          this.controlLightIntensity(key, selected, adjustment) > 0,
-          $r('app.color.point_light'),
-          this.controlLightIntensity(key, selected, adjustment),
-        ));
+        .visualEffect(RustDeskGlassEffect.featherReceiver())
+        .onTouch((event: TouchEvent) => {
+          if (!enabled) {
+            return;
+          }
+          if (event.type === TouchType.Down) {
+            if (adjustment) {
+              this.animateAdjustmentBlur(key, true);
+            } else {
+              this.animateClickBlur(key, true);
+            }
+          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+            if (adjustment) {
+              this.animateAdjustmentBlur(key, false);
+            } else {
+              this.animateClickBlur(key, false);
+            }
+          }
+        })
+        .onClick(onClick);
       }
-      .width('100%')
-      .height('100%')
-      .borderRadius($r('app.float.radius_10'))
-      .clip(true);
     }
     .width(key === 'transform' ? 92 : 68)
     .height($r('app.float.control_compact'))
-    .padding(0)
-    .enabled(enabled)
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: adjustment
-        ? (this.adjustingControl === key ? 0.90 : 0.48)
-        : (this.pressedControl === key ? 0.18 : 0.72),
-    })
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
     .borderRadius($r('app.float.radius_10'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver())
-    .onTouch((event: TouchEvent) => {
-      if (!enabled) {
-        return;
-      }
-      if (event.type === TouchType.Down) {
-        if (adjustment) {
-          this.animateAdjustmentBlur(key, true);
-        } else {
-          this.animateClickBlur(key, true);
-        }
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        if (adjustment) {
-          this.animateAdjustmentBlur(key, false);
-        } else {
-          this.animateClickBlur(key, false);
-        }
-      }
-    })
-    .onClick(onClick);
+    .clip(false);
   }
 
   @Builder
   private DangerAction(label: string) {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Stack() {
-        Row()
+    Stack() {
+      FloatingPressDepthShell({
+        pressed: this.pressedControl === 'disconnect',
+        compact: true,
+        radius: $r('app.float.radius_14'),
+      }) {
+        Button({ type: ButtonType.Normal, stateEffect: false }) {
+          Stack() {
+            Row()
+              .width('100%')
+              .height('100%')
+              .backgroundColor($r('app.color.error'));
+
+            FloatingDepthOverlay({
+              pressed: this.pressedControl === 'disconnect',
+              compact: true,
+              radius: $r('app.float.radius_14'),
+            });
+
+            Row() {
+              Text(label)
+                .fontSize($r('app.float.font_label'))
+                .fontWeight(FontWeight.Medium)
+                .fontColor($r('app.color.white'))
+                .maxLines(1);
+            }
+            .width('100%')
+            .height('100%')
+            .justifyContent(FlexAlign.Center)
+            .borderRadius($r('app.float.radius_14'))
+            .clip(true)
+            .visualEffect(RustDeskGlassEffect.interactiveContent(
+              this.pressedControl === 'disconnect',
+              $r('app.color.error'),
+              0.66,
+            ));
+          }
           .width('100%')
           .height('100%')
-          .backgroundColor($r('app.color.error'));
-        Row() {
-          Text(label)
-            .fontSize($r('app.float.font_label'))
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.white'))
-            .maxLines(1);
+          .borderRadius($r('app.float.radius_14'))
+          .clip(true);
         }
         .width('100%')
         .height('100%')
-        .justifyContent(FlexAlign.Center)
+        .padding(0)
+        .backgroundColor($r('app.color.glass_surface'))
+        .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
+          adaptiveColor: AdaptiveColor.DEFAULT,
+          scale: this.pressedControl === 'disconnect' ? 0.18 : 0.48,
+        })
         .borderRadius($r('app.float.radius_14'))
         .clip(true)
-        .visualEffect(RustDeskGlassEffect.interactiveContent(
-          this.pressedControl === 'disconnect',
-          $r('app.color.error'),
-          0.66,
-        ));
+        .visualEffect(RustDeskGlassEffect.featherReceiver())
+        .onTouch((event: TouchEvent) => {
+          if (event.type === TouchType.Down) {
+            this.animateClickBlur('disconnect', true);
+          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+            this.animateClickBlur('disconnect', false);
+          }
+        })
+        .onClick(() => this.onDisconnect());
       }
-      .width('100%')
-      .height('100%')
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true);
     }
     .layoutWeight(1)
     .height(this.wideLayout ? 46 : 42)
-    .padding(0)
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.pressedControl === 'disconnect' ? 0.18 : 0.72,
-    })
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
     .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver())
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.animateClickBlur('disconnect', true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.animateClickBlur('disconnect', false);
-      }
-    })
-    .onClick(() => this.onDisconnect());
+    .clip(false);
   }
 
   @Builder

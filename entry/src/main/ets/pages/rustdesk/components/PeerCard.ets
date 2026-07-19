@@ -1,5 +1,6 @@
 import { PeerRecord } from '../RustDeskDirectoryTypes';
 import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
+import { FloatingActionSurface } from './FloatingSurface';
 
 export interface PeerCardProps {
   peer: PeerRecord;
@@ -17,9 +18,7 @@ export struct PeerCard {
   @Param peer: PeerRecord = new PeerRecord();
   @Param compact: boolean = false;
   @Param transferActive: boolean = false;
-  @Local pressedControl: string = '';
   @Local favoriteActive: boolean = false;
-  @Local favoriteGlowIntensity: number = 0;
   @Event onSetFavorite: (peerId: string, favorite: boolean) => void = (_peerId: string, _favorite: boolean) => {};
   @Event onRemoveRecent: (peerId: string) => void = (_peerId: string) => {};
   @Event onConnectRemote: (peerId: string) => void = (_peerId: string) => {};
@@ -37,7 +36,6 @@ export struct PeerCard {
       curve: Curve.Friction,
     }, () => {
       this.favoriteActive = this.peer.favorite;
-      this.favoriteGlowIntensity = 0;
     });
   }
 
@@ -107,61 +105,19 @@ export struct PeerCard {
     return detail.length > 0 ? `${detail} · ID ${this.peer.id}` : `ID ${this.peer.id}`;
   }
 
-  private animateControl(controlId: string, active: boolean): void {
-    this.getUIContext().animateTo({
-      duration: active ? 180 : 420,
-      curve: Curve.Friction,
-    }, () => {
-      if (active) {
-        this.pressedControl = controlId;
-      } else if (this.pressedControl === controlId) {
-        this.pressedControl = '';
-      }
-    });
-  }
-
-  private pressBlurScale(controlId: string): number {
-    return this.pressedControl === controlId ? 0.18 : 0.72;
-  }
-
   private toggleFavorite(): void {
     const next = !this.favoriteActive;
     this.getUIContext().animateTo({
       duration: 260,
       curve: Curve.Friction,
-      onFinish: () => {
-        if (next && this.favoriteActive) {
-          this.getUIContext().animateTo({
-            duration: 420,
-            curve: Curve.Friction,
-          }, () => {
-            this.favoriteGlowIntensity = 0;
-          });
-        }
-      },
     }, () => {
       this.favoriteActive = next;
-      this.favoriteGlowIntensity = next ? 0.54 : 0;
     });
     this.onSetFavorite(this.peer.id, next);
   }
 
-  private favoriteLightIntensity(): number {
-    if (this.pressedControl === 'favorite') {
-      return 0.68;
-    }
-    return this.favoriteGlowIntensity;
-  }
-
   private actionHighlighted(controlId: string): boolean {
     return controlId === 'files' && this.transferActive;
-  }
-
-  private actionLightIntensity(controlId: string): number {
-    if (this.pressedControl === controlId) {
-      return 0.62;
-    }
-    return 0;
   }
 
   private actionAccessibilityText(controlId: string): string {
@@ -195,83 +151,57 @@ export struct PeerCard {
       ? $r('app.color.warning_soft')
       : $r('app.color.transparent'))
     .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.interactiveContent(
-      this.favoriteLightIntensity() > 0,
-      $r('app.color.warning'),
-      this.favoriteLightIntensity(),
-    ));
+    .clip(true);
   }
 
   @Builder
   private FavoriteButton(compact: boolean) {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      this.FavoriteSymbols(compact ? $r('app.float.icon_small') : $r('app.float.icon_regular'));
+    Stack() {
+      FloatingActionSurface({
+        compact: compact,
+        touchLight: true,
+        stopTouchPropagation: true,
+        lightColor: $r('app.color.warning'),
+        lightPeakIntensity: 0.66,
+        onActivate: () => this.toggleFavorite(),
+      }) {
+        this.FavoriteSymbols(compact ? $r('app.float.icon_small') : $r('app.float.icon_regular'));
+      }
     }
     .width(compact ? $r('app.float.control_small') : $r('app.float.control_regular'))
     .height(compact ? $r('app.float.control_small') : $r('app.float.control_regular'))
-    .padding(0)
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.pressBlurScale('favorite'),
-    })
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-    .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver())
     .accessibilityText(this.favoriteActive ? '取消收藏设备' : '收藏设备')
     .accessibilityChecked(this.favoriteActive)
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.animateControl('favorite', true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.animateControl('favorite', false);
-      }
-    })
-    .onClick(() => this.toggleFavorite());
+    .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY);
   }
 
   @Builder
   private RemoveButton(compact: boolean) {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Stack({ alignContent: Alignment.Center }) {
-        SymbolGlyph($r('sys.symbol.trash'))
-          .fontSize(compact ? $r('app.float.icon_small') : $r('app.float.icon_regular'))
-          .fontColor([$r('app.color.white')]);
+    Stack() {
+      FloatingActionSurface({
+        compact: compact,
+        touchLight: true,
+        stopTouchPropagation: true,
+        lightColor: $r('app.color.error'),
+        lightPeakIntensity: 0.66,
+        onActivate: () => this.onRemoveRecent(this.peer.id),
+      }) {
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph($r('sys.symbol.trash'))
+            .fontSize(compact ? $r('app.float.icon_small') : $r('app.float.icon_regular'))
+            .fontColor([$r('app.color.white')]);
+        }
+        .width('100%')
+        .height('100%')
+        .backgroundColor($r('app.color.error'))
+        .borderRadius($r('app.float.radius_14'))
+        .clip(true);
       }
-      .width('100%')
-      .height('100%')
-      .backgroundColor($r('app.color.error'))
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true)
-        .visualEffect(RustDeskGlassEffect.interactiveContent(
-          this.pressedControl === 'remove',
-          $r('app.color.error'),
-          0.66,
-        ));
     }
     .width(compact ? $r('app.float.control_small') : $r('app.float.control_regular'))
     .height(compact ? $r('app.float.control_small') : $r('app.float.control_regular'))
-    .padding(0)
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.pressBlurScale('remove'),
-    })
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-    .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver())
     .accessibilityText('从最近设备中移除')
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.animateControl('remove', true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.animateControl('remove', false);
-      }
-    })
-    .onClick(() => this.onRemoveRecent(this.peer.id));
+    .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY);
   }
 
   @Builder
@@ -282,53 +212,41 @@ export struct PeerCard {
     compact: boolean,
     onClick: () => void,
   ) {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Row({ space: $r('app.float.space_6') }) {
-        Text(icon)
-          .fontSize(compact ? $r('app.float.icon_small') : $r('app.float.icon_regular'))
-          .fontColor(this.actionHighlighted(controlId)
-            ? $r('app.color.white')
-            : $r('app.color.text_primary'));
-        Text(label)
-          .fontSize(compact ? $r('app.float.font_label') : $r('app.float.font_body'))
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.actionHighlighted(controlId)
-            ? $r('app.color.white')
-            : $r('app.color.text_primary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis });
+    Stack() {
+      FloatingActionSurface({
+        compact: compact,
+        touchLight: true,
+        stopTouchPropagation: true,
+        lightPeakIntensity: 0.66,
+        onActivate: onClick,
+      }) {
+        Row({ space: $r('app.float.space_6') }) {
+          Text(icon)
+            .fontSize(compact ? $r('app.float.icon_small') : $r('app.float.icon_regular'))
+            .fontColor(this.actionHighlighted(controlId)
+              ? $r('app.color.white')
+              : $r('app.color.text_primary'));
+          Text(label)
+            .fontSize(compact ? $r('app.float.font_label') : $r('app.float.font_body'))
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.actionHighlighted(controlId)
+              ? $r('app.color.white')
+              : $r('app.color.text_primary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor(this.actionHighlighted(controlId)
+          ? $r('app.color.brand_primary')
+          : $r('app.color.transparent'))
+        .borderRadius($r('app.float.radius_14'))
+        .clip(true);
       }
-      .width('100%')
-      .height('100%')
-      .justifyContent(FlexAlign.Center)
-      .backgroundColor(this.actionHighlighted(controlId)
-        ? $r('app.color.brand_primary')
-        : $r('app.color.transparent'))
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.interactiveContent(
-        this.actionLightIntensity(controlId) > 0,
-        $r('app.color.point_light'),
-        this.actionLightIntensity(controlId),
-      ));
     }
     .layoutWeight(1)
     .height(compact ? $r('app.float.control_small') : $r('app.float.control_regular'))
-    .padding(0)
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.pressBlurScale(controlId),
-    })
-    .shadow(this.actionHighlighted(controlId) ? {
-      radius: 12,
-      color: $r('app.color.point_light'),
-      offsetX: 0,
-      offsetY: 0,
-    } : ShadowStyle.OUTER_DEFAULT_SM)
-    .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver())
     .scale({
       x: this.actionHighlighted(controlId) ? 1.018 : 1,
       y: this.actionHighlighted(controlId) ? 1.018 : 1,
@@ -341,14 +259,7 @@ export struct PeerCard {
     })
     .accessibilityText(this.actionAccessibilityText(controlId))
     .accessibilitySelected(this.actionHighlighted(controlId))
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.animateControl(controlId, true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.animateControl(controlId, false);
-      }
-    })
-    .onClick(onClick);
+    .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY);
   }
 
   @Builder
@@ -372,7 +283,7 @@ export struct PeerCard {
       .backgroundColor($r('app.color.glass_surface'))
       .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
         adaptiveColor: AdaptiveColor.DEFAULT,
-        scale: 0.72,
+        scale: 0.48,
       })
       .shadow(ShadowStyle.OUTER_DEFAULT_SM)
       .borderRadius($r('app.float.radius_14'))
@@ -487,7 +398,7 @@ export struct PeerCard {
     .backgroundColor($r('app.color.glass_surface'))
     .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
       adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.72,
+      scale: 0.48,
     })
     .linearGradient({
       angle: 142,

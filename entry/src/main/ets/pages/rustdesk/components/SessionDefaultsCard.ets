@@ -13,7 +13,6 @@ export struct SessionDefaultsCard {
   @Param showHeader: boolean = true;
   @Param defaults: SessionDefaults = new SessionDefaults();
   @Local viewportWidth: number = 390;
-  @Local selectionControlId: string = '';
   @Event onDefaultsChange: (defaults: SessionDefaults) => void = (_defaults: SessionDefaults) => {};
 
   private isWide(): boolean {
@@ -128,70 +127,24 @@ export struct SessionDefaultsCard {
     }
   }
 
-  private animateSelection(controlId: string, active: boolean): void {
-    this.getUIContext().animateTo({
-      duration: active ? 160 : 280,
-      curve: Curve.Friction,
-    }, () => {
-      if (active) {
-        this.selectionControlId = controlId;
-      } else if (this.selectionControlId === controlId) {
-        this.selectionControlId = '';
-      }
-    });
-  }
-
-  private toggleGroupBlurScale(): number {
-    return this.selectionControlId.startsWith('defaults-') ? 0.90 : 0.48;
-  }
-
   @Builder
-  private ToggleRow(label: ResourceStr, enabled: boolean, controlId: string,
-    onChange: (enabled: boolean) => void) {
-    Stack() {
-      Rect()
-        .width('100%')
-        .height('100%')
-        .radius($r('app.float.radius_14'))
-        .fill(enabled ? $r('app.color.brand_primary_soft') : $r('app.color.transparent'))
-        .opacity(enabled ? 0.55 : 1);
+  private ToggleRow(label: ResourceStr, enabled: boolean, onChange: (enabled: boolean) => void) {
+    Row({ space: $r('app.float.space_12') }) {
+      Text(label)
+        .layoutWeight(1)
+        .fontSize($r('app.float.font_body'))
+        .fontColor($r('app.color.text_primary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis });
 
-      Row({ space: $r('app.float.space_12') }) {
-        Text(label)
-          .layoutWeight(1)
-          .fontSize($r('app.float.font_body'))
-          .fontColor($r('app.color.text_primary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis });
-
-        Toggle({ type: ToggleType.Switch, isOn: enabled })
-          .selectedColor($r('app.color.brand_primary'))
-          .switchPointColor($r('app.color.white'))
-          .onTouch((event: TouchEvent) => {
-            if (event.type === TouchType.Down) {
-              this.animateSelection(controlId, true);
-            } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-              this.animateSelection(controlId, false);
-            }
-          })
-          .onChange(onChange);
-      }
-      .width('100%')
-      .height('100%')
-      .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_8') })
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.interactiveContent(
-        this.selectionControlId === controlId,
-        $r('app.color.point_light'),
-        0.42,
-      ));
+      Toggle({ type: ToggleType.Switch, isOn: enabled })
+        .selectedColor($r('app.color.brand_primary'))
+        .switchPointColor($r('app.color.white'))
+        .onChange(onChange);
     }
     .width('100%')
     .height($r('app.float.control_regular'))
-    .backgroundColor($r('app.color.transparent'))
-    .borderRadius($r('app.float.radius_14'))
-    .clip(true);
+    .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_8') });
   }
 
   @Builder
@@ -304,7 +257,6 @@ export struct SessionDefaultsCard {
               this.ToggleRow(
                 $r('app.string.settings_remote_audio'),
                 this.defaults.audioEnabled,
-                'defaults-audio',
                 (enabled: boolean) => this.updateAudio(enabled),
               )
             }
@@ -314,7 +266,6 @@ export struct SessionDefaultsCard {
               this.ToggleRow(
                 $r('app.string.settings_clipboard_sync'),
                 this.defaults.clipboardEnabled,
-                'defaults-clipboard',
                 (enabled: boolean) => this.updateClipboard(enabled),
               )
             }
@@ -327,7 +278,6 @@ export struct SessionDefaultsCard {
               this.ToggleRow(
                 $r('app.string.settings_transform_gestures'),
                 this.defaults.gesturesEnabled,
-                'defaults-gestures',
                 (enabled: boolean) => this.updateGestures(enabled),
               )
             }
@@ -337,7 +287,6 @@ export struct SessionDefaultsCard {
               this.ToggleRow(
                 $r('app.string.settings_toolbar_expanded'),
                 this.defaults.toolbarExpanded,
-                'defaults-toolbar',
                 (enabled: boolean) => this.updateToolbar(enabled),
               )
             }
@@ -351,25 +300,21 @@ export struct SessionDefaultsCard {
           this.ToggleRow(
             $r('app.string.settings_remote_audio'),
             this.defaults.audioEnabled,
-            'defaults-audio',
             (enabled: boolean) => this.updateAudio(enabled),
           )
           this.ToggleRow(
             $r('app.string.settings_clipboard_sync'),
             this.defaults.clipboardEnabled,
-            'defaults-clipboard',
             (enabled: boolean) => this.updateClipboard(enabled),
           )
           this.ToggleRow(
             $r('app.string.settings_transform_gestures'),
             this.defaults.gesturesEnabled,
-            'defaults-gestures',
             (enabled: boolean) => this.updateGestures(enabled),
           )
           this.ToggleRow(
             $r('app.string.settings_toolbar_expanded'),
             this.defaults.toolbarExpanded,
-            'defaults-toolbar',
             (enabled: boolean) => this.updateToolbar(enabled),
           )
         }
@@ -381,7 +326,7 @@ export struct SessionDefaultsCard {
     .backgroundColor($r('app.color.glass_surface'))
     .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
       adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.toggleGroupBlurScale(),
+      scale: 0.48,
     })
     .linearGradient({
       angle: 142,

@@ -65,9 +65,11 @@ export default class EntryAbility extends UIAbility {
             'Failed to set the initial window layout to immersive mode. Cause:' + JSON.stringify(err));
         });
 
-        mainWindow.setPreferredOrientation(window.Orientation.AUTO_ROTATION)
+        mainWindow.setPreferredOrientation(deviceInfo.deviceType === '2in1'
+          ? window.Orientation.AUTO_ROTATION
+          : window.Orientation.PORTRAIT)
           .then(() => {
-            hilog.info(DOMAIN, TAG, 'Window preferred orientation set to auto rotation');
+            hilog.info(DOMAIN, TAG, 'Window preferred orientation initialized');
           })
           .catch((orientationError: BusinessError) => {
             hilog.error(DOMAIN, TAG, 'Failed to set preferred orientation: %{public}s', JSON.stringify(orientationError) ?? '');

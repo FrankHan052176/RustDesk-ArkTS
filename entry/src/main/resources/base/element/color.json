@@ -46,19 +46,19 @@
     },
     {
       "name": "mica_border_active",
-      "value": "#B8A8AAFF"
+      "value": "#B35261D6"
     },
     {
       "name": "mica_highlight",
-      "value": "#80FFFFFF"
+      "value": "#33FFFFFF"
     },
     {
       "name": "mica_shadow",
-      "value": "#24172233"
+      "value": "#33172233"
     },
     {
       "name": "glass_surface",
-      "value": "#18007DFF"
+      "value": "#18FFFFFF"
     },
     {
       "name": "glass_gradient_high",
@@ -71,10 +71,6 @@
     {
       "name": "glass_gradient_accent",
       "value": "#00000000"
-    },
-    {
-      "name": "dropdown_surface",
-      "value": "#42FFFFFF"
     },
     {
       "name": "field_background",
@@ -98,15 +94,15 @@
     },
     {
       "name": "brand_primary",
-      "value": "#007DFF"
+      "value": "#5261D6"
     },
     {
       "name": "brand_primary_pressed",
-      "value": "#006CDE"
+      "value": "#4452BE"
     },
     {
       "name": "brand_primary_soft",
-      "value": "#E5F2FF"
+      "value": "#E5E8FF"
     },
     {
       "name": "brand_secondary",
@@ -142,11 +138,27 @@
     },
     {
       "name": "focus_ring",
-      "value": "#66007DFF"
+      "value": "#665261D6"
     },
     {
       "name": "shadow",
-      "value": "#24172233"
+      "value": "#2B172233"
+    },
+    {
+      "name": "depth_highlight",
+      "value": "#24FFFFFF"
+    },
+    {
+      "name": "depth_occlusion",
+      "value": "#1817202E"
+    },
+    {
+      "name": "depth_shadow_level2",
+      "value": "#26172233"
+    },
+    {
+      "name": "depth_specular",
+      "value": "#14FFFFFF"
     },
     {
       "name": "disabled_background",
@@ -190,7 +202,7 @@
     },
     {
       "name": "point_light",
-      "value": "#4EA0FF"
+      "value": "#7B88EF"
     },
     {
       "name": "point_light_secondary",
@@ -198,11 +210,11 @@
     },
     {
       "name": "material_light",
-      "value": "#33007DFF"
+      "value": "#335261D6"
     },
     {
       "name": "ambient_primary",
-      "value": "#66007DFF"
+      "value": "#665261D6"
     },
     {
       "name": "ambient_secondary",
@@ -214,15 +226,15 @@
     },
     {
       "name": "hero_start",
-      "value": "#33358F"
+      "value": "#34429D"
     },
     {
       "name": "hero_mid",
-      "value": "#5658DF"
+      "value": "#5261D6"
     },
     {
       "name": "hero_end",
-      "value": "#0D9E9A"
+      "value": "#237F91"
     },
     {
       "name": "hero_text",

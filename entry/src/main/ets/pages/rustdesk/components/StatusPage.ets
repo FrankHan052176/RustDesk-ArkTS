@@ -1,3 +1,5 @@
+import { FloatingActionSurface, FloatingGlassSurface } from './FloatingSurface';
+
 export interface StatusPageProps {
   sessionPhase: string;
   connectionSummary: string;
@@ -18,116 +20,71 @@ export struct StatusPage {
   @Param renderFpsText: string = 'FPS --';
   @Param frameStatus: string = 'Surface not ready';
   @Param buildMarker: string = '';
-  @Local backPressed: boolean = false;
   @Event onBack: () => void = () => {};
-
-  private animateBackPressed(pressed: boolean): void {
-    this.getUIContext().animateTo({
-      duration: pressed ? 160 : 280,
-      curve: Curve.Friction,
-    }, () => {
-      this.backPressed = pressed;
-    });
-  }
 
   @Builder
   private StatusInfo() {
-    Column({ space: $r('app.float.space_8') }) {
-      Text(`状态: ${this.sessionPhase}`)
-        .fontSize($r('app.float.font_body_large'))
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'));
-      Text(this.connectionSummary)
-        .fontSize($r('app.float.font_body'))
-        .fontColor($r('app.color.text_primary'));
-      Text(this.sessionMessage)
-        .fontSize($r('app.float.font_label'))
-        .fontColor($r('app.color.text_secondary'));
-      Text(this.qualitySummary)
-        .fontSize($r('app.float.font_label'))
-        .fontColor($r('app.color.text_secondary'));
-      Text(this.renderFpsText)
-        .fontSize($r('app.float.font_label'))
-        .fontColor($r('app.color.text_secondary'));
-      Text(this.frameStatus)
-        .fontSize($r('app.float.font_label'))
-        .fontColor($r('app.color.text_secondary'));
-      Text(`Build: ${this.buildMarker || 'unknown'}`)
-        .fontSize($r('app.float.font_caption'))
-        .fontColor($r('app.color.text_tertiary'));
+    Stack() {
+      FloatingGlassSurface({
+        radius: $r('app.float.radius_24'),
+      }) {
+        Column({ space: $r('app.float.space_8') }) {
+          Text(`状态: ${this.sessionPhase}`)
+            .fontSize($r('app.float.font_body_large'))
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'));
+          Text(this.connectionSummary)
+            .fontSize($r('app.float.font_body'))
+            .fontColor($r('app.color.text_primary'));
+          Text(this.sessionMessage)
+            .fontSize($r('app.float.font_label'))
+            .fontColor($r('app.color.text_secondary'));
+          Text(this.qualitySummary)
+            .fontSize($r('app.float.font_label'))
+            .fontColor($r('app.color.text_secondary'));
+          Text(this.renderFpsText)
+            .fontSize($r('app.float.font_label'))
+            .fontColor($r('app.color.text_secondary'));
+          Text(this.frameStatus)
+            .fontSize($r('app.float.font_label'))
+            .fontColor($r('app.color.text_secondary'));
+          Text(`Build: ${this.buildMarker || 'unknown'}`)
+            .fontSize($r('app.float.font_caption'))
+            .fontColor($r('app.color.text_tertiary'));
+        }
+        .width('100%')
+        .padding($r('app.float.card_padding'))
+        .borderRadius($r('app.float.radius_24'))
+        .clip(true);
+      }
     }
-    .width('100%')
-    .padding($r('app.float.card_padding'))
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.72,
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
-    .borderRadius($r('app.float.radius_24'))
-    .clip(true)
-    .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-    .visualEffect(RustDeskGlassEffect.featherReceiver());
+    .width('100%');
   }
 
   @Builder
   private BackButton() {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Stack() {
-        Row()
-          .width('100%')
-          .height('100%')
-          .backgroundColor($r('app.color.brand_primary'))
-          .opacity(0.86);
-        Text('返回连接页')
-          .fontSize($r('app.float.font_body'))
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_inverse'));
+    Stack() {
+      FloatingActionSurface({
+        onActivate: () => this.onBack(),
+      }) {
+        Row() {
+          Text('返回连接页')
+            .fontSize($r('app.float.font_body'))
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_inverse'));
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor($r('app.color.brand_primary'))
+        .opacity(0.86);
       }
-      .width('100%')
-      .height('100%')
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.interactiveContent(
-        this.backPressed,
-        $r('app.color.point_light'),
-      ));
     }
     .width('100%')
     .height($r('app.float.control_regular'))
-    .padding(0)
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.backPressed ? 0.18 : 0.72,
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
     .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-    .visualEffect(RustDeskGlassEffect.featherReceiver())
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.animateBackPressed(true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.animateBackPressed(false);
-      }
-    })
-    .onClick(() => this.onBack());
+    .clip(false)
+    .accessibilityText('返回连接页');
   }
 
   build() {

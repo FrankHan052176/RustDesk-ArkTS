@@ -333,6 +333,42 @@
       "value": "账户能力由当前服务器的 API 提供；仅配置 ID / Relay 的自建服务器可能不支持登录。"
     },
     {
+      "name": "settings_account_official_login_hint",
+      "value": "登录 RustDesk 官方账户；支持账户密码、邮箱验证码、TOTP 双重验证和浏览器第三方授权，成功后可同步官方通讯簿。"
+    },
+    {
+      "name": "settings_account_oidc_divider",
+      "value": "或使用浏览器授权"
+    },
+    {
+      "name": "settings_account_oidc_hint",
+      "value": "选择账户提供商后，将在系统浏览器中完成安全授权。"
+    },
+    {
+      "name": "settings_account_oidc_active_hint",
+      "value": "请在系统浏览器中完成授权；返回应用后会自动继续登录。"
+    },
+    {
+      "name": "settings_account_oidc_waiting_short",
+      "value": "等待浏览器授权"
+    },
+    {
+      "name": "settings_account_oidc_github",
+      "value": "继续使用 GitHub"
+    },
+    {
+      "name": "settings_account_oidc_google",
+      "value": "继续使用 Google"
+    },
+    {
+      "name": "settings_account_oidc_microsoft",
+      "value": "继续使用 Microsoft"
+    },
+    {
+      "name": "settings_account_oidc_cancel",
+      "value": "取消浏览器授权"
+    },
+    {
       "name": "settings_account_username",
       "value": "用户名"
     },
@@ -407,6 +443,10 @@
     {
       "name": "settings_account_signed_in_hint",
       "value": "当前服务器账户"
+    },
+    {
+      "name": "settings_account_official_signed_in_hint",
+      "value": "RustDesk 官方账户"
     },
     {
       "name": "settings_account_email",

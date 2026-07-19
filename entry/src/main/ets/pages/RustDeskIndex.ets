@@ -8,7 +8,7 @@ import {
   hdsMaterial,
 } from '@kit.UIDesignKit';
 import native from 'rustdesk-ohrs';
-import { common } from '@kit.AbilityKit';
+import { common, OpenLinkOptions } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { BusinessError, Callback, deviceInfo } from '@kit.BasicServicesKit';
 import { display, LengthMetrics, window } from '@kit.ArkUI';
@@ -17,7 +17,9 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ConnectTab } from './rustdesk/components/ConnectTab';
 import { DeviceDirectoryPanel } from './rustdesk/components/DeviceDirectoryPanel';
 import { PasswordDialog } from './rustdesk/components/PasswordDialog';
+import { ConnectionAttemptOverlay } from './rustdesk/components/ConnectionAttemptOverlay';
 import { SettingsTab } from './rustdesk/components/SettingsTab';
+import { AmbientOrbitBackdrop } from './rustdesk/components/AmbientOrbitBackdrop';
 import { SessionToolbar } from './rustdesk/components/SessionToolbar';
 import { ChatDrawer } from './rustdesk/components/ChatDrawer';
 import { DisplaySelectorSheet } from './rustdesk/components/DisplaySelectorSheet';
@@ -29,6 +31,7 @@ import { RustDeskPreferences } from './rustdesk/RustDeskPreferences';
 import { RustDeskMainBridge } from './rustdesk/RustDeskMainBridge';
 import {
   AccountActionResult,
+  AccountLoginProvider,
   AccountState,
   DirectorySnapshot,
   PeerRecord,
@@ -50,6 +53,7 @@ import { RustDeskViewportModel } from './rustdesk/RustDeskViewportModel';
 import { RustDeskNativeSessionBridge } from './rustdesk/NativeSessionBridge';
 import { DownloadRootManager } from './rustdesk/DownloadRootManager';
 import { TransferManager } from './rustdesk/TransferManager';
+import { RemoteFilePath } from './rustdesk/RemoteFilePath';
 import { TransferProgress } from './rustdesk/TransferProgress';
 import { RustDeskGlassEffect } from './rustdesk/RustDeskGlassEffect';
 import { SessionDisplayController } from './rustdesk/SessionDisplayController';
@@ -102,12 +106,14 @@ const SESSION_OVERLAY_TRANSITION_DISPLAY = 'rustdesk-session-overlay-display';
 const SESSION_OVERLAY_TRANSITION_QUALITY = 'rustdesk-session-overlay-quality';
 const TRANSFER_POLL_INTERVAL_MS = 250;
 const REMOTE_AUDIO_POLL_INTERVAL_MS = 1000;
+const CONNECTION_TIMEOUT_MS = 45000;
 const PREVIEW_MIN_USER_SCALE = 0.5;
 const PREVIEW_MAX_USER_SCALE = 4.0;
 
 type PrimarySessionKind = 'remote_control' | 'view_camera';
 type PasswordSessionKind = 'primary' | 'file_transfer';
 type PeerLaunchKind = 'remote_control' | 'view_camera' | 'file_transfer';
+type ConnectionUiPhase = 'idle' | 'connecting' | 'awaiting_password' | 'authenticating' | 'connected' | 'failed';
 
 interface RuntimeDirectoryResponse {
   ok: boolean;
@@ -160,6 +166,7 @@ struct RustDeskIndex {
   private deviceAddressBookScroller: Scroller = new Scroller();
   private deviceLanScroller: Scroller = new Scroller();
   private settingsScroller: Scroller = new Scroller();
+  private transferScroller: Scroller = new Scroller();
   private keyboardEnteredSessionId: string = '';
   private lastKeyboardFocusLogAt: number = 0;
   @Local pageVisible: boolean = true;
@@ -169,7 +176,10 @@ struct RustDeskIndex {
   private previewKeyboardBlurTimer: number = -1;
   private lanScanTimer: number = -1;
   private accountPollTimer: number = -1;
+  private accountOptionsPollTimer: number = -1;
   private addressBookPollTimer: number = -1;
+  private accountOidcActive: boolean = false;
+  private accountOidcOpenedUrl: string = '';
 
   @Local currentTabIndex: number = 0;
   @Local mainViewportWidth: number = 390;
@@ -195,6 +205,7 @@ struct RustDeskIndex {
   @Local directorySnapshot: DirectorySnapshot = new DirectorySnapshot();
   @Local sessionDefaults: SessionDefaults = new SessionDefaults();
   @Local accountState: AccountState = new AccountState();
+  @Local accountLoginProviders: AccountLoginProvider[] = [];
   @Local clipboardSyncEnabled: boolean = true;
 
   @Local peerTarget: string = '';
@@ -207,6 +218,9 @@ struct RustDeskIndex {
   @Local sessionPhase: string = 'idle';
   @Local sessionMessage: string = '未连接';
   @Local connectionSummary: string = '未连接';
+  @Local connectionUiPhase: ConnectionUiPhase = 'idle';
+  @Local connectionUiTarget: string = '';
+  @Local connectionUiMessage: string = '';
   @Local qualitySummary: string = 'Remote fps -- | delay -- | codec --';
   @Local toolbarRenderStats: RenderStatsSnapshot = {
     fps: 0,
@@ -239,6 +253,10 @@ struct RustDeskIndex {
 
   private runtimeInitialized: boolean = false;
   private connectionGeneration: number = 0;
+  private connectionTimeoutId: number = -1;
+  private lastConnectionKind: PrimarySessionKind = 'remote_control';
+  private connectionAttemptKind: PasswordSessionKind = 'primary';
+  private sessionCloseInFlight: boolean = false;
   private pollTimer: number = -1;
   private passwordTimeoutId: number = -1;
   private eventPollInFlight: boolean = false;
@@ -319,6 +337,7 @@ struct RustDeskIndex {
   @Local customFpsDraft: number = 30;
   @Local transferRootPath: string = '';
   @Local transferRootStatus: string = '选择下载位置后可传输';
+  @Local transferConnectionStatus: string = '文件传输未连接';
   @Local transferLocalEntries: LocalFileEntry[] = [];
   @Local transferRemoteEntries: RemoteFileEntry[] = [];
   @Local transferRemoteDirectory: string = '/';
@@ -340,6 +359,7 @@ struct RustDeskIndex {
   private transferSessionTarget: string = '';
   private transferPollTimer: number = -1;
   private transferPollInFlight: boolean = false;
+  private transferConnectionPending: boolean = false;
   private transferSessionSequence: number = 0;
   private initialDisplayCommandIssued: boolean = false;
   private pendingDisplayIndex: number = -1;
@@ -361,11 +381,18 @@ struct RustDeskIndex {
 
   aboutToDisappear(): void {
     this.connectionGeneration += 1;
+    this.clearConnectionTimeout();
     this.clearPasswordTimeout();
     this.clearPreviewKeyboardBlurTimer();
     this.clearLanScanTimer();
     this.clearAccountPollTimer();
+    this.clearAccountOptionsPollTimer();
     this.clearAddressBookPollTimer();
+    if (this.accountOidcActive) {
+      this.mainBridge.cancelAccountOidc();
+      this.accountOidcActive = false;
+      this.accountOidcOpenedUrl = '';
+    }
     this.previewKeyboardCaptureFocused = false;
     this.stopInputInterceptor();
     this.clipboardController?.reset();
@@ -385,6 +412,9 @@ struct RustDeskIndex {
     this.pageVisible = true;
     this.syncClipboardController();
     this.syncInputInterceptor();
+    if (this.accountOidcActive) {
+      this.scheduleAccountPoll(200);
+    }
   }
 
   onPageHide(): void {
@@ -421,6 +451,9 @@ struct RustDeskIndex {
     if (this.runtimeInitialized) {
       this.refreshNativeState();
       this.refreshDirectorySnapshot();
+      if (!this.accountState.loggedIn) {
+        this.loadAccountLoginOptions();
+      }
       return;
     }
     try {
@@ -452,6 +485,9 @@ struct RustDeskIndex {
       }
       this.sessionMessage = String(response['message'] ?? 'Runtime initialized');
       this.refreshNativeState();
+      if (!this.accountState.loggedIn) {
+        this.loadAccountLoginOptions();
+      }
     } catch (error) {
       this.errorText = `Runtime init failed: ${String(error)}`;
       hilog.error(DOMAIN, TAG, 'initializeRuntime failed: %{public}s', this.errorText);
@@ -561,6 +597,7 @@ struct RustDeskIndex {
     state.challengeId = source.challengeId;
     state.challengeType = source.challengeType;
     state.emailHint = source.emailHint;
+    state.oidcProvider = source.oidcProvider;
     state.message = source.message;
     return state;
   }
@@ -589,12 +626,198 @@ struct RustDeskIndex {
       state.challengeId = previous.challengeId;
       state.challengeType = previous.challengeType;
       state.emailHint = previous.emailHint;
+      state.oidcProvider = previous.oidcProvider;
       if (state.message.length === 0) {
         state.message = previous.message;
       }
     }
     this.accountState = state;
     this.updateServerAccountAvailability(state.loggedIn);
+  }
+
+  private loadAccountLoginOptions(): void {
+    this.clearAccountOptionsPollTimer();
+    if (!this.runtimeInitialized || this.accountState.loggedIn) {
+      this.accountLoginProviders = [];
+      return;
+    }
+    const result = this.mainBridge.startAccountLoginOptions();
+    if (!result.ok || result.state !== 'pending') {
+      this.accountLoginProviders = [];
+      const state = this.copyAccountState(this.accountState);
+      state.message = result.message || '无法获取浏览器登录方式';
+      this.accountState = state;
+      return;
+    }
+    this.scheduleAccountOptionsPoll();
+  }
+
+  private scheduleAccountOptionsPoll(): void {
+    this.clearAccountOptionsPollTimer();
+    this.accountOptionsPollTimer = setTimeout(() => {
+      this.accountOptionsPollTimer = -1;
+      this.pollAccountLoginOptions();
+    }, 350) as number;
+  }
+
+  private pollAccountLoginOptions(): void {
+    const result = this.mainBridge.pollAccountLoginOptions();
+    if (result.state === 'pending') {
+      this.scheduleAccountOptionsPoll();
+      return;
+    }
+    if (result.ok && result.state === 'ready') {
+      this.accountLoginProviders = result.providers;
+      return;
+    }
+    this.accountLoginProviders = [];
+    if (!this.accountOidcActive) {
+      const state = this.copyAccountState(this.accountState);
+      state.message = result.message || '当前账户服务未提供浏览器登录方式';
+      this.accountState = state;
+    }
+  }
+
+  private clearAccountOptionsPollTimer(): void {
+    if (this.accountOptionsPollTimer < 0) {
+      return;
+    }
+    clearTimeout(this.accountOptionsPollTimer);
+    this.accountOptionsPollTimer = -1;
+  }
+
+  private isAccountProviderAvailable(provider: string): boolean {
+    const normalizedProvider = provider.trim().toLowerCase();
+    for (let index = 0; index < this.accountLoginProviders.length; index += 1) {
+      if (this.accountLoginProviders[index].name.trim().toLowerCase() === normalizedProvider) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private oidcStateMessage(stateMessage: string, hasUrl: boolean): string {
+    const normalized = stateMessage.trim().toLowerCase();
+    if (normalized === 'requesting account auth') {
+      return '正在向账户服务申请授权链接…';
+    }
+    if (normalized === 'login account auth') {
+      return '授权已确认，正在完成登录…';
+    }
+    if (normalized === 'waiting account auth' || hasUrl) {
+      return '已打开系统浏览器，请完成授权后返回。';
+    }
+    return '正在等待浏览器授权…';
+  }
+
+  private failAccountOidcAuthorization(message: string): void {
+    this.clearAccountPollTimer();
+    if (this.accountOidcActive) {
+      this.mainBridge.cancelAccountOidc();
+    }
+    this.accountOidcActive = false;
+    this.accountOidcOpenedUrl = '';
+    const state = this.copyAccountState(this.accountState);
+    state.busy = false;
+    state.oidcProvider = '';
+    state.message = message;
+    this.accountState = state;
+  }
+
+  private openAccountAuthorizationUrl(url: string): void {
+    const normalizedUrl = url.trim();
+    if (normalizedUrl.length === 0 || normalizedUrl === this.accountOidcOpenedUrl) {
+      return;
+    }
+    this.accountOidcOpenedUrl = normalizedUrl;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const options: OpenLinkOptions = {
+      appLinkingOnly: false,
+    };
+    try {
+      void context.openLink(normalizedUrl, options).catch((error: BusinessError) => {
+        if (!this.accountOidcActive || this.accountOidcOpenedUrl !== normalizedUrl) {
+          return;
+        }
+        this.failAccountOidcAuthorization(`无法打开系统浏览器：${error.message}`);
+      });
+    } catch (error) {
+      this.failAccountOidcAuthorization(`无法打开系统浏览器：${String(error)}`);
+    }
+  }
+
+  private startAccountOidc(provider: string): void {
+    const normalizedProvider = provider.trim().toLowerCase();
+    if (this.accountState.busy || this.accountState.syncing ||
+      !this.isAccountProviderAvailable(normalizedProvider)) {
+      return;
+    }
+    this.clearAccountPollTimer();
+    const result = this.mainBridge.startAccountOidc(normalizedProvider);
+    if (!result.ok || result.state !== 'pending') {
+      const failed = this.copyAccountState(this.accountState);
+      failed.message = result.message || '无法启动浏览器授权';
+      this.accountState = failed;
+      return;
+    }
+    this.accountOidcActive = true;
+    this.accountOidcOpenedUrl = '';
+    const state = this.copyAccountState(this.accountState);
+    state.busy = true;
+    state.challengeId = '';
+    state.challengeType = '';
+    state.emailHint = '';
+    state.oidcProvider = normalizedProvider;
+    state.message = '正在向账户服务申请授权链接…';
+    this.accountState = state;
+    this.scheduleAccountPoll(500);
+  }
+
+  private pollAccountOidcAction(): void {
+    const result = this.mainBridge.pollAccountOidc();
+    if (result.ok && result.state === 'pending') {
+      this.openAccountAuthorizationUrl(result.url);
+      const state = this.copyAccountState(this.accountState);
+      state.busy = true;
+      state.message = this.oidcStateMessage(result.stateMessage, result.url.length > 0);
+      this.accountState = state;
+      this.scheduleAccountPoll(800);
+      return;
+    }
+    this.accountOidcActive = false;
+    this.accountOidcOpenedUrl = '';
+    const state = this.copyAccountState(this.accountState);
+    state.busy = false;
+    state.oidcProvider = '';
+    if (result.ok && result.state === 'authenticated') {
+      this.accountState = state;
+      this.refreshAccountState(false);
+      if (!this.accountState.loggedIn) {
+        const failed = this.copyAccountState(this.accountState);
+        failed.message = '浏览器授权完成，但登录状态读取失败';
+        this.accountState = failed;
+        return;
+      }
+      const authenticated = this.copyAccountState(this.accountState);
+      authenticated.message = '登录成功，正在同步通讯簿';
+      this.accountState = authenticated;
+      this.startAddressBookSync(true);
+      return;
+    }
+    state.message = result.message || '浏览器授权失败';
+    this.accountState = state;
+  }
+
+  private cancelAccountOidc(): void {
+    this.clearAccountPollTimer();
+    const cancelled = !this.accountOidcActive || this.mainBridge.cancelAccountOidc();
+    this.accountOidcActive = false;
+    this.accountOidcOpenedUrl = '';
+    const state = this.copyAccountState(this.accountState);
+    state.busy = false;
+    state.oidcProvider = '';
+    state.message = cancelled ? '已取消浏览器授权' : '无法取消浏览器授权';
+    this.accountState = state;
   }
 
   private startAccountLogin(username: string, password: string): void {
@@ -651,15 +874,19 @@ struct RustDeskIndex {
     this.accountState = state;
   }
 
-  private scheduleAccountPoll(): void {
+  private scheduleAccountPoll(delayMs: number = 300): void {
     this.clearAccountPollTimer();
     this.accountPollTimer = setTimeout(() => {
       this.accountPollTimer = -1;
       this.pollAccountAction();
-    }, 300) as number;
+    }, delayMs) as number;
   }
 
   private pollAccountAction(): void {
+    if (this.accountOidcActive) {
+      this.pollAccountOidcAction();
+      return;
+    }
     const result = this.mainBridge.pollAccountAction();
     if (result.state === 'pending') {
       this.scheduleAccountPoll();
@@ -718,6 +945,7 @@ struct RustDeskIndex {
     state.message = '已退出账户';
     this.accountState = state;
     this.refreshDirectorySnapshot();
+    this.loadAccountLoginOptions();
   }
 
   private startAddressBookSync(silent: boolean = false): void {
@@ -797,11 +1025,18 @@ struct RustDeskIndex {
       const accountResetRequired = previousApiServer !== result.effectiveApiServer;
       if (accountResetRequired) {
         this.clearAccountPollTimer();
+        this.clearAccountOptionsPollTimer();
         this.clearAddressBookPollTimer();
+        this.accountOidcActive = false;
+        this.accountOidcOpenedUrl = '';
+        this.accountLoginProviders = [];
       }
       this.apiServer = result.effectiveApiServer;
       this.refreshAccountState(!accountResetRequired);
       this.refreshDirectorySnapshot();
+      if (accountResetRequired && !this.accountState.loggedIn) {
+        this.loadAccountLoginOptions();
+      }
     } finally {
       this.serverSaving = false;
     }
@@ -977,6 +1212,92 @@ struct RustDeskIndex {
     }
   }
 
+  private beginConnectionAttempt(kind: PrimarySessionKind, target: string): void {
+    this.clearConnectionTimeout();
+    this.connectionAttemptKind = 'primary';
+    this.lastConnectionKind = kind;
+    this.connectionUiTarget = target;
+    this.connectionUiPhase = 'connecting';
+    this.connectionUiMessage = kind === 'view_camera'
+      ? '正在协商摄像头会话，成功后再进入预览。'
+      : '正在建立安全连接，成功后再进入远控。';
+  }
+
+  private beginTransferConnectionAttempt(target: string): void {
+    this.clearConnectionTimeout();
+    this.connectionAttemptKind = 'file_transfer';
+    this.connectionUiTarget = target;
+    this.connectionUiPhase = 'connecting';
+    this.connectionUiMessage = this.transferManager.getStatusMessage();
+    this.transferConnectionPending = true;
+  }
+
+  private clearConnectionTimeout(): void {
+    if (this.connectionTimeoutId < 0) {
+      return;
+    }
+    clearTimeout(this.connectionTimeoutId);
+    this.connectionTimeoutId = -1;
+  }
+
+  private scheduleConnectionTimeout(): void {
+    this.clearConnectionTimeout();
+    this.connectionTimeoutId = setTimeout(() => {
+      this.connectionTimeoutId = -1;
+      if (this.connectionUiPhase === 'connecting' || this.connectionUiPhase === 'authenticating') {
+        this.failConnectionAttempt('连接超时。请确认远端在线、网络可用后重试。');
+      }
+    }, CONNECTION_TIMEOUT_MS) as number;
+  }
+
+  private failConnectionAttempt(message: string): void {
+    const normalizedMessage = message.trim().length > 0 ? message.trim() : '连接未完成';
+    this.clearConnectionTimeout();
+    this.connectionUiPhase = 'failed';
+    this.connectionUiMessage = normalizedMessage;
+    this.errorText = normalizedMessage;
+    if (this.connectionAttemptKind === 'file_transfer') {
+      this.transferConnectionPending = false;
+      this.closeTransferSession(true, true);
+      return;
+    }
+    void this.closeSession(normalizedMessage, true);
+  }
+
+  private cancelConnectionAttempt(): void {
+    const attemptKind = this.connectionAttemptKind;
+    this.clearConnectionTimeout();
+    this.connectionUiPhase = 'idle';
+    this.connectionUiMessage = '';
+    if (attemptKind === 'file_transfer') {
+      this.transferConnectionPending = false;
+      this.closeTransferSession();
+      return;
+    }
+    void this.closeSession('已取消连接');
+  }
+
+  private retryConnectionAttempt(): void {
+    const target = this.connectionUiTarget.trim();
+    if (target.length === 0) {
+      this.dismissConnectionAttempt();
+      return;
+    }
+    this.peerTarget = target;
+    if (this.connectionAttemptKind === 'file_transfer') {
+      void this.openTransferWorkspace();
+      return;
+    }
+    void this.connectSession(this.lastConnectionKind);
+  }
+
+  private dismissConnectionAttempt(): void {
+    this.clearConnectionTimeout();
+    this.connectionUiPhase = 'idle';
+    this.connectionUiMessage = '';
+    this.connectionAttemptKind = 'primary';
+  }
+
   private async connectRemoteSession(): Promise<void> {
     await this.connectSession('remote_control');
   }
@@ -986,6 +1307,9 @@ struct RustDeskIndex {
   }
 
   private async connectSession(kind: PrimarySessionKind): Promise<void> {
+    if (this.sessionCloseInFlight) {
+      return;
+    }
     if (!this.runtimeInitialized) {
       this.initializeRuntime();
     }
@@ -999,6 +1323,8 @@ struct RustDeskIndex {
     if (this.activeSessionId.length > 0) {
       await this.closeSession('正在切换会话');
     }
+    await this.applySessionFullscreen(false, true);
+    this.beginConnectionAttempt(kind, target);
     this.activeSessionKind = kind;
     this.activeSessionDefaults = this.copySessionDefaults(this.sessionDefaults);
     this.clipboardSyncEnabled = this.activeSessionDefaults.clipboardEnabled;
@@ -1024,30 +1350,19 @@ struct RustDeskIndex {
       return;
     }
     if (!sessionCreated) {
-      if (this.activeSessionId.length > 0) {
-        await this.closeSession(this.errorText);
-      }
-      return;
-    }
-    try {
-      await this.preparePreviewSurface(connectionGeneration);
-    } catch (error) {
-      if (connectionGeneration === this.connectionGeneration) {
-        this.errorText = String(error);
-        await this.closeSession(this.errorText);
-      }
-      return;
-    }
-    if (connectionGeneration !== this.connectionGeneration) {
+      this.failConnectionAttempt(this.errorText || '无法创建连接会话');
       return;
     }
     const sessionStarted = await this.startSession();
     if (connectionGeneration !== this.connectionGeneration || !sessionStarted) {
       if (connectionGeneration === this.connectionGeneration) {
-        await this.closeSession(this.errorText);
+        this.failConnectionAttempt(this.errorText || '无法启动连接');
       }
       return;
     }
+    this.connectionUiPhase = 'connecting';
+    this.connectionUiMessage = '正在等待远端响应；可随时取消。';
+    this.scheduleConnectionTimeout();
     this.publishDataTransferChanged();
     if (kind === 'remote_control') {
       this.refreshRemoteAudioState();
@@ -1056,6 +1371,7 @@ struct RustDeskIndex {
       this.closeRemoteAudio();
     }
     this.startPolling();
+    void this.pollSessionEvents();
   }
 
   private async createSession(target: string, kind: PrimarySessionKind): Promise<boolean> {
@@ -1099,18 +1415,25 @@ struct RustDeskIndex {
     this.passwordDialogVisible = true;
     if (kind === 'file_transfer') {
       this.transferRootStatus = message.length > 0 ? message : '文件传输等待密码验证';
+      this.clearConnectionTimeout();
+      this.connectionAttemptKind = 'file_transfer';
+      this.connectionUiPhase = 'awaiting_password';
+      this.connectionUiMessage = this.transferRootStatus;
     } else {
+      this.clearConnectionTimeout();
+      this.connectionUiPhase = 'awaiting_password';
+      this.connectionUiMessage = message.length > 0 ? message : '请输入远端设备密码后继续连接。';
       this.sessionPhase = 'awaiting_password';
       this.sessionMessage = '等待输入密码';
-      this.connectionSummary = '已建立连接，等待密码验证';
+      this.connectionSummary = '等待密码验证';
+      void this.applySessionFullscreen(false, true);
     }
     this.clearPasswordTimeout();
     this.passwordTimeoutId = setTimeout(() => {
       if (this.passwordDialogVisible) {
         this.passwordDialogVisible = false;
         if (this.passwordSessionKind === 'file_transfer') {
-          this.transferRootStatus = '文件传输密码输入超时';
-          this.closeTransferSession();
+          this.failConnectionAttempt('文件传输密码输入超时');
         } else {
           this.handleRemoteDisconnect('密码输入超时');
         }
@@ -1150,14 +1473,27 @@ struct RustDeskIndex {
           return;
         }
         this.transferRootStatus = '正在验证文件传输密码';
+        this.connectionAttemptKind = 'file_transfer';
+        this.connectionUiPhase = 'authenticating';
+        this.connectionUiMessage = this.transferRootStatus;
+        this.scheduleConnectionTimeout();
         return;
       }
+      this.connectionUiPhase = 'authenticating';
+      this.connectionUiMessage = '密码已提交，正在等待远端验证。';
+      this.scheduleConnectionTimeout();
       const response = this.nativeSessionBridge.login(this.activeSessionId, password, this.rememberPassword);
       hilog.info(DOMAIN, TAG, 'submitPassword sessionId=%{public}s remember=%{public}s ok=%{public}s', this.activeSessionId, String(this.rememberPassword), String(response.ok));
       this.updateSessionState(response);
+      if (!response.ok) {
+        this.failConnectionAttempt(response.message ?? '密码提交失败');
+      }
     } catch (error) {
       this.errorText = String(error);
       hilog.error(DOMAIN, TAG, 'submitPassword failed sessionId=%{public}s error=%{public}s', this.activeSessionId, this.errorText);
+      if (this.passwordSessionKind === 'primary') {
+        this.failConnectionAttempt(this.errorText);
+      }
     }
   }
 
@@ -1166,72 +1502,93 @@ struct RustDeskIndex {
     this.passwordDialogVisible = false;
     this.clearPasswordTimeout();
     if (kind === 'file_transfer') {
+      this.clearConnectionTimeout();
+      this.connectionUiPhase = 'idle';
+      this.connectionUiMessage = '';
+      this.transferConnectionPending = false;
       this.closeTransferSession();
       return;
     }
     this.closeSession('已取消密码输入');
   }
 
-  private async closeSession(reason?: string): Promise<void> {
-    this.connectionGeneration += 1;
-    const sessionId = this.activeSessionId;
-    hilog.info(DOMAIN, TAG, 'closeSession sessionId=%{public}s reason=%{public}s', sessionId, reason ?? '');
-    if (this.relativeMouseMode && sessionId) {
-      this.syncRelativeMouseMode(false);
-    }
-    this.remoteInteractionReady = false;
-    this.stopInputInterceptor();
-    this.clipboardController?.reset();
-    this.clearPreviewKeyboardBlurTimer();
-    this.previewKeyboardCaptureFocused = false;
-    this.setSessionKeyboardEntered(false);
-    this.applySessionFullscreen(false);
-    this.unregisterFoldHoverListeners();
-    this.passwordDialogVisible = false;
-    this.showPreviewModal = false;
-    this.clearPasswordTimeout();
-    this.inputController?.releasePressedButtons();
-    this.clearSurfaceBinding();
-    this.stopPolling();
-    this.closeRemoteAudio();
-    this.resetPreviewState();
-    this.connectionSummary = '未连接';
-    if (reason) {
-      this.sessionMessage = reason;
-    }
-    if (!sessionId) {
-      this.chatStore.clear();
-      this.refreshChatState();
-      this.sessionPhase = 'idle';
-      this.activeSessionKind = 'remote_control';
-      this.activeSessionDefaults = this.copySessionDefaults(this.sessionDefaults);
-      this.applySessionDefaultsToIdleState(this.decoderCapabilities);
-      this.refreshDirectorySnapshot();
+  private async closeSession(reason?: string, preserveConnectionFailure: boolean = false): Promise<void> {
+    if (this.sessionCloseInFlight) {
       return;
     }
+    this.sessionCloseInFlight = true;
     try {
-      const response = this.nativeSessionBridge.closeSession(sessionId);
-      this.updateSessionState(response);
-    } catch (error) {
-      this.errorText = String(error);
+      this.connectionGeneration += 1;
+      this.clearConnectionTimeout();
+      if (!preserveConnectionFailure) {
+        this.connectionUiPhase = 'idle';
+        this.connectionUiMessage = '';
+      }
+      const sessionId = this.activeSessionId;
+      hilog.info(DOMAIN, TAG, 'closeSession sessionId=%{public}s reason=%{public}s', sessionId, reason ?? '');
+      if (this.relativeMouseMode && sessionId) {
+        this.syncRelativeMouseMode(false);
+      }
+      this.remoteInteractionReady = false;
+      this.stopInputInterceptor();
+      this.clipboardController?.reset();
+      this.clearPreviewKeyboardBlurTimer();
+      this.previewKeyboardCaptureFocused = false;
+      this.setSessionKeyboardEntered(false);
+      await this.applySessionFullscreen(false, true);
+      this.unregisterFoldHoverListeners();
+      this.passwordDialogVisible = false;
+      this.showPreviewModal = false;
+      this.clearPasswordTimeout();
+      this.inputController?.releasePressedButtons();
+      this.clearSurfaceBinding();
+      this.stopPolling();
+      this.closeRemoteAudio();
+      this.resetPreviewState();
+      this.connectionSummary = preserveConnectionFailure
+        ? `连接失败 · ${this.connectionUiTarget || this.peerTarget}`
+        : '未连接';
+      if (reason) {
+        this.sessionMessage = reason;
+      }
+      if (!sessionId) {
+        this.chatStore.clear();
+        this.refreshChatState();
+        this.sessionPhase = preserveConnectionFailure ? 'failed' : 'idle';
+        this.activeSessionKind = 'remote_control';
+        this.activeSessionDefaults = this.copySessionDefaults(this.sessionDefaults);
+        this.applySessionDefaultsToIdleState(this.decoderCapabilities);
+        this.refreshDirectorySnapshot();
+        return;
+      }
+      try {
+        const response = this.nativeSessionBridge.closeSession(sessionId);
+        this.updateSessionState(response);
+      } catch (error) {
+        this.errorText = String(error);
+      } finally {
+        this.chatStore.clear();
+        this.refreshChatState();
+        this.activeSessionId = '';
+        this.activeCoreSessionId = '';
+        this.sessionPhase = preserveConnectionFailure ? 'failed' : 'idle';
+        this.activeSessionKind = 'remote_control';
+        this.activeSessionDefaults = this.copySessionDefaults(this.sessionDefaults);
+        this.applySessionDefaultsToIdleState(this.decoderCapabilities);
+        this.refreshDirectorySnapshot();
+        this.publishDataTransferChanged();
+      }
     } finally {
-      this.chatStore.clear();
-      this.refreshChatState();
-      this.activeSessionId = '';
-      this.activeCoreSessionId = '';
-      this.sessionPhase = 'idle';
-      this.activeSessionKind = 'remote_control';
-      this.activeSessionDefaults = this.copySessionDefaults(this.sessionDefaults);
-      this.applySessionDefaultsToIdleState(this.decoderCapabilities);
-      this.refreshDirectorySnapshot();
-      this.publishDataTransferChanged();
+      this.sessionCloseInFlight = false;
     }
   }
 
   private handleRemoteDisconnect(message: string): void {
+    if (this.sessionCloseInFlight) {
+      return;
+    }
     hilog.warn(DOMAIN, TAG, 'handleRemoteDisconnect sessionId=%{public}s message=%{public}s', this.activeSessionId, message);
-    this.errorText = message;
-    this.closeSession(message);
+    this.failConnectionAttempt(message);
   }
 
   private resetPreviewState(): void {
@@ -1567,7 +1924,9 @@ struct RustDeskIndex {
       && this.transferSessionTarget.length > 0
       && this.transferSessionTarget !== target) {
       this.errorText = `已有 ${this.transferSessionTarget} 的文件传输会话，请先结束该会话再切换设备`;
-      this.showTransferWorkspace = true;
+      if (this.transferManager.canTransfer()) {
+        this.showTransferWorkspace = true;
+      }
       return;
     }
     if (!this.transferRoot) {
@@ -1586,17 +1945,34 @@ struct RustDeskIndex {
       this.preferences?.saveDownloadRootUri(root.uri);
       this.loadTransferLocalEntries();
     }
-    if (!this.transferManager.isReady()) {
-      if (!this.transferManager.open(target, '', false, this.transferRoot)) {
-        this.transferRootStatus = '无法启动独立文件传输会话';
-        this.errorText = this.transferRootStatus;
+    if (this.transferManager.isReady()) {
+      if (this.transferManager.canTransfer()) {
+        this.transferConnectionPending = false;
+        this.connectionUiPhase = 'idle';
+        this.connectionUiMessage = '';
+        this.showTransferWorkspace = true;
+        this.syncTransferState();
         return;
       }
-      this.transferSessionTarget = target;
+      this.beginTransferConnectionAttempt(target);
       this.startTransferPolling();
+      this.scheduleConnectionTimeout();
+      this.showTransferWorkspace = false;
+      this.syncTransferState();
+      return;
     }
-    this.transferSessionReady = true;
-    this.showTransferWorkspace = true;
+    this.beginTransferConnectionAttempt(target);
+    if (!this.transferManager.open(target, '', false, this.transferRoot)) {
+      this.transferRootStatus = this.transferManager.getStatusMessage();
+      this.failConnectionAttempt(this.transferRootStatus || '无法启动独立文件传输会话');
+      return;
+    }
+    this.transferSessionTarget = target;
+    this.startTransferPolling();
+    this.scheduleConnectionTimeout();
+    this.transferSessionReady = this.transferManager.canTransfer();
+    this.transferConnectionStatus = this.transferManager.getStatusMessage();
+    this.showTransferWorkspace = false;
     this.previewKeyboardCaptureFocused = false;
     this.syncInputInterceptor();
     this.syncTransferState();
@@ -1738,6 +2114,19 @@ struct RustDeskIndex {
         this.openPasswordDialog('file_transfer', passwordMessage);
       }
       this.syncTransferState();
+      if (this.transferManager.canTransfer() && this.transferConnectionPending) {
+        this.clearConnectionTimeout();
+        this.transferConnectionPending = false;
+        this.connectionUiPhase = 'idle';
+        this.connectionUiMessage = '';
+        this.showTransferWorkspace = true;
+        this.previewKeyboardCaptureFocused = false;
+        this.syncInputInterceptor();
+      } else if (this.transferManager.hasFailed()) {
+        this.failConnectionAttempt(this.transferManager.getStatusMessage());
+      } else if (this.transferConnectionPending && this.connectionUiPhase === 'connecting') {
+        this.connectionUiMessage = this.transferManager.getStatusMessage();
+      }
       this.publishDataTransferChanged();
     } finally {
       this.transferPollInFlight = false;
@@ -1748,6 +2137,8 @@ struct RustDeskIndex {
     this.transferItems = this.transferManager.snapshot();
     this.transferRemoteEntries = this.transferManager.getRemoteEntries();
     this.transferRemoteDirectory = this.transferManager.getRemoteDirectory();
+    this.transferSessionReady = this.transferManager.canTransfer();
+    this.transferConnectionStatus = this.transferManager.getStatusMessage();
     if (!this.hasRemoteTransferEntry(this.selectedTransferRemoteName)) {
       this.selectedTransferRemoteName = '';
     }
@@ -1756,7 +2147,7 @@ struct RustDeskIndex {
   private hasRemoteTransferEntry(name: string): boolean {
     for (let index = 0; index < this.transferRemoteEntries.length; index += 1) {
       const entry = this.transferRemoteEntries[index];
-      if (entry.name === name && entry.entry_type === 0) {
+      if (entry.name === name && RemoteFilePath.isFileType(entry.entry_type)) {
         return true;
       }
     }
@@ -1786,7 +2177,7 @@ struct RustDeskIndex {
   private downloadSelectedTransferFile(): void {
     const remote = this.findRemoteTransferEntry(this.selectedTransferRemoteName);
     const root = this.transferRoot;
-    if (!remote || !root || remote.entry_type !== 0 || !this.transferManager.isReady()) {
+    if (!remote || !root || !RemoteFilePath.isFileType(remote.entry_type) || !this.transferManager.isReady()) {
       return;
     }
     const localPath = this.downloadRootManager.buildChildPath(root.path, remote.name);
@@ -1820,13 +2211,12 @@ struct RustDeskIndex {
   }
 
   private joinRemoteTransferPath(directory: string, name: string): string {
-    const base = directory.trim().replace(/\/+$/, '');
-    return base.length === 0 || base === '/' ? `/${name}` : `${base}/${name}`;
+    return RemoteFilePath.join(directory, name);
   }
 
   private openTransferRemoteDirectory(name: string): void {
     const remote = this.findRemoteTransferEntry(name);
-    if (!remote || remote.entry_type === 0) {
+    if (!remote || !RemoteFilePath.isDirectoryType(remote.entry_type)) {
       return;
     }
     if (this.transferManager.readRemoteDirectory(this.joinRemoteTransferPath(this.transferRemoteDirectory, remote.name))) {
@@ -1835,9 +2225,7 @@ struct RustDeskIndex {
   }
 
   private openTransferParentDirectory(): void {
-    const normalized = this.transferRemoteDirectory.trim().replace(/\/+$/, '');
-    const separator = normalized.lastIndexOf('/');
-    const parent = separator <= 0 ? '/' : normalized.substring(0, separator);
+    const parent = RemoteFilePath.parent(this.transferRemoteDirectory);
     if (this.transferManager.readRemoteDirectory(parent)) {
       this.selectedTransferRemoteName = '';
     }
@@ -1868,21 +2256,32 @@ struct RustDeskIndex {
     this.syncTransferState();
   }
 
-  private closeTransferSession(): void {
+  private closeTransferSession(preserveDownloadRoot: boolean = false,
+    preserveConnectionFailure: boolean = false): void {
+    if (!preserveConnectionFailure && this.connectionAttemptKind === 'file_transfer') {
+      this.clearConnectionTimeout();
+      this.connectionUiPhase = 'idle';
+      this.connectionUiMessage = '';
+      this.connectionAttemptKind = 'primary';
+    }
     this.showTransferWorkspace = false;
     this.transferSessionReady = false;
+    this.transferConnectionPending = false;
     this.cancelAllTransfers();
     this.stopTransferPolling();
     this.transferManager.close();
-    this.transferRoot = undefined;
     this.transferSessionTarget = '';
-    this.transferRootPath = '';
-    this.transferLocalEntries = [];
     this.transferRemoteEntries = [];
     this.transferItems = [];
     this.selectedTransferLocalName = '';
     this.selectedTransferRemoteName = '';
-    this.transferRootStatus = '选择下载位置后可传输';
+    if (!preserveDownloadRoot) {
+      this.transferRoot = undefined;
+      this.transferRootPath = '';
+      this.transferLocalEntries = [];
+      this.transferRootStatus = '选择下载位置后可传输';
+    }
+    this.transferConnectionStatus = '文件传输未连接';
     this.refreshDirectorySnapshot();
     this.publishDataTransferChanged();
   }
@@ -2246,7 +2645,9 @@ struct RustDeskIndex {
     return window.getLastWindow(hostContext)
       .then(async (currentWindow: window.Window) => {
         await currentWindow.setPreferredOrientation(
-          active ? window.Orientation.LANDSCAPE : window.Orientation.AUTO_ROTATION,
+          active
+            ? window.Orientation.LANDSCAPE
+            : (this.isPcDevice() ? window.Orientation.AUTO_ROTATION : window.Orientation.PORTRAIT),
         );
         if (active) {
           await currentWindow.setWindowLayoutFullScreen(true);
@@ -2469,8 +2870,9 @@ struct RustDeskIndex {
       void this.preparePreviewSurface(this.connectionGeneration)
         .then(() => this.configureDisplayFromPeerInfo(event))
         .catch((error: Error) => {
-          this.errorText = `Preview surface setup failed: ${String(error)}`;
-          hilog.error(DOMAIN, TAG, 'preparePreviewSurface failed: %{public}s', this.errorText);
+          const message = `Preview surface setup failed: ${String(error)}`;
+          hilog.error(DOMAIN, TAG, 'preparePreviewSurface failed: %{public}s', message);
+          this.failConnectionAttempt(message);
         });
       return;
     }
@@ -3522,8 +3924,15 @@ struct RustDeskIndex {
   }
 
   private handleSessionEvent(event: NativeEvent): void {
+    if (event.name === 'close') {
+      this.handleRemoteDisconnect('远端连接已结束');
+      return;
+    }
     if (event.name === 'connection_ready') {
       this.connectionSummary = `secure=${String(event.secure)}, direct=${String(event.direct)}, stream=${String(event.stream_type)}`;
+      if (this.connectionUiPhase === 'connecting' || this.connectionUiPhase === 'authenticating') {
+        this.connectionUiMessage = '安全通道已建立，正在读取远端会话信息。';
+      }
       if (this.isRemoteControlSessionActive()) {
         this.ensureRemoteCursorEnabled();
       }
@@ -3531,6 +3940,10 @@ struct RustDeskIndex {
       return;
     }
     if (event.name === 'peer_info' || event.name === 'sync_peer_info') {
+      this.clearConnectionTimeout();
+      this.connectionUiPhase = 'connected';
+      this.connectionUiMessage = '连接成功，正在准备远端画面。';
+      this.sessionPhase = 'connected';
       if (event.name === 'peer_info') {
         if (event.platform && event.platform.length > 0) {
           this.peerPlatform = String(event.platform);
@@ -3629,9 +4042,9 @@ struct RustDeskIndex {
       return;
     }
     if (type === 'input-password' || type === 're-input-password') {
-      this.connectionSummary = '已建立连接，等待密码验证';
+      this.connectionSummary = '等待密码验证';
       this.errorText = message;
-      this.openPasswordDialog();
+      this.openPasswordDialog('primary', message);
       return;
     }
     if (text === WAITING_FOR_IMAGE_TEXT) {
@@ -4039,7 +4452,7 @@ struct RustDeskIndex {
         .backgroundColor($r('app.color.glass_surface'))
         .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
           adaptiveColor: AdaptiveColor.DEFAULT,
-          scale: 0.72,
+          scale: 0.48,
         })
         .linearGradient({
           angle: 142,
@@ -4414,20 +4827,20 @@ struct RustDeskIndex {
   private transferWorkspaceBuilder() {
     HdsNavigation() {
       Column() {
-        Blank()
-          .width('100%')
-          .height(this.mainTitleSpacerHeight())
-          .flexShrink(0);
-
         TransferDrawer({
+          scroller: this.transferScroller,
+          titleSpacerHeight: this.overlayMainTitleSpacerHeight(),
           downloadRootPath: this.transferRootPath,
           rootStatus: this.transferRootStatus,
+          sessionReady: this.transferSessionReady,
+          sessionStatus: this.transferConnectionStatus,
           localEntries: this.transferLocalEntries,
           remoteDirectory: this.transferRemoteDirectory,
           remoteEntries: this.transferRemoteEntries,
           selectedLocalName: this.selectedTransferLocalName,
           selectedRemoteName: this.selectedTransferRemoteName,
           transfers: this.transferItems,
+          bottomAvoidInset: this.windowBottomAvoidInset,
           onSelectLocal: (name: string) => this.selectTransferLocal(name),
           onSelectRemote: (name: string) => this.selectTransferRemote(name),
           onUpload: () => this.uploadSelectedTransferFile(),
@@ -4444,7 +4857,7 @@ struct RustDeskIndex {
       .padding({
         left: this.mainViewportWidth >= 840 ? $r('app.float.space_24') : $r('app.float.space_12'),
         right: this.mainViewportWidth >= 840 ? $r('app.float.space_24') : $r('app.float.space_12'),
-        bottom: 12 + this.windowBottomAvoidInset,
+        bottom: 0,
       })
       .backgroundColor($r('app.color.background'))
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM]);
@@ -4491,6 +4904,7 @@ struct RustDeskIndex {
         },
       },
     })
+    .bindToScrollable([this.transferScroller])
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.transparent'))
@@ -4603,10 +5017,6 @@ struct RustDeskIndex {
     return 24;
   }
 
-  private mainTabMaskHeight(): number {
-    return 96 + this.windowBottomAvoidInset;
-  }
-
   @Builder
   private ConnectPageContent() {
     ConnectTab({
@@ -4668,6 +5078,7 @@ struct RustDeskIndex {
       serverSaving: this.serverSaving,
       sessionDefaults: this.sessionDefaults,
       accountState: this.accountState,
+      accountLoginProviders: this.accountLoginProviders,
       notes: this.notes,
       errorText: this.errorText,
       wideLayout: this.isWideMainLayout(),
@@ -4681,6 +5092,8 @@ struct RustDeskIndex {
       onAccountLogin: (username: string, password: string) => this.startAccountLogin(username, password),
       onAccountVerify: (code: string) => this.startAccountVerification(code),
       onAccountCancelChallenge: () => this.cancelAccountChallenge(),
+      onAccountOidcLogin: (provider: string) => this.startAccountOidc(provider),
+      onAccountOidcCancel: () => this.cancelAccountOidc(),
       onAddressBookSync: () => this.startAddressBookSync(),
       onAccountLogout: () => this.logoutAccount(),
       onRefresh: () => this.refreshNativeState(),
@@ -4791,7 +5204,7 @@ struct RustDeskIndex {
     .backgroundColor($r('app.color.glass_surface'))
     .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
       adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.72,
+      scale: 0.48,
     })
     .linearGradient({
       angle: 142,
@@ -5009,7 +5422,7 @@ struct RustDeskIndex {
     .backgroundColor($r('app.color.glass_surface'))
     .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
       adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.72,
+      scale: 0.48,
     })
     .linearGradient({
       angle: 142,
@@ -5067,7 +5480,6 @@ struct RustDeskIndex {
     .barFloatingStyle({
       barWidth: { smallWidth: 264, mediumWidth: 360, largeWidth: 480 },
       barBottomMargin: this.mainTabBottomMargin(),
-      gradientMask: { maskColor: $r('app.color.background'), maskHeight: this.mainTabMaskHeight() },
       systemMaterialEffect: {
         materialType: hdsMaterial.MaterialType.ADAPTIVE,
         materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
@@ -5141,8 +5553,23 @@ struct RustDeskIndex {
     }
   }
 
+  private shouldRenderAmbientOrbit(): boolean {
+    return this.pageVisible &&
+      !this.showPreviewModal &&
+      !this.showTransferWorkspace &&
+      !this.passwordDialogVisible;
+  }
+
   build() {
     Stack() {
+      if (this.shouldRenderAmbientOrbit()) {
+        AmbientOrbitBackdrop({
+          viewportWidth: this.mainViewportWidth,
+          viewportHeight: this.mainViewportHeight,
+        })
+          .zIndex(0);
+      }
+
       Column() {
         if (this.isPcDevice()) {
           this.PcTitleBar();
@@ -5156,6 +5583,18 @@ struct RustDeskIndex {
       .width('100%')
       .height('100%')
       .zIndex(1)
+
+      ConnectionAttemptOverlay({
+        visible: this.connectionUiPhase !== 'idle' && !this.showPreviewModal,
+        phase: this.connectionUiPhase,
+        target: this.connectionUiTarget,
+        message: this.connectionUiMessage,
+        bottomAvoidInset: this.windowBottomAvoidInset,
+        onCancel: () => this.cancelConnectionAttempt(),
+        onRetry: () => this.retryConnectionAttempt(),
+        onDismiss: () => this.dismissConnectionAttempt(),
+      })
+      .zIndex(1500)
 
       PasswordDialog({
         visible: this.passwordDialogVisible,

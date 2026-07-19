@@ -1,4 +1,5 @@
 import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
+import { FloatingDepthOverlay, FloatingPressDepthShell } from './FloatingDepth';
 
 export interface FloatingSegmentedControlProps {
   labels: ResourceStr[];
@@ -26,10 +27,10 @@ export struct FloatingSegmentedControl {
   @Local dragStartProgress: number = 0;
   @Local dragging: boolean = false;
   @Local touchActive: boolean = false;
+  @Local selectionAnimating: boolean = false;
   @Local previewIndex: number = 0;
-  @Local lightRevision: number = 0;
-  @Local lightAnchorStep: number = -1;
   @Local sliderLightIntensity: number = 0.12;
+  private lastDragEndAt: number = 0;
   @Event onPreviewIndex: (index: number) => void = (_index: number) => {};
   @Event onProgressChange: (progress: number) => void = (_progress: number) => {};
   @Event onDragStateChange: (dragging: boolean) => void = (_dragging: boolean) => {};
@@ -66,13 +67,12 @@ export struct FloatingSegmentedControl {
   }
 
   private syncExternalProgress(): void {
-    if (this.dragging) {
+    if (this.dragging || this.selectionAnimating) {
       return;
     }
     const next = this.clampProgress(this.externalProgress());
     this.visualProgress = next;
     this.previewIndex = this.clampIndex(Math.round(next));
-    this.updateLightAnchor(next);
   }
 
   private trackWidth(): number {
@@ -98,14 +98,6 @@ export struct FloatingSegmentedControl {
     return this.badges[index];
   }
 
-  private updateLightAnchor(progress: number): void {
-    const step = Math.round(progress * 12);
-    if (step !== this.lightAnchorStep) {
-      this.lightAnchorStep = step;
-      this.lightRevision += 1;
-    }
-  }
-
   private animateSliderLight(active: boolean): void {
     this.getUIContext().animateTo({
       duration: active ? 180 : 420,
@@ -116,12 +108,19 @@ export struct FloatingSegmentedControl {
   }
 
   private animateToIndex(index: number): void {
+    if (Date.now() - this.lastDragEndAt < 160) {
+      return;
+    }
     const target = this.clampIndex(index);
     this.previewIndex = target;
-    this.updateLightAnchor(target);
+    this.selectionAnimating = true;
     this.getUIContext().animateTo({
       duration: 260,
       curve: Curve.Friction,
+      onFinish: () => {
+        this.selectionAnimating = false;
+        this.syncExternalProgress();
+      },
     }, () => {
       this.visualProgress = target;
     });
@@ -132,8 +131,7 @@ export struct FloatingSegmentedControl {
   private handleItemTouch(index: number, event: TouchEvent): void {
     if (event.type === TouchType.Down) {
       this.previewIndex = this.clampIndex(index);
-      this.touchActive = true;
-      this.updateLightAnchor(this.visualProgress);
+      this.touchActive = this.clampIndex(Math.round(this.visualProgress)) === index;
       this.animateSliderLight(true);
     } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
       this.touchActive = false;
@@ -146,7 +144,6 @@ export struct FloatingSegmentedControl {
     this.touchActive = false;
     this.dragStartProgress = this.visualProgress;
     this.previewIndex = this.clampIndex(Math.round(this.visualProgress));
-    this.updateLightAnchor(this.visualProgress);
     this.animateSliderLight(true);
     this.onDragStateChange(true);
   }
@@ -159,7 +156,6 @@ export struct FloatingSegmentedControl {
     const next = this.clampProgress(this.dragStartProgress + offsetX / itemWidth);
     this.visualProgress = next;
     this.onProgressChange(next);
-    this.updateLightAnchor(next);
     const nextIndex = this.clampIndex(Math.round(next));
     if (nextIndex !== this.previewIndex) {
       this.previewIndex = nextIndex;
@@ -171,16 +167,21 @@ export struct FloatingSegmentedControl {
     const target = this.previewIndex;
     this.dragging = false;
     this.touchActive = false;
+    this.selectionAnimating = true;
+    this.lastDragEndAt = Date.now();
     this.getUIContext().animateTo({
       duration: 260,
       curve: Curve.Friction,
+      onFinish: () => {
+        this.selectionAnimating = false;
+        this.syncExternalProgress();
+      },
     }, () => {
       this.visualProgress = target;
     });
     this.onProgressChange(target);
     this.onChange(target);
     this.onDragStateChange(false);
-    this.lightRevision += 1;
     this.animateSliderLight(false);
   }
 
@@ -254,25 +255,42 @@ export struct FloatingSegmentedControl {
       .position({ x: 4, y: 0 });
 
       if (this.itemWidth() > 0) {
-        Stack()
+        Stack() {
+          FloatingPressDepthShell({
+            pressed: this.dragging || this.touchActive,
+            compact: true,
+            radius: $r('app.float.radius_10'),
+          }) {
+            Stack() {
+              FloatingDepthOverlay({
+                pressed: this.dragging || this.touchActive,
+                compact: true,
+                radius: $r('app.float.radius_10'),
+              });
+            }
+            .width('100%')
+            .height('100%')
+            .id(`${this.controlId}-slider`)
+            .backgroundColor($r('app.color.brand_primary'))
+            .borderRadius($r('app.float.radius_10'))
+            .clip(true)
+            .shadow({
+              radius: 7 + this.sliderLightIntensity * 10,
+              color: $r('app.color.point_light'),
+              offsetX: 0,
+              offsetY: 0,
+            })
+            .visualEffect(RustDeskGlassEffect.interactiveContent(
+              this.sliderLightIntensity > 0,
+              $r('app.color.point_light'),
+              this.sliderLightIntensity,
+            ))
+            .renderGroup(true);
+          }
+        }
         .width(this.itemWidth())
         .height($r('app.float.control_small'))
         .position({ x: this.sliderX(), y: 4 })
-        .id(`${this.controlId}-slider-${this.lightRevision}`)
-        .backgroundColor($r('app.color.brand_primary'))
-        .borderRadius($r('app.float.radius_10'))
-        .clip(true)
-        .shadow({
-          radius: 7 + this.sliderLightIntensity * 10,
-          color: $r('app.color.point_light'),
-          offsetX: 0,
-          offsetY: 0,
-        })
-        .visualEffect(RustDeskGlassEffect.interactiveContent(
-          this.sliderLightIntensity > 0,
-          $r('app.color.point_light'),
-          this.sliderLightIntensity,
-        ))
         .renderGroup(true);
 
         Stack({ alignContent: Alignment.TopStart }) {
@@ -305,7 +323,15 @@ export struct FloatingSegmentedControl {
     .backgroundColor($r('app.color.glass_surface'))
     .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
       adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.dragging || this.touchActive ? 0.90 : 0.48,
+      scale: 0.48,
+    })
+    .linearGradient({
+      angle: 142,
+      colors: [
+        [$r('app.color.glass_gradient_high'), 0],
+        [$r('app.color.glass_gradient_mid'), 0.48],
+        [$r('app.color.glass_gradient_accent'), 1],
+      ],
     })
     .shadow(ShadowStyle.OUTER_DEFAULT_MD)
     .borderRadius($r('app.float.radius_14'))
@@ -318,7 +344,7 @@ export struct FloatingSegmentedControl {
       }
     })
     .gesture(
-      PanGesture({ fingers: 1, direction: PanDirection.Horizontal, distance: 2 })
+      PanGesture({ fingers: 1, direction: PanDirection.Horizontal, distance: 8 })
         .onActionStart((_event: GestureEvent) => this.startDrag())
         .onActionUpdate((event: GestureEvent) => this.updateDrag(event.offsetX))
         .onActionEnd((_event: GestureEvent) => this.finishDrag())

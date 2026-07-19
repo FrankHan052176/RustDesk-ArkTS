@@ -25,7 +25,8 @@ export interface NativeSessionBridge {
   transferNextJobId(): number;
   readRemoteDir(sessionId: string, path: string): ActionResponse;
   sendFiles(sessionId: string, actId: number, path: string, to: string, isRemote: boolean): ActionResponse;
-  setConfirmOverrideFile(sessionId: string, actId: number, needOverride: boolean, isUpload: boolean): ActionResponse;
+  setConfirmOverrideFile(sessionId: string, actId: number, fileNum: number,
+    needOverride: boolean, isUpload: boolean): ActionResponse;
   cancelTransfer(sessionId: string, actId: number): ActionResponse;
   getToggleOption(sessionId: string, option: string): boolean;
   toggleOption(sessionId: string, option: string): void;
@@ -109,8 +110,16 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
     return this.parseNativeResponse(() => native.sessionSendFiles(sessionId, actId, path, to, 0, false, isRemote, false));
   }
 
-  setConfirmOverrideFile(sessionId: string, actId: number, needOverride: boolean, isUpload: boolean): ActionResponse {
-    return this.parseNativeResponse(() => native.sessionSetConfirmOverrideFile(sessionId, actId, 0, needOverride, false, isUpload));
+  setConfirmOverrideFile(sessionId: string, actId: number, fileNum: number,
+    needOverride: boolean, isUpload: boolean): ActionResponse {
+    return this.parseNativeResponse(() => native.sessionSetConfirmOverrideFile(
+      sessionId,
+      actId,
+      fileNum,
+      needOverride,
+      false,
+      isUpload,
+    ));
   }
 
   cancelTransfer(sessionId: string, actId: number): ActionResponse {

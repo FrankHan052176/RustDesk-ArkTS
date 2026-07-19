@@ -1,5 +1,6 @@
 import { ChatMessage } from '../RustDeskSessionTypes';
 import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
+import { FloatingDepthOverlay, FloatingPressDepthShell } from './FloatingDepth';
 
 export interface ChatDrawerProps {
   messages: ChatMessage[];
@@ -66,7 +67,7 @@ export struct ChatDrawer {
   }
 
   private blurScale(key: string): number {
-    return this.pressedControl === key ? 0.18 : 0.72;
+    return this.pressedControl === key ? 0.18 : 0.48;
   }
 
   private animateBlur(key: string, active: boolean): void {
@@ -91,57 +92,75 @@ export struct ChatDrawer {
 
   @Builder
   private FloatingButton(key: string, label: string, emphasized: boolean, onClick: () => void) {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Stack({ alignContent: Alignment.Center }) {
-        if (emphasized) {
-          Row()
-            .width('100%')
-            .height('100%')
-            .backgroundColor($r('app.color.brand_primary'));
+    Stack() {
+      FloatingPressDepthShell({
+        pressed: this.pressedControl === key,
+        compact: true,
+        radius: $r('app.float.radius_14'),
+      }) {
+        Button({ type: ButtonType.Normal, stateEffect: false }) {
+          Stack({ alignContent: Alignment.Center }) {
+            if (emphasized) {
+              Row()
+                .width('100%')
+                .height('100%')
+                .backgroundColor($r('app.color.brand_primary'));
+            }
+
+            FloatingDepthOverlay({
+              pressed: this.pressedControl === key,
+              compact: true,
+              radius: $r('app.float.radius_14'),
+            });
+
+            Text(label)
+              .fontSize($r('app.float.font_body'))
+              .fontWeight(FontWeight.Medium)
+              .fontColor(emphasized ? $r('app.color.white') : $r('app.color.text_primary'));
+          }
+          .width('100%')
+          .height('100%')
+          .borderRadius($r('app.float.radius_14'))
+          .clip(true)
+          .visualEffect(RustDeskGlassEffect.interactiveContent(
+            this.buttonLightIntensity(key, emphasized) > 0,
+            emphasized ? $r('app.color.point_light') : $r('app.color.brand_primary'),
+            this.buttonLightIntensity(key, emphasized),
+          ));
         }
-        Text(label)
-          .fontSize($r('app.float.font_body'))
-          .fontWeight(FontWeight.Medium)
-          .fontColor(emphasized ? $r('app.color.white') : $r('app.color.text_primary'));
+        .width('100%')
+        .height('100%')
+        .padding(0)
+        .backgroundColor($r('app.color.glass_surface'))
+        .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
+          adaptiveColor: AdaptiveColor.DEFAULT,
+          scale: this.blurScale(key),
+        })
+        .linearGradient({
+          angle: 142,
+          colors: [
+            [$r('app.color.glass_gradient_high'), 0],
+            [$r('app.color.glass_gradient_mid'), 0.48],
+            [$r('app.color.glass_gradient_accent'), 1],
+          ],
+        })
+        .borderRadius($r('app.float.radius_14'))
+        .clip(true)
+        .visualEffect(RustDeskGlassEffect.featherReceiver())
+        .onTouch((event: TouchEvent) => {
+          if (event.type === TouchType.Down) {
+            this.animateBlur(key, true);
+          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+            this.animateBlur(key, false);
+          }
+        })
+        .onClick(onClick);
       }
-      .width('100%')
-      .height('100%')
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.interactiveContent(
-        this.buttonLightIntensity(key, emphasized) > 0,
-        emphasized ? $r('app.color.point_light') : $r('app.color.brand_primary'),
-        this.buttonLightIntensity(key, emphasized),
-      ));
     }
     .width(72)
     .height(42)
-    .padding(0)
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.blurScale(key),
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
     .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-    .visualEffect(RustDeskGlassEffect.featherReceiver())
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.animateBlur(key, true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.animateBlur(key, false);
-      }
-    })
-    .onClick(onClick);
+    .clip(false);
   }
 
   @Builder
@@ -193,6 +212,10 @@ export struct ChatDrawer {
 
       Row({ space: $r('app.float.space_8') }) {
         Stack() {
+          FloatingDepthOverlay({
+            radius: $r('app.float.radius_14'),
+          });
+
           Stack() {
             TextInput({ text: this.draftValue, placeholder: '输入消息' })
               .width('100%')
@@ -201,6 +224,7 @@ export struct ChatDrawer {
               .backgroundColor($r('app.color.transparent'))
               .fontColor($r('app.color.text_primary'))
               .placeholderColor($r('app.color.text_tertiary'))
+              .borderWidth(0)
               .enterKeyType(EnterKeyType.Send)
               .onFocus(() => this.inputFocused = true)
               .onBlur(() => this.inputFocused = false)
@@ -213,21 +237,13 @@ export struct ChatDrawer {
           .clip(true)
           .visualEffect(RustDeskGlassEffect.contentReceiver());
 
-          if (this.inputFocused) {
-            Row()
-              .width('100%')
-              .height('100%')
-              .border({ width: 2, color: $r('app.color.focus_ring') })
-              .borderRadius($r('app.float.radius_14'))
-              .hitTestBehavior(HitTestMode.None);
-          }
         }
         .layoutWeight(1)
         .height($r('app.float.control_regular'))
         .backgroundColor($r('app.color.glass_surface'))
         .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
           adaptiveColor: AdaptiveColor.DEFAULT,
-          scale: this.inputFocused ? 0.90 : 0.72,
+          scale: this.inputFocused ? 0.90 : 0.48,
         })
         .linearGradient({
           angle: 142,

@@ -4,6 +4,7 @@ import {
   PeerSource,
 } from '../RustDeskDirectoryTypes';
 import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
+import { FloatingDepthOverlay, FloatingPressDepthShell } from './FloatingDepth';
 import { FloatingSegmentedControl } from './FloatingSegmentedControl';
 import { PeerCard } from './PeerCard';
 
@@ -44,7 +45,6 @@ export struct DeviceDirectoryPanel {
   @Local lanRefreshing: boolean = false;
   @Local lanRefreshStatus: RefreshStatus = RefreshStatus.Inactive;
   @Local pressedControl: string = '';
-  @Local queryFocused: boolean = false;
   private swiperController: SwiperController = new SwiperController();
   @Event onRefresh: () => void = () => {};
   @Event onScanLan: () => void = () => {};
@@ -202,7 +202,7 @@ export struct DeviceDirectoryPanel {
   }
 
   private pressBlurScale(controlId: string): number {
-    return this.pressedControl === controlId ? 0.18 : 0.72;
+    return this.pressedControl === controlId ? 0.18 : 0.48;
   }
 
   private animateControl(controlId: string, active: boolean): void {
@@ -297,6 +297,10 @@ export struct DeviceDirectoryPanel {
   @Builder
   private SearchField() {
     Stack() {
+      FloatingDepthOverlay({
+        radius: $r('app.float.radius_14'),
+      });
+
       Row({ space: $r('app.float.space_12') }) {
         SymbolGlyph($r('sys.symbol.magnifyingglass'))
           .fontSize($r('app.float.icon_regular'))
@@ -313,20 +317,14 @@ export struct DeviceDirectoryPanel {
           .fontColor($r('app.color.text_primary'))
           .placeholderColor($r('app.color.text_tertiary'))
           .caretColor($r('app.color.brand_primary'))
-          .backgroundColor($r('app.color.transparent'))
-          .onFocus(() => this.queryFocused = true)
-          .onBlur(() => this.queryFocused = false);
+          .borderWidth(0)
+          .backgroundColor($r('app.color.transparent'));
 
         if (this.query.length > 0) {
           Button({ type: ButtonType.Normal, stateEffect: false }) {
             SymbolGlyph($r('sys.symbol.xmark'))
               .fontSize($r('app.float.icon_small'))
-              .fontColor([$r('app.color.text_primary')])
-              .visualEffect(RustDeskGlassEffect.interactiveContent(
-                this.pressedControl === 'search-clear',
-                $r('app.color.point_light'),
-                0.52,
-              ));
+              .fontColor([$r('app.color.text_primary')]);
           }
           .width($r('app.float.control_regular'))
           .height($r('app.float.control_regular'))
@@ -351,14 +349,6 @@ export struct DeviceDirectoryPanel {
       .clip(true)
       .visualEffect(RustDeskGlassEffect.contentReceiver());
 
-      if (this.queryFocused) {
-        Row()
-          .width('100%')
-          .height('100%')
-          .border({ width: 2, color: $r('app.color.brand_primary') })
-          .borderRadius($r('app.float.radius_14'))
-          .hitTestBehavior(HitTestMode.None);
-      }
     }
     .width('100%')
     .height($r('app.float.control_large'))
@@ -395,41 +385,63 @@ export struct DeviceDirectoryPanel {
 
   @Builder
   private EmptyActionButton(source: PeerSource) {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Row({ space: $r('app.float.space_8') }) {
-        Text(this.query.trim().length > 0 ? '×' : (source === 'lan' ? '⌁' : '↻'))
-          .fontSize($r('app.float.icon_regular'))
-          .fontColor($r('app.color.white'));
-        Text(this.query.trim().length > 0
-          ? '清除搜索'
-          : (source === 'lan' ? '扫描局域网' : '刷新设备'))
-          .fontSize($r('app.float.font_label'))
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.white'));
+    Stack() {
+      FloatingPressDepthShell({
+        pressed: this.pressedControl === `empty-${source}`,
+        radius: $r('app.float.radius_14'),
+      }) {
+        Button({ type: ButtonType.Normal, stateEffect: false }) {
+          Stack() {
+            FloatingDepthOverlay({
+              pressed: this.pressedControl === `empty-${source}`,
+              radius: $r('app.float.radius_14'),
+            });
+
+            Row({ space: $r('app.float.space_8') }) {
+              Text(this.query.trim().length > 0 ? '×' : (source === 'lan' ? '⌁' : '↻'))
+                .fontSize($r('app.float.icon_regular'))
+                .fontColor($r('app.color.white'));
+              Text(this.query.trim().length > 0
+                ? '清除搜索'
+                : (source === 'lan' ? '扫描局域网' : '刷新设备'))
+                .fontSize($r('app.float.font_label'))
+                .fontWeight(FontWeight.Medium)
+                .fontColor($r('app.color.white'));
+            }
+            .width('100%')
+            .height('100%')
+            .justifyContent(FlexAlign.Center)
+            .visualEffect(RustDeskGlassEffect.interactiveContent(
+              this.pressedControl === `empty-${source}`,
+              $r('app.color.point_light'),
+            ));
+          }
+          .width('100%')
+          .height('100%')
+          .borderRadius($r('app.float.radius_14'))
+          .clip(true);
+        }
+        .width('100%')
+        .height('100%')
+        .padding(0)
+        .backgroundColor($r('app.color.brand_primary'))
+        .borderRadius($r('app.float.radius_14'))
+        .clip(true)
+        .enabled(!(source === 'lan' && this.snapshot.lanScanning && this.query.trim().length === 0))
+        .onTouch((event: TouchEvent) => {
+          if (event.type === TouchType.Down) {
+            this.animateControl(`empty-${source}`, true);
+          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+            this.animateControl(`empty-${source}`, false);
+          }
+        })
+        .onClick(() => this.activateEmptyAction(source));
       }
-      .width('100%')
-      .height('100%')
-      .justifyContent(FlexAlign.Center)
-      .visualEffect(RustDeskGlassEffect.interactiveContent(
-        this.pressedControl === `empty-${source}`,
-        $r('app.color.point_light'),
-      ));
     }
     .width('100%')
     .height($r('app.float.control_regular'))
-    .padding(0)
-    .backgroundColor($r('app.color.brand_primary'))
     .borderRadius($r('app.float.radius_14'))
-    .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-    .enabled(!(source === 'lan' && this.snapshot.lanScanning && this.query.trim().length === 0))
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.animateControl(`empty-${source}`, true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.animateControl(`empty-${source}`, false);
-      }
-    })
-    .onClick(() => this.activateEmptyAction(source));
+    .clip(false);
   }
 
   @Builder

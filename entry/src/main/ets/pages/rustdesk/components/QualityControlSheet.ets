@@ -1,6 +1,7 @@
 import { ImageQualityPreset } from '../SessionDisplayController';
 import { QualityTelemetry } from '../RustDeskSessionTypes';
 import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
+import { FloatingDepthOverlay } from './FloatingDepth';
 import { FloatingSegmentedControl } from './FloatingSegmentedControl';
 
 export type QualityPreset = ImageQualityPreset;
@@ -97,6 +98,10 @@ export struct QualityControlSheet {
     onChange: (value: number) => void,
   ) {
     Stack() {
+      FloatingDepthOverlay({
+        radius: $r('app.float.radius_14'),
+      });
+
       Row() {
         Slider({
           value,

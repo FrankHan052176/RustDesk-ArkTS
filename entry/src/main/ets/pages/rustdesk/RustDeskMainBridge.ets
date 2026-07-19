@@ -1,6 +1,8 @@
 import native from 'rustdesk-ohrs';
 import {
   AccountActionResult,
+  AccountLoginOptionsResult,
+  AccountLoginProvider,
   AccountState,
   PeerRecord,
   PeerSource,
@@ -71,6 +73,53 @@ export class RustDeskMainBridge {
       password,
     };
     return this.parseAccountAction((): string => native.runtimeStartAccountLogin(JSON.stringify(payload)));
+  }
+
+  startAccountLoginOptions(): AccountActionResult {
+    return this.parseAccountAction((): string => native.runtimeStartAccountLoginOptions());
+  }
+
+  pollAccountLoginOptions(): AccountLoginOptionsResult {
+    const result = new AccountLoginOptionsResult();
+    try {
+      const response: ESObject = JSON.parse(native.runtimePollAccountLoginOptions());
+      result.ok = Boolean(response.ok);
+      result.state = String(response.state ?? 'idle');
+      result.message = String(response.message ?? '');
+      result.apiServer = String(response.apiServer ?? '').trim();
+      let providers: ESObject = response.providers;
+      if (providers !== undefined && providers !== null) {
+        for (let index = 0; index < providers.length; index += 1) {
+          let row: ESObject = providers[index];
+          const provider = new AccountLoginProvider();
+          provider.name = String(row.name ?? '').trim();
+          provider.label = String(row.label ?? provider.name).trim();
+          if (provider.name.length > 0) {
+            result.providers.push(provider);
+          }
+        }
+      }
+    } catch (error) {
+      result.message = String(error);
+    }
+    return result;
+  }
+
+  startAccountOidc(provider: string): AccountActionResult {
+    return this.parseAccountAction((): string => native.runtimeStartAccountOidc(provider.trim()));
+  }
+
+  pollAccountOidc(): AccountActionResult {
+    return this.parseAccountAction((): string => native.runtimePollAccountOidc());
+  }
+
+  cancelAccountOidc(): boolean {
+    try {
+      const response: ESObject = JSON.parse(native.runtimeCancelAccountOidc());
+      return Boolean(response.ok);
+    } catch (_) {
+      return false;
+    }
   }
 
   startAccountVerification(challengeId: string, code: string): AccountActionResult {
@@ -301,6 +350,9 @@ export class RustDeskMainBridge {
       result.challengeId = String(response.challengeId ?? '');
       result.challengeType = String(response.challengeType ?? '');
       result.emailHint = String(response.emailHint ?? '');
+      result.url = String(response.url ?? '').trim();
+      result.stateMessage = String(response.stateMessage ?? '');
+      result.provider = String(response.provider ?? '').trim();
       result.addressBookCount = Number(response.addressBookCount ?? 0);
       result.peerCount = Number(response.peerCount ?? 0);
       let user: ESObject = response.user;

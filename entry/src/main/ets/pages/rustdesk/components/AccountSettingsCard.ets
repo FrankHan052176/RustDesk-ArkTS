@@ -1,12 +1,17 @@
-import { AccountState } from '../RustDeskDirectoryTypes';
+import { AccountLoginProvider, AccountState } from '../RustDeskDirectoryTypes';
 import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
+import { FloatingActionSurface, FloatingGlassSurface } from './FloatingSurface';
 
 export interface AccountSettingsCardProps {
   showHeader: boolean;
+  officialServer: boolean;
   accountState: AccountState;
+  loginProviders: AccountLoginProvider[];
   onLogin: (username: string, password: string) => void;
   onVerify: (code: string) => void;
   onCancelChallenge: () => void;
+  onOidcLogin: (provider: string) => void;
+  onOidcCancel: () => void;
   onSync: () => void;
   onLogout: () => void;
 }
@@ -14,16 +19,18 @@ export interface AccountSettingsCardProps {
 @ComponentV2
 export struct AccountSettingsCard {
   @Param showHeader: boolean = true;
+  @Param officialServer: boolean = true;
   @Param accountState: AccountState = new AccountState();
+  @Param loginProviders: AccountLoginProvider[] = [];
   @Local username: string = '';
   @Local password: string = '';
   @Local verificationCode: string = '';
   @Local viewportWidth: number = 390;
-  @Local focusedField: string = '';
-  @Local pressedControlId: string = '';
   @Event onLogin: (username: string, password: string) => void = (_username: string, _password: string) => {};
   @Event onVerify: (code: string) => void = (_code: string) => {};
   @Event onCancelChallenge: () => void = () => {};
+  @Event onOidcLogin: (provider: string) => void = (_provider: string) => {};
+  @Event onOidcCancel: () => void = () => {};
   @Event onSync: () => void = () => {};
   @Event onLogout: () => void = () => {};
 
@@ -48,6 +55,10 @@ export struct AccountSettingsCard {
 
   private isTotpChallenge(): boolean {
     return this.accountState.challengeType.trim().toLowerCase() === 'totp';
+  }
+
+  private isOidcActive(): boolean {
+    return this.accountState.oidcProvider.trim().length > 0;
   }
 
   private canLogin(): boolean {
@@ -91,6 +102,43 @@ export struct AccountSettingsCard {
     this.onCancelChallenge();
   }
 
+  private requestOidc(provider: string): void {
+    const normalizedProvider = provider.trim().toLowerCase();
+    if (normalizedProvider.length === 0 || this.isBusy()) {
+      return;
+    }
+    this.onOidcLogin(normalizedProvider);
+  }
+
+  private providerLabel(provider: AccountLoginProvider): string {
+    const label = provider.label.trim();
+    return label.length > 0 ? label : provider.name.trim();
+  }
+
+  private providerActionLabel(provider: AccountLoginProvider): ResourceStr {
+    const normalizedProvider = provider.name.trim().toLowerCase();
+    if (normalizedProvider === 'github') {
+      return $r('app.string.settings_account_oidc_github');
+    }
+    if (normalizedProvider === 'google') {
+      return $r('app.string.settings_account_oidc_google');
+    }
+    if (normalizedProvider === 'microsoft' || normalizedProvider === 'azure') {
+      return $r('app.string.settings_account_oidc_microsoft');
+    }
+    return this.providerLabel(provider);
+  }
+
+  private activeOidcProviderLabel(): string {
+    const activeProvider = this.accountState.oidcProvider.trim().toLowerCase();
+    for (let index = 0; index < this.loginProviders.length; index += 1) {
+      if (this.loginProviders[index].name.trim().toLowerCase() === activeProvider) {
+        return this.providerLabel(this.loginProviders[index]);
+      }
+    }
+    return activeProvider;
+  }
+
   private accountTitle(): ResourceStr {
     if (this.accountState.displayName.trim().length > 0) {
       return this.accountState.displayName.trim();
@@ -125,6 +173,9 @@ export struct AccountSettingsCard {
       return $r('app.string.settings_account_syncing');
     }
     if (this.accountState.busy) {
+      if (this.isOidcActive()) {
+        return $r('app.string.settings_account_oidc_waiting_short');
+      }
       return this.hasChallenge()
         ? $r('app.string.settings_account_verifying')
         : $r('app.string.settings_account_logging_in');
@@ -164,21 +215,24 @@ export struct AccountSettingsCard {
     return $r('app.color.surface_secondary');
   }
 
-  private pressBlurScale(controlId: string): number {
-    return this.pressedControlId === controlId ? 0.18 : 0.72;
+  private messageColor(): ResourceColor {
+    if (this.accountState.busy || this.accountState.syncing) {
+      return $r('app.color.info');
+    }
+    if (this.accountState.loggedIn && !this.hasChallenge()) {
+      return $r('app.color.success');
+    }
+    return $r('app.color.warning');
   }
 
-  private animatePress(controlId: string, active: boolean): void {
-    this.getUIContext().animateTo({
-      duration: active ? 160 : 280,
-      curve: Curve.Friction,
-    }, () => {
-      if (active) {
-        this.pressedControlId = controlId;
-      } else if (this.pressedControlId === controlId) {
-        this.pressedControlId = '';
-      }
-    });
+  private messageBackground(): ResourceColor {
+    if (this.accountState.busy || this.accountState.syncing) {
+      return $r('app.color.info_soft');
+    }
+    if (this.accountState.loggedIn && !this.hasChallenge()) {
+      return $r('app.color.success_soft');
+    }
+    return $r('app.color.warning_soft');
   }
 
   @Builder
@@ -228,67 +282,39 @@ export struct AccountSettingsCard {
   private FloatingInput(controlId: string, placeholder: ResourceStr, value: string, inputType: InputType,
     maxLength: number, enabled: boolean, onChange: (value: string) => void) {
     Stack() {
-      Row() {
-        TextInput({ text: value, placeholder: placeholder })
-          .width('100%')
-          .height('100%')
-          .enabled(enabled)
-          .type(inputType)
-          .fontSize(controlId === 'verification-code'
-            ? $r('app.float.font_body_large')
-            : $r('app.float.font_body'))
-          .fontWeight(controlId === 'verification-code' ? FontWeight.Medium : FontWeight.Regular)
-          .letterSpacing(controlId === 'verification-code' ? 3 : 0)
-          .fontColor(enabled ? $r('app.color.text_primary') : $r('app.color.disabled_text'))
-          .placeholderColor(enabled ? $r('app.color.text_tertiary') : $r('app.color.disabled_text'))
-          .caretColor($r('app.color.brand_primary'))
-          .backgroundColor($r('app.color.transparent'))
-          .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_16') })
-          .maxLength(maxLength)
-          .onFocus(() => this.focusedField = controlId)
-          .onBlur(() => {
-            if (this.focusedField === controlId) {
-              this.focusedField = '';
-            }
-          })
-          .onChange(onChange);
-      }
-      .width('100%')
-      .height('100%')
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.contentReceiver());
-
-      if (this.focusedField === controlId) {
-        Rect()
-          .width('100%')
-          .height('100%')
-          .radius($r('app.float.radius_14'))
-          .fill($r('app.color.transparent'))
-          .stroke($r('app.color.focus_ring'))
-          .strokeWidth(2)
-          .hitTestBehavior(HitTestMode.None);
+      FloatingGlassSurface({
+        surfaceColor: enabled ? $r('app.color.glass_surface') : $r('app.color.disabled_background'),
+      }) {
+        Row() {
+          TextInput({ text: value, placeholder: placeholder })
+            .width('100%')
+            .height('100%')
+            .enabled(enabled)
+            .type(inputType)
+            .fontSize(controlId === 'verification-code'
+              ? $r('app.float.font_body_large')
+              : $r('app.float.font_body'))
+            .fontWeight(controlId === 'verification-code' ? FontWeight.Medium : FontWeight.Regular)
+            .letterSpacing(controlId === 'verification-code' ? 3 : 0)
+            .fontColor(enabled ? $r('app.color.text_primary') : $r('app.color.disabled_text'))
+            .placeholderColor(enabled ? $r('app.color.text_tertiary') : $r('app.color.disabled_text'))
+            .caretColor($r('app.color.brand_primary'))
+            .borderWidth(0)
+            .backgroundColor($r('app.color.transparent'))
+            .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_16') })
+            .maxLength(maxLength)
+            .onChange(onChange);
+        }
+        .width('100%')
+        .height('100%')
+        .borderRadius($r('app.float.radius_14'))
+        .clip(true);
       }
     }
     .width('100%')
     .height($r('app.float.control_regular'))
-    .backgroundColor(enabled ? $r('app.color.glass_surface') : $r('app.color.disabled_background'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.72,
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
-    .shadow(ShadowStyle.OUTER_DEFAULT_MD)
     .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver());
+    .clip(false);
   }
 
   @Builder
@@ -361,75 +387,45 @@ export struct AccountSettingsCard {
   }
 
   @Builder
-  private ActionButton(controlId: string, label: ResourceStr, tone: string, enabled: boolean,
+  private ActionButton(label: ResourceStr, tone: string, enabled: boolean,
     onClick: () => void) {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Stack() {
-        Rect()
-          .width('100%')
-          .height('100%')
-          .radius($r('app.float.radius_14'))
-          .fill(enabled
-            ? (tone === 'primary'
-              ? $r('app.color.brand_primary')
-              : (tone === 'danger' ? $r('app.color.error_soft') : $r('app.color.brand_primary_soft')))
-            : $r('app.color.disabled_background'))
-          .opacity(1);
-
-        Text(label)
-          .fontSize($r('app.float.font_body'))
-          .fontWeight(FontWeight.Medium)
-          .fontColor(enabled
-            ? (tone === 'primary'
-              ? $r('app.color.text_inverse')
-              : (tone === 'danger' ? $r('app.color.error') : $r('app.color.brand_primary')))
-            : $r('app.color.disabled_text'));
+    Stack() {
+      FloatingActionSurface({
+        actionEnabled: enabled,
+        touchLight: true,
+        lightColor: tone === 'danger' ? $r('app.color.error') : $r('app.color.point_light'),
+        lightPeakIntensity: 0.58,
+        onActivate: onClick,
+      }) {
+        Row() {
+          Text(label)
+            .fontSize($r('app.float.font_body'))
+            .fontWeight(FontWeight.Medium)
+            .fontColor(enabled
+              ? (tone === 'primary'
+                ? $r('app.color.text_inverse')
+                : (tone === 'danger' ? $r('app.color.error') : $r('app.color.brand_primary')))
+              : $r('app.color.disabled_text'));
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor(enabled
+          ? (tone === 'primary'
+            ? $r('app.color.brand_primary')
+            : (tone === 'danger' ? $r('app.color.error_soft') : $r('app.color.brand_primary_soft')))
+          : $r('app.color.disabled_background'))
+        .borderRadius($r('app.float.radius_14'))
+        .clip(true);
       }
-      .width('100%')
-      .height('100%')
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.interactiveContent(
-        enabled && this.pressedControlId === controlId,
-        tone === 'danger' ? $r('app.color.error') : $r('app.color.point_light'),
-        0.58,
-      ));
     }
     .width('100%')
-    .height($r('app.float.control_regular'))
-    .padding(0)
-    .enabled(enabled)
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: enabled ? this.pressBlurScale(controlId) : 0.72,
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
-    .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-    .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver())
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.animatePress(controlId, true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.animatePress(controlId, false);
-      }
-    })
-    .onClick(onClick);
+    .height($r('app.float.control_regular'));
   }
 
   @Builder
   private LoginButton() {
     this.ActionButton(
-      'account-login',
       this.accountState.busy
         ? $r('app.string.settings_account_logging_in')
         : $r('app.string.settings_account_login'),
@@ -440,9 +436,95 @@ export struct AccountSettingsCard {
   }
 
   @Builder
+  private OidcProviderButton(provider: AccountLoginProvider) {
+    this.ActionButton(
+      this.providerActionLabel(provider),
+      'secondary',
+      !this.isBusy(),
+      () => this.requestOidc(provider.name),
+    )
+  }
+
+  @Builder
+  private OidcProviderButtons() {
+    if (this.isWide() && this.loginProviders.length <= 3) {
+      Row({ space: $r('app.float.space_12') }) {
+        ForEach(this.loginProviders, (provider: AccountLoginProvider) => {
+          Column() {
+            this.OidcProviderButton(provider)
+          }
+          .layoutWeight(1);
+        })
+      }
+      .width('100%');
+    } else {
+      Column({ space: $r('app.float.space_12') }) {
+        ForEach(this.loginProviders, (provider: AccountLoginProvider) => {
+          this.OidcProviderButton(provider)
+        })
+      }
+      .width('100%');
+    }
+  }
+
+  @Builder
+  private OidcLoginContent() {
+    if (this.loginProviders.length > 0) {
+      Column({ space: $r('app.float.space_12') }) {
+        Row({ space: $r('app.float.space_12') }) {
+          Divider()
+            .layoutWeight(1)
+            .strokeWidth(0.5)
+            .color($r('app.color.divider'));
+
+          Text($r('app.string.settings_account_oidc_divider'))
+            .fontSize($r('app.float.font_caption'))
+            .fontColor($r('app.color.text_tertiary'));
+
+          Divider()
+            .layoutWeight(1)
+            .strokeWidth(0.5)
+            .color($r('app.color.divider'));
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center);
+
+        Text(this.isOidcActive()
+          ? $r('app.string.settings_account_oidc_active_hint')
+          : $r('app.string.settings_account_oidc_hint'))
+          .width('100%')
+          .fontSize($r('app.float.font_label'))
+          .lineHeight(18)
+          .fontColor($r('app.color.text_secondary'));
+
+        if (this.isOidcActive()) {
+          Text(this.activeOidcProviderLabel())
+            .width('100%')
+            .fontSize($r('app.float.font_body'))
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'));
+
+          this.ActionButton(
+            $r('app.string.settings_account_oidc_cancel'),
+            'secondary',
+            true,
+            () => this.onOidcCancel(),
+          )
+        } else {
+          this.OidcProviderButtons()
+        }
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start);
+    }
+  }
+
+  @Builder
   private LoginContent() {
     Column({ space: $r('app.float.space_20') }) {
-      Text($r('app.string.settings_account_login_hint'))
+      Text(this.officialServer
+        ? $r('app.string.settings_account_official_login_hint')
+        : $r('app.string.settings_account_login_hint'))
         .width('100%')
         .fontSize($r('app.float.font_body'))
         .lineHeight(20)
@@ -489,6 +571,8 @@ export struct AccountSettingsCard {
         .fontSize($r('app.float.font_caption'))
         .lineHeight(17)
         .fontColor($r('app.color.text_secondary'));
+
+      this.OidcLoginContent()
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start);
@@ -500,7 +584,6 @@ export struct AccountSettingsCard {
       Row({ space: $r('app.float.space_12') }) {
         Column() {
           this.ActionButton(
-            'cancel-challenge',
             $r('app.string.settings_account_cancel'),
             'secondary',
             !this.isBusy(),
@@ -511,7 +594,6 @@ export struct AccountSettingsCard {
 
         Column() {
           this.ActionButton(
-            'verify-account',
             this.accountState.busy
               ? $r('app.string.settings_account_verifying')
               : $r('app.string.settings_account_verify'),
@@ -526,7 +608,6 @@ export struct AccountSettingsCard {
     } else {
       Column({ space: $r('app.float.space_12') }) {
         this.ActionButton(
-          'verify-account',
           this.accountState.busy
             ? $r('app.string.settings_account_verifying')
             : $r('app.string.settings_account_verify'),
@@ -535,7 +616,6 @@ export struct AccountSettingsCard {
           () => this.requestVerification(),
         )
         this.ActionButton(
-          'cancel-challenge',
           $r('app.string.settings_account_cancel'),
           'secondary',
           !this.isBusy(),
@@ -657,7 +737,9 @@ export struct AccountSettingsCard {
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis });
 
-          Text($r('app.string.settings_account_signed_in_hint'))
+          Text(this.officialServer
+            ? $r('app.string.settings_account_official_signed_in_hint')
+            : $r('app.string.settings_account_signed_in_hint'))
             .width('100%')
             .fontSize($r('app.float.font_label'))
             .fontColor($r('app.color.text_secondary'));
@@ -709,7 +791,6 @@ export struct AccountSettingsCard {
       Row({ space: $r('app.float.space_12') }) {
         Column() {
           this.ActionButton(
-            'account-logout',
             $r('app.string.settings_account_logout'),
             'danger',
             !this.isBusy(),
@@ -720,7 +801,6 @@ export struct AccountSettingsCard {
 
         Column() {
           this.ActionButton(
-            'account-sync',
             this.accountState.syncing
               ? $r('app.string.settings_account_syncing')
               : $r('app.string.settings_account_sync'),
@@ -735,7 +815,6 @@ export struct AccountSettingsCard {
     } else {
       Column({ space: $r('app.float.space_12') }) {
         this.ActionButton(
-          'account-sync',
           this.accountState.syncing
             ? $r('app.string.settings_account_syncing')
             : $r('app.string.settings_account_sync'),
@@ -744,7 +823,6 @@ export struct AccountSettingsCard {
           () => this.onSync(),
         )
         this.ActionButton(
-          'account-logout',
           $r('app.string.settings_account_logout'),
           'danger',
           !this.isBusy(),
@@ -777,7 +855,7 @@ export struct AccountSettingsCard {
       .backgroundColor($r('app.color.glass_surface'))
       .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
         adaptiveColor: AdaptiveColor.DEFAULT,
-        scale: 0.72,
+        scale: 0.48,
       })
       .linearGradient({
         angle: 142,
@@ -804,17 +882,17 @@ export struct AccountSettingsCard {
         Circle()
           .width($r('app.float.space_8'))
           .height($r('app.float.space_8'))
-          .fill($r('app.color.warning'));
+          .fill(this.messageColor());
 
         Text(this.accountState.message.trim())
           .layoutWeight(1)
           .fontSize($r('app.float.font_label'))
           .lineHeight(18)
-          .fontColor($r('app.color.warning'));
+          .fontColor(this.messageColor());
       }
       .width('100%')
       .padding($r('app.float.space_16'))
-      .backgroundColor($r('app.color.warning_soft'))
+      .backgroundColor(this.messageBackground())
       .borderRadius($r('app.float.radius_14'))
     }
   }

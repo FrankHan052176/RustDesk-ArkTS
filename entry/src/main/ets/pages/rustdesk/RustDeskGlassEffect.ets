@@ -17,6 +17,24 @@ export class RustDeskGlassEffect {
       .buildEffect();
   }
 
+  // FrankHanUI point-light-source: touch-action
+  public static movableContentSource(
+    color: ResourceColor,
+    intensity: number,
+  ): VisualEffect {
+    return new hdsEffect.HdsEffectBuilder()
+      .pointLight({
+        illuminatedType: hdsEffect.PointLightIlluminatedType.CONTENT,
+        options: {
+          color,
+          intensity,
+          height: 68,
+          bloom: Math.min(0.14, intensity * 0.22),
+        },
+      })
+      .buildEffect();
+  }
+
   // FrankHanUI point-light-source: special-button
   public static interactiveContent(
     active: boolean,

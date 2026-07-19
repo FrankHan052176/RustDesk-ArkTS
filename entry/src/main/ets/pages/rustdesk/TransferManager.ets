@@ -8,6 +8,9 @@ import {
   TransferItem,
 } from './RustDeskSessionTypes';
 import { NativeEvent } from './RustDeskTypes';
+import { RemoteFilePath } from './RemoteFilePath';
+
+type TransferSessionState = 'idle' | 'connecting' | 'awaiting_password' | 'ready' | 'failed';
 
 export class TransferManager {
   private readonly bridge: NativeSessionBridge;
@@ -20,6 +23,9 @@ export class TransferManager {
   private issuedSessionIds: string[] = [];
   private passwordRequested: boolean = false;
   private passwordMessage: string = '';
+  private sessionState: TransferSessionState = 'idle';
+  private statusMessage: string = '文件传输未连接';
+  private closeInProgress: boolean = false;
 
   constructor(bridge: NativeSessionBridge, sessionIdFactory: () => string) {
     this.bridge = bridge;
@@ -27,7 +33,7 @@ export class TransferManager {
   }
 
   public open(target: string, password: string, forceRelay: boolean, root: DownloadRoot): boolean {
-    if (this.fileSessionId.length > 0 || root.path.trim().length === 0) {
+    if (this.closeInProgress || this.fileSessionId.length > 0 || root.path.trim().length === 0) {
       return false;
     }
 
@@ -44,35 +50,37 @@ export class TransferManager {
     };
     const addResponse = this.bridge.addSession(sessionId, target, options);
     if (!addResponse.ok) {
+      this.statusMessage = addResponse.message?.trim() || '无法创建文件传输会话';
       return false;
     }
     const resolvedSessionId = addResponse.session?.sessionId.trim() || sessionId;
-    if (!this.bridge.startSession(resolvedSessionId).ok) {
-      this.bridge.closeSession(resolvedSessionId);
-      return false;
-    }
-    if (!this.bridge.readRemoteDir(resolvedSessionId, '/').ok) {
-      this.bridge.closeSession(resolvedSessionId);
-      return false;
-    }
-
     this.fileSessionId = resolvedSessionId;
-    this.issuedSessionIds.push(resolvedSessionId);
     this.downloadRoot = root;
     this.remoteDirectory = '/';
     this.remoteEntries = [];
     this.transfers = [];
     this.passwordRequested = false;
     this.passwordMessage = '';
+    this.sessionState = 'connecting';
+    this.statusMessage = '正在建立文件传输连接';
+
+    if (!this.bridge.startSession(resolvedSessionId).ok) {
+      this.bridge.closeSession(resolvedSessionId);
+      this.resetSessionState('文件传输连接启动失败');
+      return false;
+    }
+    this.issuedSessionIds.push(resolvedSessionId);
     return true;
   }
 
   public poll(): boolean {
-    if (!this.isReady()) {
+    if (this.closeInProgress || !this.isReady()) {
       return false;
     }
     const response = this.bridge.pollEvents(this.fileSessionId, 20);
     if (!response.ok) {
+      this.sessionState = 'failed';
+      this.statusMessage = response.message?.trim() || '文件传输事件通道已断开';
       return false;
     }
     const events = response.events ?? [];
@@ -87,7 +95,7 @@ export class TransferManager {
   }
 
   public readRemoteDirectory(path: string): boolean {
-    if (!this.isReady() || !this.isSafeRemoteDirectoryPath(path)) {
+    if (!this.canTransfer() || !this.isSafeRemoteDirectoryPath(path)) {
       return false;
     }
     return this.bridge.readRemoteDir(this.fileSessionId, path).ok;
@@ -98,8 +106,8 @@ export class TransferManager {
   }
 
   public cancel(actId: number): boolean {
-    const item = this.findTransfer(actId, 0);
-    if (!item || this.isTerminal(item) || !this.isReady()) {
+    const item = this.findTransfer(actId);
+    if (this.closeInProgress || !item || this.isTerminal(item) || !this.isReady()) {
       return false;
     }
     const response = this.bridge.cancelTransfer(this.fileSessionId, actId);
@@ -124,22 +132,26 @@ export class TransferManager {
     }
     const response = this.bridge.login(this.fileSessionId, password, remember);
     if (!response.ok) {
+      this.sessionState = 'failed';
+      this.statusMessage = response.message?.trim() || '文件传输密码提交失败';
       return false;
     }
     this.passwordRequested = false;
     this.passwordMessage = '';
-    this.bridge.readRemoteDir(this.fileSessionId, '/');
+    this.sessionState = 'connecting';
+    this.statusMessage = '正在验证文件传输密码';
     return true;
   }
 
   public resolveOverride(actId: number, needOverride: boolean): boolean {
-    const item = this.findTransfer(actId, 0);
+    const item = this.findTransfer(actId);
     if (!item || item.state !== 'awaiting_override' || !this.isReady()) {
       return false;
     }
     const response = this.bridge.setConfirmOverrideFile(
       this.fileSessionId,
       actId,
+      item.fileNum,
       needOverride,
       item.direction === 'upload',
     );
@@ -153,14 +165,43 @@ export class TransferManager {
   public handleEvent(event: NativeEvent): boolean {
     if (event.name === 'msgbox') {
       const type = String(event.type ?? '');
+      const title = String(event.title ?? '');
+      const text = String(event.text ?? '');
       if (type === 'input-password' || type === 're-input-password') {
-        const title = String(event.title ?? '');
-        const text = String(event.text ?? '');
         this.passwordRequested = true;
         this.passwordMessage = title.length > 0 ? `${title}: ${text}` : text;
+        this.sessionState = 'awaiting_password';
+        this.statusMessage = '文件传输等待密码验证';
         return true;
       }
-      return false;
+      if (title === 'Connection Error' || type.includes('error')) {
+        this.sessionState = 'failed';
+        this.statusMessage = title.length > 0 ? `${title}: ${text}` : (text || '文件传输连接失败');
+        return true;
+      }
+      if (type === 'success') {
+        return true;
+      }
+      this.statusMessage = title.length > 0 ? `${title}: ${text}` : (text || this.statusMessage);
+      return true;
+    }
+    if (event.name === 'connection_ready') {
+      this.statusMessage = '安全通道已建立，正在读取远端文件';
+      return true;
+    }
+    if (event.name === 'peer_info' || event.name === 'sync_peer_info') {
+      const shouldLoadDirectory = this.sessionState !== 'ready';
+      this.sessionState = 'ready';
+      this.statusMessage = '文件传输已连接';
+      if (shouldLoadDirectory) {
+        this.bridge.readRemoteDir(this.fileSessionId, this.remoteDirectory);
+      }
+      return true;
+    }
+    if (event.name === 'close') {
+      this.sessionState = 'failed';
+      this.statusMessage = '文件传输连接已结束';
+      return true;
     }
     if (event.name === 'file_dir') {
       return this.handleRemoteDirectory(event);
@@ -172,17 +213,27 @@ export class TransferManager {
     }
     if (event.name === 'job_progress') {
       item.state = 'running';
+      const fileNum = this.parseNonNegativeInteger(event.file_num);
+      if (fileNum !== undefined) {
+        item.fileNum = fileNum;
+      }
       const speed = this.parseNonNegativeNumber(event.speed);
       if (speed !== undefined) {
         item.speedBytesPerSecond = speed;
       }
       const finishedSize = this.parseNonNegativeNumber(event.finished_size);
       if (finishedSize !== undefined) {
-        item.transferredBytes = finishedSize;
+        item.transferredBytes = item.totalBytes > 0
+          ? Math.min(finishedSize, item.totalBytes)
+          : finishedSize;
       }
       return true;
     }
     if (event.name === 'job_done') {
+      const fileNum = this.parseNonNegativeInteger(event.file_num);
+      if (fileNum !== undefined) {
+        item.fileNum = fileNum;
+      }
       item.state = 'completed';
       if (item.totalBytes > item.transferredBytes) {
         item.transferredBytes = item.totalBytes;
@@ -190,11 +241,29 @@ export class TransferManager {
       return true;
     }
     if (event.name === 'job_error') {
-      item.state = 'failed';
-      item.errorText = event.err?.trim() || 'Transfer failed';
+      const fileNum = this.parseNonNegativeInteger(event.file_num);
+      if (fileNum !== undefined) {
+        item.fileNum = fileNum;
+      }
+      const error = event.err?.trim() || 'Transfer failed';
+      if (error === 'cancel') {
+        item.state = 'cancelled';
+        item.errorText = '';
+      } else if (error === 'skipped') {
+        item.state = 'completed';
+        item.transferredBytes = item.totalBytes;
+        item.errorText = '';
+      } else {
+        item.state = 'failed';
+        item.errorText = error;
+      }
       return true;
     }
     if (event.name === 'override_file_confirm') {
+      const fileNum = this.parseNonNegativeInteger(event.file_num);
+      if (fileNum !== undefined) {
+        item.fileNum = fileNum;
+      }
       item.state = 'awaiting_override';
       return true;
     }
@@ -234,22 +303,32 @@ export class TransferManager {
     return this.fileSessionId.length > 0 && this.downloadRoot !== undefined;
   }
 
+  public canTransfer(): boolean {
+    return this.isReady() && this.sessionState === 'ready';
+  }
+
+  public hasFailed(): boolean {
+    return this.isReady() && this.sessionState === 'failed';
+  }
+
+  public getStatusMessage(): string {
+    return this.statusMessage;
+  }
+
   public close(): boolean {
-    if (!this.isReady()) {
-      return false;
+    if (this.fileSessionId.length === 0) {
+      this.resetSessionState('文件传输未连接');
+      return true;
     }
-    const response = this.bridge.closeSession(this.fileSessionId);
-    if (!response.ok) {
-      return false;
+    if (this.closeInProgress) {
+      return true;
     }
-    this.fileSessionId = '';
-    this.downloadRoot = undefined;
-    this.remoteDirectory = '/';
-    this.remoteEntries = [];
-    this.transfers = [];
-    this.passwordRequested = false;
-    this.passwordMessage = '';
-    return true;
+    this.closeInProgress = true;
+    const sessionId = this.fileSessionId;
+    const response = this.bridge.closeSession(sessionId);
+    this.resetSessionState('文件传输未连接');
+    this.closeInProgress = false;
+    return response.ok;
   }
 
   private startTransfer(
@@ -259,7 +338,7 @@ export class TransferManager {
     totalBytes: number,
     isRemote: boolean,
   ): boolean {
-    if (!this.isReady()
+    if (!this.canTransfer()
       || !this.isValidLocalPath(isRemote ? destinationPath : sourcePath)
       || !this.isSafeFilePath(sourcePath)
       || !this.isSafeFilePath(destinationPath)) {
@@ -307,6 +386,22 @@ export class TransferManager {
       if (directory.path.trim().length === 0) {
         return false;
       }
+      if (directory.id > 0) {
+        const item = this.findTransfer(directory.id);
+        if (!item) {
+          return false;
+        }
+        let totalBytes = 0;
+        for (let index = 0; index < directory.entries.length; index += 1) {
+          totalBytes += Math.max(Number(directory.entries[index].size), 0);
+        }
+        if (totalBytes > 0) {
+          item.totalBytes = totalBytes;
+        }
+        return true;
+      }
+      this.sessionState = 'ready';
+      this.statusMessage = '文件传输已连接';
       this.remoteDirectory = directory.path;
       this.remoteEntries = directory.entries;
       return true;
@@ -317,17 +412,16 @@ export class TransferManager {
 
   private findTransferForEvent(event: NativeEvent): TransferItem | undefined {
     const actId = this.parsePositiveInteger(event.id);
-    const fileNum = this.parseNonNegativeInteger(event.file_num);
-    if (actId === undefined || fileNum === undefined) {
+    if (actId === undefined) {
       return undefined;
     }
-    return this.findTransfer(actId, fileNum);
+    return this.findTransfer(actId);
   }
 
-  private findTransfer(actId: number, fileNum: number): TransferItem | undefined {
+  private findTransfer(actId: number): TransferItem | undefined {
     for (let index = 0; index < this.transfers.length; index += 1) {
       const item = this.transfers[index];
-      if (item.id === actId && item.fileNum === fileNum) {
+      if (item.id === actId) {
         return item;
       }
     }
@@ -352,11 +446,7 @@ export class TransferManager {
   }
 
   private isSafeRemoteDirectoryPath(path: string): boolean {
-    const normalized = path.trim().replace(/\\/g, '/');
-    if (normalized.length === 0 || !normalized.startsWith('/')) {
-      return false;
-    }
-    return !this.hasTraversalSegment(normalized);
+    return RemoteFilePath.isSafeAbsoluteDirectory(path);
   }
 
   private hasTraversalSegment(path: string): boolean {
@@ -411,6 +501,18 @@ export class TransferManager {
       return 0;
     }
     return Math.round(totalBytes);
+  }
+
+  private resetSessionState(message: string): void {
+    this.fileSessionId = '';
+    this.downloadRoot = undefined;
+    this.remoteDirectory = '/';
+    this.remoteEntries = [];
+    this.transfers = [];
+    this.passwordRequested = false;
+    this.passwordMessage = '';
+    this.sessionState = 'idle';
+    this.statusMessage = message;
   }
 
   private parsePositiveInteger(value: string | undefined): number | undefined {

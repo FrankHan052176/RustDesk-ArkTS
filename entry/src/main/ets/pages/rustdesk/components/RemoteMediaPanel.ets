@@ -1,5 +1,6 @@
 import { RemoteAudioState } from '../RustDeskSessionTypes';
 import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
+import { FloatingDepthOverlay, FloatingPressDepthShell } from './FloatingDepth';
 
 export interface RemoteMediaPanelProps {
   state: RemoteAudioState;
@@ -72,6 +73,11 @@ export struct RemoteMediaPanel {
             .backgroundColor($r('app.color.brand_primary_soft'))
             .opacity(0.56);
         }
+
+        FloatingDepthOverlay({
+          radius: $r('app.float.radius_14'),
+        });
+
         Row({ space: $r('app.float.space_12') }) {
           Column({ space: $r('app.float.space_2') }) {
             Text('远端音频')
@@ -117,7 +123,7 @@ export struct RemoteMediaPanel {
       .backgroundColor($r('app.color.glass_surface'))
       .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
         adaptiveColor: AdaptiveColor.DEFAULT,
-        scale: this.audioPressed ? 0.18 : 0.72,
+        scale: this.audioPressed ? 0.90 : 0.48,
       })
       .linearGradient({
         angle: 142,
@@ -133,52 +139,75 @@ export struct RemoteMediaPanel {
       .visualEffect(RustDeskGlassEffect.featherReceiver())
       .opacity(this.state.available ? 1 : 0.72);
 
-      Button({ type: ButtonType.Normal, stateEffect: false }) {
-        Row() {
-          Text('关闭')
-            .fontSize($r('app.float.font_body'))
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'));
+      Stack() {
+        FloatingPressDepthShell({
+          pressed: this.closePressed,
+          compact: true,
+          radius: $r('app.float.radius_14'),
+        }) {
+          Button({ type: ButtonType.Normal, stateEffect: false }) {
+            Stack() {
+              FloatingDepthOverlay({
+                pressed: this.closePressed,
+                compact: true,
+                radius: $r('app.float.radius_14'),
+              });
+
+              Row() {
+                Text('关闭')
+                  .fontSize($r('app.float.font_body'))
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor($r('app.color.text_primary'));
+              }
+              .width('100%')
+              .height('100%')
+              .justifyContent(FlexAlign.Center)
+              .borderRadius($r('app.float.radius_14'))
+              .clip(true)
+              .visualEffect(RustDeskGlassEffect.interactiveContent(
+                this.closePressed,
+                $r('app.color.point_light'),
+                0.52,
+              ));
+            }
+            .width('100%')
+            .height('100%')
+            .borderRadius($r('app.float.radius_14'))
+            .clip(true);
+          }
+          .width('100%')
+          .height('100%')
+          .padding(0)
+          .backgroundColor($r('app.color.glass_surface'))
+          .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
+            adaptiveColor: AdaptiveColor.DEFAULT,
+            scale: this.closePressed ? 0.18 : 0.48,
+          })
+          .linearGradient({
+            angle: 142,
+            colors: [
+              [$r('app.color.glass_gradient_high'), 0],
+              [$r('app.color.glass_gradient_mid'), 0.48],
+              [$r('app.color.glass_gradient_accent'), 1],
+            ],
+          })
+          .borderRadius($r('app.float.radius_14'))
+          .clip(true)
+          .visualEffect(RustDeskGlassEffect.featherReceiver())
+          .onTouch((event: TouchEvent) => {
+            if (event.type === TouchType.Down) {
+              this.animateCloseBlur(true);
+            } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+              this.animateCloseBlur(false);
+            }
+          })
+          .onClick(() => this.onClose());
         }
-        .width('100%')
-        .height('100%')
-        .justifyContent(FlexAlign.Center)
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true)
-        .visualEffect(RustDeskGlassEffect.interactiveContent(
-          this.closePressed,
-          $r('app.color.point_light'),
-          0.52,
-        ));
       }
       .width('100%')
       .height($r('app.float.control_small'))
-      .padding(0)
-      .backgroundColor($r('app.color.glass_surface'))
-      .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-        adaptiveColor: AdaptiveColor.DEFAULT,
-        scale: this.closePressed ? 0.18 : 0.72,
-      })
-      .linearGradient({
-        angle: 142,
-        colors: [
-          [$r('app.color.glass_gradient_high'), 0],
-          [$r('app.color.glass_gradient_mid'), 0.48],
-          [$r('app.color.glass_gradient_accent'), 1],
-        ],
-      })
       .borderRadius($r('app.float.radius_14'))
-      .clip(true)
-      .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-      .visualEffect(RustDeskGlassEffect.featherReceiver())
-      .onTouch((event: TouchEvent) => {
-        if (event.type === TouchType.Down) {
-          this.animateCloseBlur(true);
-        } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-          this.animateCloseBlur(false);
-        }
-      })
-      .onClick(() => this.onClose());
+      .clip(false);
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start);

@@ -57,7 +57,21 @@ export class AccountState {
   challengeId: string = '';
   challengeType: string = '';
   emailHint: string = '';
+  oidcProvider: string = '';
   message: string = '';
+}
+
+export class AccountLoginProvider {
+  name: string = '';
+  label: string = '';
+}
+
+export class AccountLoginOptionsResult {
+  ok: boolean = false;
+  state: string = 'idle';
+  message: string = '';
+  apiServer: string = '';
+  providers: AccountLoginProvider[] = [];
 }
 
 export class AccountActionResult {
@@ -70,6 +84,9 @@ export class AccountActionResult {
   name: string = '';
   displayName: string = '';
   email: string = '';
+  url: string = '';
+  stateMessage: string = '';
+  provider: string = '';
   addressBookCount: number = 0;
   peerCount: number = 0;
 }
