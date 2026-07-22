@@ -1,10 +1,10 @@
 import { PeerRecord } from '../RustDeskDirectoryTypes';
-import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
-import { FloatingActionSurface } from './FloatingSurface';
+import { FloatingActionSurface, FloatingGlassSurface } from './FloatingSurface';
 
 export interface PeerCardProps {
   peer: PeerRecord;
   compact: boolean;
+  cardWidth: number;
   transferActive: boolean;
   onSetFavorite: (peerId: string, favorite: boolean) => void;
   onRemoveRecent: (peerId: string) => void;
@@ -17,6 +17,7 @@ export interface PeerCardProps {
 export struct PeerCard {
   @Param peer: PeerRecord = new PeerRecord();
   @Param compact: boolean = false;
+  @Param cardWidth: number = 0;
   @Param transferActive: boolean = false;
   @Local favoriteActive: boolean = false;
   @Event onSetFavorite: (peerId: string, favorite: boolean) => void = (_peerId: string, _favorite: boolean) => {};
@@ -31,12 +32,7 @@ export struct PeerCard {
 
   @Monitor('peer')
   private onPeerChanged(_monitor: IMonitor): void {
-    this.getUIContext().animateTo({
-      duration: 280,
-      curve: Curve.Friction,
-    }, () => {
-      this.favoriteActive = this.peer.favorite;
-    });
+    this.favoriteActive = this.peer.favorite;
   }
 
   private displayName(): string {
@@ -74,7 +70,7 @@ export struct PeerCard {
     if (this.peer.source === 'addressBook') {
       return $r('app.color.brand_secondary');
     }
-    return $r('app.color.brand_primary');
+    return $r('app.color.neu_accent');
   }
 
   private sourceBackground(): ResourceColor {
@@ -100,242 +96,132 @@ export struct PeerCard {
     return $r('app.string.device_source_recent');
   }
 
-  private compactMetadata(): string {
-    const detail = this.identityDetail();
-    return detail.length > 0 ? `${detail} · ID ${this.peer.id}` : `ID ${this.peer.id}`;
-  }
-
   private toggleFavorite(): void {
     const next = !this.favoriteActive;
-    this.getUIContext().animateTo({
-      duration: 260,
-      curve: Curve.Friction,
-    }, () => {
-      this.favoriteActive = next;
-    });
+    this.favoriteActive = next;
     this.onSetFavorite(this.peer.id, next);
   }
 
-  private actionHighlighted(controlId: string): boolean {
-    return controlId === 'files' && this.transferActive;
+  private cardHeight(): number {
+    return this.compact ? 156 : 184;
   }
 
-  private actionAccessibilityText(controlId: string): string {
-    if (controlId === 'camera') {
-      return '查看摄像头';
-    }
-    if (controlId === 'files') {
-      return '打开文件传输';
-    }
-    return '开始远程控制';
+  private sessionSurfaceWidth(): number {
+    return this.cardWidth > 32 ? this.cardWidth - 32 : 0;
   }
 
   @Builder
-  private FavoriteSymbols(size: Resource) {
-    Stack({ alignContent: Alignment.Center }) {
-      SymbolGlyph($r('sys.symbol.star'))
-        .fontSize(size)
-        .fontColor([$r('app.color.text_secondary')])
-        .opacity(this.favoriteActive ? 0 : 1)
-        .scale({ x: this.favoriteActive ? 0.72 : 1, y: this.favoriteActive ? 0.72 : 1 });
-
-      SymbolGlyph($r('sys.symbol.star_fill'))
-        .fontSize(size)
-        .fontColor([$r('app.color.warning')])
-        .opacity(this.favoriteActive ? 1 : 0)
-        .scale({ x: this.favoriteActive ? 1 : 0.72, y: this.favoriteActive ? 1 : 0.72 });
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor(this.favoriteActive
-      ? $r('app.color.warning_soft')
-      : $r('app.color.transparent'))
-    .borderRadius($r('app.float.radius_14'))
-    .clip(true);
-  }
-
-  @Builder
-  private FavoriteButton(compact: boolean) {
+  private FavoriteButton() {
     Stack() {
       FloatingActionSurface({
-        compact: compact,
-        touchLight: true,
-        stopTouchPropagation: true,
-        lightColor: $r('app.color.warning'),
-        lightPeakIntensity: 0.66,
-        onActivate: () => this.toggleFavorite(),
+        compact: true,
+        subtleDepth: true,
+        accessibilityLabel: this.favoriteActive ? '取消收藏设备' : '收藏设备',
+        onActivate: (): void => this.toggleFavorite(),
       }) {
-        this.FavoriteSymbols(compact ? $r('app.float.icon_small') : $r('app.float.icon_regular'));
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph(this.favoriteActive ? $r('sys.symbol.star_fill') : $r('sys.symbol.star'))
+            .fontSize(18)
+            .fontColor([this.favoriteActive
+              ? $r('app.color.warning')
+              : $r('app.color.neu_text_secondary')]);
+        }
+        .width('100%')
+        .height('100%');
       }
     }
-    .width(compact ? $r('app.float.control_small') : $r('app.float.control_regular'))
-    .height(compact ? $r('app.float.control_small') : $r('app.float.control_regular'))
-    .accessibilityText(this.favoriteActive ? '取消收藏设备' : '收藏设备')
-    .accessibilityChecked(this.favoriteActive)
-    .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY);
+    .width(38)
+    .height(38)
+    .borderRadius(19)
+    .clip(false);
   }
 
   @Builder
-  private RemoveButton(compact: boolean) {
+  private RemoveButton() {
     Stack() {
       FloatingActionSurface({
-        compact: compact,
-        touchLight: true,
-        stopTouchPropagation: true,
-        lightColor: $r('app.color.error'),
-        lightPeakIntensity: 0.66,
-        onActivate: () => this.onRemoveRecent(this.peer.id),
+        compact: true,
+        subtleDepth: true,
+        accessibilityLabel: '从最近设备中移除',
+        onActivate: (): void => this.onRemoveRecent(this.peer.id),
       }) {
         Stack({ alignContent: Alignment.Center }) {
           SymbolGlyph($r('sys.symbol.trash'))
-            .fontSize(compact ? $r('app.float.icon_small') : $r('app.float.icon_regular'))
-            .fontColor([$r('app.color.white')]);
+            .fontSize(18)
+            .fontColor([$r('app.color.error')]);
         }
         .width('100%')
-        .height('100%')
-        .backgroundColor($r('app.color.error'))
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true);
+        .height('100%');
       }
     }
-    .width(compact ? $r('app.float.control_small') : $r('app.float.control_regular'))
-    .height(compact ? $r('app.float.control_small') : $r('app.float.control_regular'))
-    .accessibilityText('从最近设备中移除')
-    .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY);
+    .width(38)
+    .height(38)
+    .borderRadius(19)
+    .clip(false);
   }
 
   @Builder
-  private SessionAction(
-    icon: string,
-    label: ResourceStr,
-    controlId: string,
-    compact: boolean,
-    onClick: () => void,
-  ) {
-    Stack() {
-      FloatingActionSurface({
-        compact: compact,
-        touchLight: true,
-        stopTouchPropagation: true,
-        lightPeakIntensity: 0.66,
-        onActivate: onClick,
-      }) {
-        Row({ space: $r('app.float.space_6') }) {
-          Text(icon)
-            .fontSize(compact ? $r('app.float.icon_small') : $r('app.float.icon_regular'))
-            .fontColor(this.actionHighlighted(controlId)
-              ? $r('app.color.white')
-              : $r('app.color.text_primary'));
-          Text(label)
-            .fontSize(compact ? $r('app.float.font_label') : $r('app.float.font_body'))
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.actionHighlighted(controlId)
-              ? $r('app.color.white')
-              : $r('app.color.text_primary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis });
-        }
-        .width('100%')
-        .height('100%')
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor(this.actionHighlighted(controlId)
-          ? $r('app.color.brand_primary')
-          : $r('app.color.transparent'))
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true);
-      }
-    }
-    .layoutWeight(1)
-    .height(compact ? $r('app.float.control_small') : $r('app.float.control_regular'))
-    .scale({
-      x: this.actionHighlighted(controlId) ? 1.018 : 1,
-      y: this.actionHighlighted(controlId) ? 1.018 : 1,
-    })
-    .animation({
-      duration: 1100,
-      curve: Curve.Smooth,
-      iterations: this.actionHighlighted(controlId) ? -1 : 1,
-      playMode: PlayMode.Alternate,
-    })
-    .accessibilityText(this.actionAccessibilityText(controlId))
-    .accessibilitySelected(this.actionHighlighted(controlId))
-    .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY);
-  }
-
-  @Builder
-  private DeviceIdentity(compact: boolean) {
-    Row({ space: compact ? $r('app.float.space_8') : $r('app.float.space_12') }) {
+  private IdentityRow() {
+    Row({ space: 12 }) {
       Stack({ alignContent: Alignment.Center }) {
-        Stack({ alignContent: Alignment.Center }) {
-          SymbolGlyph($r('sys.symbol.person_crop_circle_fill'))
-            .fontSize(compact ? $r('app.float.icon_regular') : $r('app.float.icon_large'))
-            .fontColor([this.sourceAccent()]);
-        }
-        .width('100%')
-        .height('100%')
-        .backgroundColor(this.sourceBackground())
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true)
-        .visualEffect(RustDeskGlassEffect.contentReceiver());
+        SymbolGlyph($r('sys.symbol.person_crop_circle_fill'))
+          .fontSize(22)
+          .fontColor([this.sourceAccent()]);
       }
-      .width(compact ? $r('app.float.control_small') : $r('app.float.control_regular'))
-      .height(compact ? $r('app.float.control_small') : $r('app.float.control_regular'))
-      .backgroundColor($r('app.color.glass_surface'))
-      .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-        adaptiveColor: AdaptiveColor.DEFAULT,
-        scale: 0.48,
-      })
-      .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.featherReceiver());
+      .width(42)
+      .height(42)
+      .borderRadius(21)
+      .backgroundColor(this.sourceBackground());
 
-      Column({ space: $r('app.float.space_2') }) {
+      Column({ space: 3 }) {
         Text(this.displayName())
           .width('100%')
-          .fontSize($r('app.float.font_body_large'))
+          .fontSize(16)
           .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'))
+          .fontColor($r('app.color.neu_text_primary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(compact ? this.compactMetadata() : this.identityDetail())
+        Text(this.identityDetail().length > 0 ? this.identityDetail() : `ID ${this.peer.id}`)
           .width('100%')
-          .fontSize($r('app.float.font_caption'))
-          .fontColor($r('app.color.text_secondary'))
+          .fontSize(12)
+          .fontColor($r('app.color.neu_text_secondary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start);
 
-      this.FavoriteButton(compact);
-      if (this.peer.source === 'recent') {
-        this.RemoveButton(compact);
+      Row({ space: 16 }) {
+        this.FavoriteButton();
+
+        if (this.peer.source === 'recent') {
+          this.RemoveButton();
+        }
       }
+      .alignItems(VerticalAlign.Center);
     }
     .width('100%')
-    .alignItems(VerticalAlign.Top);
+    .alignItems(VerticalAlign.Center);
   }
 
   @Builder
-  private PeerStatus() {
-    Row({ space: $r('app.float.space_8') }) {
+  private StatusRow() {
+    Row({ space: 8 }) {
       Circle()
-        .width($r('app.float.space_8'))
-        .height($r('app.float.space_8'))
-        .fill(this.peer.online ? $r('app.color.success') : $r('app.color.text_tertiary'));
+        .width(8)
+        .height(8)
+        .fill(this.peer.online ? $r('app.color.success') : $r('app.color.neu_text_disabled'));
       Text(this.peer.online ? '在线' : '离线')
-        .fontSize($r('app.float.font_caption'))
+        .fontSize(11)
         .fontWeight(FontWeight.Medium)
-        .fontColor(this.peer.online ? $r('app.color.success') : $r('app.color.text_tertiary'));
+        .fontColor(this.peer.online ? $r('app.color.success') : $r('app.color.neu_text_secondary'));
       Text(this.sourceText())
-        .fontSize($r('app.float.font_caption'))
-        .fontColor(this.sourceAccent())
-        .maxLines(1);
+        .fontSize(11)
+        .fontColor(this.sourceAccent());
       Text(`ID ${this.peer.id}`)
         .layoutWeight(1)
-        .fontSize($r('app.float.font_caption'))
-        .fontColor($r('app.color.text_secondary'))
+        .fontSize(11)
+        .fontColor($r('app.color.neu_text_secondary'))
         .textAlign(TextAlign.End)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis });
@@ -345,72 +231,89 @@ export struct PeerCard {
   }
 
   @Builder
-  private SessionActions(compact: boolean) {
-    Row({ space: $r('app.float.space_8') }) {
-      this.SessionAction(
-        '⌑',
-        $r('app.string.device_action_remote'),
-        'remote',
-        compact,
-        () => this.onConnectRemote(this.peer.id),
-      );
-      this.SessionAction(
-        '◉',
-        $r('app.string.device_action_camera'),
-        'camera',
-        compact,
-        () => this.onViewCamera(this.peer.id),
-      );
-      this.SessionAction(
-        '⇄',
-        $r('app.string.device_action_files'),
-        'files',
-        compact,
-        () => this.onOpenTransfer(this.peer.id),
-      );
+  private SessionAction(label: ResourceStr, accent: boolean, onClick: () => void) {
+    Stack() {
+      FloatingActionSurface({
+        compact: true,
+        subtleDepth: true,
+        accessibilityLabel: label,
+        onActivate: (): void => onClick(),
+      }) {
+        Row() {
+          Text(label)
+            .fontSize(13)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(accent ? $r('app.color.neu_accent') : $r('app.color.neu_text_primary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center);
+      }
     }
-    .width('100%');
+    .layoutWeight(1)
+    .height(44)
+    .clip(false);
   }
 
   @Builder
-  private CardContent(compact: boolean) {
-    Column({ space: compact ? $r('app.float.space_8') : $r('app.float.space_12') }) {
-      this.DeviceIdentity(compact);
-      if (!compact) {
-        this.PeerStatus();
+  private SessionActions() {
+    Stack() {
+      FloatingGlassSurface({
+        inset: true,
+        subtleDepth: true,
+        radius: $r('app.float.radius_18'),
+        surfaceWidth: this.sessionSurfaceWidth(),
+        surfaceHeight: 72,
+      }) {
+        Stack({ alignContent: Alignment.Center }) {
+          Row({ space: 16 }) {
+            this.SessionAction('远控', true, (): void => this.onConnectRemote(this.peer.id));
+            this.SessionAction('摄像头', false, (): void => this.onViewCamera(this.peer.id));
+            this.SessionAction(
+              this.transferActive ? '传输中' : '文件',
+              this.transferActive,
+              (): void => this.onOpenTransfer(this.peer.id),
+            );
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12 })
+          .alignItems(VerticalAlign.Center)
+          .clip(false);
+        }
+        .width('100%')
+        .height(72);
       }
-      this.SessionActions(compact);
     }
     .width('100%')
-    .padding(compact ? $r('app.float.space_12') : $r('app.float.space_20'))
-    .justifyContent(FlexAlign.Start)
-    .alignItems(HorizontalAlign.Start)
+    .height(72)
     .borderRadius($r('app.float.radius_18'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.contentReceiver());
+    .clip(false);
   }
 
   build() {
     Stack() {
-      this.CardContent(this.compact);
+      FloatingGlassSurface({
+        subtleDepth: true,
+        radius: $r('app.float.radius_18'),
+        surfaceWidth: this.cardWidth,
+        surfaceHeight: this.cardHeight(),
+      }) {
+        Column({ space: this.compact ? 10 : 12 }) {
+          this.IdentityRow();
+          if (!this.compact) {
+            this.StatusRow();
+          }
+          this.SessionActions();
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16, top: 16, bottom: 16 })
+        .alignItems(HorizontalAlign.Start);
+      }
     }
     .width('100%')
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.48,
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
-    .shadow(this.compact ? ShadowStyle.OUTER_DEFAULT_SM : ShadowStyle.OUTER_DEFAULT_MD)
     .borderRadius($r('app.float.radius_18'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver());
+    .clip(false);
   }
 }

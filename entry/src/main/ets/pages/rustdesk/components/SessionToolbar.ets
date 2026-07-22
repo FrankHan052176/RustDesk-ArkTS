@@ -1,7 +1,5 @@
 import { SessionOverlayPanel } from '../SessionOverlayState';
 import { SessionToolbarMetrics } from '../SessionToolbarMetrics';
-import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
-import { FloatingDepthOverlay, FloatingPressDepthShell } from './FloatingDepth';
 
 export interface SessionToolbarProps {
   relativeMouseMode: boolean;
@@ -54,8 +52,6 @@ export struct SessionToolbar {
   @Param transformMode: boolean = false;
   @Param canResetTransform: boolean = false;
   @Param panelContentHeight: number = 360;
-  @Local pressedControl: string = '';
-  @Local adjustingControl: string = '';
   @Event onTogglePointerMode: () => void = () => {};
   @Event onToggleTransform: () => void = () => {};
   @Event onResetTransform: () => void = () => {};
@@ -71,236 +67,93 @@ export struct SessionToolbar {
   @Builder
   private Empty() {}
 
-  private animateClickBlur(key: string, active: boolean): void {
-    this.getUIContext().animateTo({
-      duration: active ? 160 : 280,
-      curve: Curve.Friction,
-    }, () => {
-      if (active) {
-        this.pressedControl = key;
-      } else if (this.pressedControl === key) {
-        this.pressedControl = '';
-      }
-    });
-  }
-
-  private animateAdjustmentBlur(key: string, active: boolean): void {
-    this.getUIContext().animateTo({
-      duration: active ? 160 : 280,
-      curve: Curve.Friction,
-    }, () => {
-      if (active) {
-        this.adjustingControl = key;
-      } else if (this.adjustingControl === key) {
-        this.adjustingControl = '';
-      }
-    });
-  }
-
-  private controlLightIntensity(key: string, selected: boolean, adjustment: boolean): number {
-    const active = adjustment ? this.adjustingControl === key : this.pressedControl === key;
-    if (active) {
-      return 0.62;
-    }
-    return selected ? 0.14 : 0;
+  private actionHeight(): number {
+    return this.wideLayout ? 46 : 42;
   }
 
   @Builder
   private ToolbarAction(
-    key: string,
+    _key: string,
     label: string,
     active: boolean,
     transitionId: string,
     onClick: () => void,
   ) {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Stack() {
-        if (active) {
-          Row()
-            .width('100%')
-            .height('100%')
-            .backgroundColor($r('app.color.brand_primary'));
-        }
-
-        FloatingDepthOverlay({
-          compact: true,
-          radius: $r('app.float.radius_14'),
-        });
-
-        Row() {
-          Text(label)
-            .fontSize($r('app.float.font_label'))
-            .fontWeight(FontWeight.Medium)
-            .fontColor(active ? $r('app.color.white') : $r('app.color.text_primary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis });
-        }
-        .width('100%')
-        .height('100%')
-        .justifyContent(FlexAlign.Center)
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true)
-        .visualEffect(RustDeskGlassEffect.interactiveContent(
-          this.controlLightIntensity(key, active, true) > 0,
-          $r('app.color.point_light'),
-          this.controlLightIntensity(key, active, true),
-        ));
-      }
-      .width('100%')
-      .height('100%')
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true);
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Text(label)
+        .fontSize($r('app.float.font_label'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor(active ? $r('app.color.white') : $r('app.color.neu_text_primary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis });
     }
     .layoutWeight(1)
-    .height(this.wideLayout ? 46 : 42)
-    .padding(0)
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
+    .height(this.actionHeight())
+    .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_8') })
+    .backgroundColor(active ? $r('app.color.brand_primary') : $r('app.color.mica_control'))
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
       adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.adjustingControl === key ? 0.90 : 0.48,
+      scale: 0.56,
     })
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+    .border({ width: 1, color: active ? $r('app.color.brand_primary') : $r('app.color.mica_border') })
     .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver())
+    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+    .hoverEffect(HoverEffect.None)
+    .accessibilityText(label)
     .geometryTransition(transitionId)
     .transition(TransitionEffect.OPACITY)
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.animateAdjustmentBlur(key, true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.animateAdjustmentBlur(key, false);
-      }
-    })
-    .onClick(onClick);
+    .onClick((): void => {
+      onClick();
+    });
   }
 
   @Builder
   private PointerModeAction() {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Stack() {
-        if (this.relativeMouseMode) {
-          Row()
-            .width('100%')
-            .height('100%')
-            .backgroundColor($r('app.color.brand_primary'));
-        }
-
-        FloatingDepthOverlay({
-          compact: true,
-          radius: $r('app.float.radius_14'),
-        });
-
-        Row() {
-          Text(this.relativeMouseMode ? '触摸板' : '模拟鼠标')
-            .fontSize($r('app.float.font_label'))
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.relativeMouseMode ? $r('app.color.white') : $r('app.color.text_primary'))
-            .maxLines(1);
-        }
-        .width('100%')
-        .height('100%')
-        .justifyContent(FlexAlign.Center)
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true)
-        .visualEffect(RustDeskGlassEffect.interactiveContent(
-          this.controlLightIntensity('pointer', this.relativeMouseMode, true) > 0,
-          $r('app.color.point_light'),
-          this.controlLightIntensity('pointer', this.relativeMouseMode, true),
-        ));
-      }
-      .width('100%')
-      .height('100%')
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true);
-    }
-    .layoutWeight(1)
-    .height(this.wideLayout ? 46 : 42)
-    .padding(0)
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.adjustingControl === 'pointer' ? 0.90 : 0.48,
-    })
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-    .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver())
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.animateAdjustmentBlur('pointer', true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.animateAdjustmentBlur('pointer', false);
-      }
-    })
-    .onClick(() => this.onTogglePointerMode());
+    this.ToolbarAction(
+      'pointer',
+      this.relativeMouseMode ? '触摸板' : '模拟鼠标',
+      this.relativeMouseMode,
+      '',
+      () => this.onTogglePointerMode(),
+    );
   }
 
   @Builder
   private AudioToggle() {
-    Stack() {
-      if (this.audioAvailable && !this.audioMuted) {
-        Row()
-          .width('100%')
-          .height('100%')
-          .backgroundColor($r('app.color.brand_primary_soft'))
-          .opacity(0.52);
-      }
+    Row({ space: $r('app.float.space_6') }) {
+      Text(this.audioAvailable ? '音频' : '准备中')
+        .layoutWeight(1)
+        .fontSize($r('app.float.font_label'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.audioAvailable
+          ? $r('app.color.neu_text_primary')
+          : $r('app.color.neu_text_disabled'))
+        .maxLines(1);
 
-      FloatingDepthOverlay({
-        compact: true,
-        radius: $r('app.float.radius_14'),
-      });
-
-      Row({ space: $r('app.float.space_8') }) {
-        Text(this.audioAvailable ? '音频' : '准备中')
-          .layoutWeight(1)
-          .fontSize($r('app.float.font_label'))
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.audioAvailable ? $r('app.color.text_primary') : $r('app.color.disabled_text'));
-
-        Toggle({
-          type: ToggleType.Switch,
-          isOn: this.audioAvailable && !this.audioMuted,
-        })
-          .enabled(this.audioAvailable)
-          .selectedColor($r('app.color.brand_primary'))
-          .switchPointColor($r('app.color.white'))
-          .onTouch((event: TouchEvent) => {
-            if (!this.audioAvailable) {
-              return;
-            }
-            if (event.type === TouchType.Down) {
-              this.animateAdjustmentBlur('audio', true);
-            } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-              this.animateAdjustmentBlur('audio', false);
-            }
-          })
-          .onChange((enabled: boolean) => this.onAudioChange(enabled));
-      }
-      .width('100%')
-      .height('100%')
-      .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_8') })
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.interactiveContent(
-        this.controlLightIntensity('audio', this.audioAvailable && !this.audioMuted, true) > 0,
-        $r('app.color.point_light'),
-        this.controlLightIntensity('audio', this.audioAvailable && !this.audioMuted, true),
-      ));
+      Toggle({
+        type: ToggleType.Switch,
+        isOn: this.audioAvailable && !this.audioMuted,
+      })
+        .enabled(this.audioAvailable)
+        .selectedColor($r('app.color.brand_primary'))
+        .switchPointColor($r('app.color.white'))
+        .onChange((enabled: boolean): void => {
+          this.onAudioChange(enabled);
+        });
     }
     .layoutWeight(1)
-    .height(this.wideLayout ? 46 : 42)
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
+    .height(this.actionHeight())
+    .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_8') })
+    .backgroundColor($r('app.color.mica_control'))
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
       adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.adjustingControl === 'audio' ? 0.90 : 0.48,
+      scale: 0.56,
     })
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+    .border({ width: 1, color: $r('app.color.mica_border') })
     .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver())
-    .opacity(this.audioAvailable ? 1 : 0.72);
+    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+    .opacity(this.audioAvailable ? 1 : 0.72)
+    .clip(true);
   }
 
   @Builder
@@ -308,165 +161,64 @@ export struct SessionToolbar {
     key: string,
     label: string,
     selected: boolean,
-    adjustment: boolean,
+    _adjustment: boolean,
     enabled: boolean,
     onClick: () => void,
   ) {
-    Stack() {
-      FloatingPressDepthShell({
-        pressed: enabled && !adjustment && this.pressedControl === key,
-        compact: true,
-        radius: $r('app.float.radius_10'),
-      }) {
-        Button({ type: ButtonType.Normal, stateEffect: false }) {
-          Stack() {
-            if (selected) {
-              Row()
-                .width('100%')
-                .height('100%')
-                .backgroundColor($r('app.color.brand_primary'));
-            }
-
-            FloatingDepthOverlay({
-              pressed: enabled && !adjustment && this.pressedControl === key,
-              compact: true,
-              radius: $r('app.float.radius_10'),
-            });
-
-            Row() {
-              Text(label)
-                .fontSize($r('app.float.font_caption'))
-                .fontWeight(FontWeight.Medium)
-                .fontColor(enabled
-                  ? (selected ? $r('app.color.white') : $r('app.color.text_primary'))
-                  : $r('app.color.disabled_text'));
-            }
-            .width('100%')
-            .height('100%')
-            .justifyContent(FlexAlign.Center)
-            .borderRadius($r('app.float.radius_10'))
-            .clip(true)
-            .visualEffect(RustDeskGlassEffect.interactiveContent(
-              this.controlLightIntensity(key, selected, adjustment) > 0,
-              $r('app.color.point_light'),
-              this.controlLightIntensity(key, selected, adjustment),
-            ));
-          }
-          .width('100%')
-          .height('100%')
-          .borderRadius($r('app.float.radius_10'))
-          .clip(true);
-        }
-        .width('100%')
-        .height('100%')
-        .padding(0)
-        .enabled(enabled)
-        .backgroundColor($r('app.color.glass_surface'))
-        .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
-          adaptiveColor: AdaptiveColor.DEFAULT,
-          scale: adjustment
-            ? (this.adjustingControl === key ? 0.90 : 0.48)
-            : (this.pressedControl === key ? 0.18 : 0.48),
-        })
-        .borderRadius($r('app.float.radius_10'))
-        .clip(true)
-        .visualEffect(RustDeskGlassEffect.featherReceiver())
-        .onTouch((event: TouchEvent) => {
-          if (!enabled) {
-            return;
-          }
-          if (event.type === TouchType.Down) {
-            if (adjustment) {
-              this.animateAdjustmentBlur(key, true);
-            } else {
-              this.animateClickBlur(key, true);
-            }
-          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-            if (adjustment) {
-              this.animateAdjustmentBlur(key, false);
-            } else {
-              this.animateClickBlur(key, false);
-            }
-          }
-        })
-        .onClick(onClick);
-      }
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Text(label)
+        .fontSize($r('app.float.font_caption'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor(enabled
+          ? (selected ? $r('app.color.white') : $r('app.color.neu_text_primary'))
+          : $r('app.color.neu_text_disabled'));
     }
     .width(key === 'transform' ? 92 : 68)
     .height($r('app.float.control_compact'))
+    .padding({ left: $r('app.float.space_6'), right: $r('app.float.space_6') })
+    .enabled(enabled)
+    .backgroundColor(selected ? $r('app.color.brand_primary') : $r('app.color.mica_control'))
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
+      adaptiveColor: AdaptiveColor.DEFAULT,
+      scale: 0.56,
+    })
+    .border({ width: 1, color: selected ? $r('app.color.brand_primary') : $r('app.color.mica_border') })
     .borderRadius($r('app.float.radius_10'))
-    .clip(false);
+    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+    .hoverEffect(HoverEffect.None)
+    .accessibilityText(label)
+    .onClick((): void => {
+      if (enabled) {
+        onClick();
+      }
+    });
   }
 
   @Builder
   private DangerAction(label: string) {
-    Stack() {
-      FloatingPressDepthShell({
-        pressed: this.pressedControl === 'disconnect',
-        compact: true,
-        radius: $r('app.float.radius_14'),
-      }) {
-        Button({ type: ButtonType.Normal, stateEffect: false }) {
-          Stack() {
-            Row()
-              .width('100%')
-              .height('100%')
-              .backgroundColor($r('app.color.error'));
-
-            FloatingDepthOverlay({
-              pressed: this.pressedControl === 'disconnect',
-              compact: true,
-              radius: $r('app.float.radius_14'),
-            });
-
-            Row() {
-              Text(label)
-                .fontSize($r('app.float.font_label'))
-                .fontWeight(FontWeight.Medium)
-                .fontColor($r('app.color.white'))
-                .maxLines(1);
-            }
-            .width('100%')
-            .height('100%')
-            .justifyContent(FlexAlign.Center)
-            .borderRadius($r('app.float.radius_14'))
-            .clip(true)
-            .visualEffect(RustDeskGlassEffect.interactiveContent(
-              this.pressedControl === 'disconnect',
-              $r('app.color.error'),
-              0.66,
-            ));
-          }
-          .width('100%')
-          .height('100%')
-          .borderRadius($r('app.float.radius_14'))
-          .clip(true);
-        }
-        .width('100%')
-        .height('100%')
-        .padding(0)
-        .backgroundColor($r('app.color.glass_surface'))
-        .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
-          adaptiveColor: AdaptiveColor.DEFAULT,
-          scale: this.pressedControl === 'disconnect' ? 0.18 : 0.48,
-        })
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true)
-        .visualEffect(RustDeskGlassEffect.featherReceiver())
-        .onTouch((event: TouchEvent) => {
-          if (event.type === TouchType.Down) {
-            this.animateClickBlur('disconnect', true);
-          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-            this.animateClickBlur('disconnect', false);
-          }
-        })
-        .onClick(() => this.onDisconnect());
-      }
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Text(label)
+        .fontSize($r('app.float.font_label'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.neu_danger'))
+        .maxLines(1);
     }
     .layoutWeight(1)
-    .height(this.wideLayout ? 46 : 42)
+    .height(this.actionHeight())
+    .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_8') })
+    .backgroundColor($r('app.color.mica_control'))
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
+      adaptiveColor: AdaptiveColor.DEFAULT,
+      scale: 0.56,
+    })
+    .border({ width: 1, color: $r('app.color.mica_border') })
     .borderRadius($r('app.float.radius_14'))
-    .clip(false);
+    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+    .hoverEffect(HoverEffect.None)
+    .accessibilityText(label)
+    .onClick((): void => {
+      this.onDisconnect();
+    });
   }
 
   @Builder
@@ -475,7 +227,7 @@ export struct SessionToolbar {
       Text(this.transformSummary)
         .fontSize($r('app.float.font_caption'))
         .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_secondary'))
+        .fontColor($r('app.color.neu_text_secondary'))
         .maxLines(1);
 
       this.CompactAction('transform', this.transformMode ? '完成' : '调整画面', this.transformMode, true, true,
@@ -537,30 +289,30 @@ export struct SessionToolbar {
     }
   }
 
-  build() {
+  build(): void {
     Column({ space: $r('app.float.space_8') }) {
       Row({ space: $r('app.float.space_8') }) {
         Text(`${this.metrics.codec}`)
           .fontSize($r('app.float.font_caption'))
           .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.brand_primary'))
+          .fontColor($r('app.color.neu_accent'))
           .maxLines(1);
         Text(`${this.metrics.fps} FPS`)
           .fontSize($r('app.float.font_caption'))
-          .fontColor($r('app.color.text_secondary'))
+          .fontColor($r('app.color.neu_text_secondary'))
           .maxLines(1);
         Text(`${this.metrics.delay} ms`)
           .fontSize($r('app.float.font_caption'))
-          .fontColor($r('app.color.text_secondary'))
+          .fontColor($r('app.color.neu_text_secondary'))
           .maxLines(1);
         if (this.wideLayout) {
           Text(`解码 ${this.metrics.decode}`)
             .fontSize($r('app.float.font_caption'))
-            .fontColor($r('app.color.text_secondary'))
+            .fontColor($r('app.color.neu_text_secondary'))
             .maxLines(1);
           Text(`帧 ${this.metrics.frames}`)
             .fontSize($r('app.float.font_caption'))
-            .fontColor($r('app.color.text_secondary'))
+            .fontColor($r('app.color.neu_text_secondary'))
             .maxLines(1);
           this.TransformControls();
         }

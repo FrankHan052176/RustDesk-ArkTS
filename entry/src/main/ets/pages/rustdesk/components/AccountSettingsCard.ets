@@ -1,6 +1,13 @@
 import { AccountLoginProvider, AccountState } from '../RustDeskDirectoryTypes';
-import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
-import { FloatingActionSurface, FloatingGlassSurface } from './FloatingSurface';
+import {
+  LuminousButton,
+  LuminousControlSize,
+  LuminousSurface,
+  LuminousSurfaceState,
+  LuminousTextField,
+  LuminousTone,
+} from 'luminous_neo';
+import { FloatingGlassSurface } from './FloatingSurface';
 
 export interface AccountSettingsCardProps {
   showHeader: boolean;
@@ -46,6 +53,28 @@ export struct AccountSettingsCard {
 
   private isBusy(): boolean {
     return this.accountState.busy || this.accountState.syncing;
+  }
+
+  private fieldSurfaceWidth(): number {
+    if (this.isWide()) {
+      return Math.max(280, (this.viewportWidth - 104) / 2);
+    }
+    return Math.max(280, Math.min(this.viewportWidth - 40, 560));
+  }
+
+  private actionButtonWidth(): number {
+    return Math.min(this.fieldSurfaceWidth(), 440);
+  }
+
+  private fieldFrameWidth(): number {
+    return this.fieldSurfaceWidth() + 40;
+  }
+
+  private providerButtonWidth(): number {
+    if (this.loginProviders.length <= 1) {
+      return this.actionButtonWidth();
+    }
+    return Math.max(118, (this.actionButtonWidth() - 36) / 2);
   }
 
   private hasChallenge(): boolean {
@@ -281,228 +310,179 @@ export struct AccountSettingsCard {
   @Builder
   private FloatingInput(controlId: string, placeholder: ResourceStr, value: string, inputType: InputType,
     maxLength: number, enabled: boolean, onChange: (value: string) => void) {
-    Stack() {
-      FloatingGlassSurface({
-        surfaceColor: enabled ? $r('app.color.glass_surface') : $r('app.color.disabled_background'),
-      }) {
-        Row() {
-          TextInput({ text: value, placeholder: placeholder })
-            .width('100%')
-            .height('100%')
-            .enabled(enabled)
-            .type(inputType)
-            .fontSize(controlId === 'verification-code'
-              ? $r('app.float.font_body_large')
-              : $r('app.float.font_body'))
-            .fontWeight(controlId === 'verification-code' ? FontWeight.Medium : FontWeight.Regular)
-            .letterSpacing(controlId === 'verification-code' ? 3 : 0)
-            .fontColor(enabled ? $r('app.color.text_primary') : $r('app.color.disabled_text'))
-            .placeholderColor(enabled ? $r('app.color.text_tertiary') : $r('app.color.disabled_text'))
-            .caretColor($r('app.color.brand_primary'))
-            .borderWidth(0)
-            .backgroundColor($r('app.color.transparent'))
-            .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_16') })
-            .maxLength(maxLength)
-            .onChange(onChange);
-        }
-        .width('100%')
-        .height('100%')
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true);
-      }
-    }
-    .width('100%')
-    .height($r('app.float.control_regular'))
-    .borderRadius($r('app.float.radius_14'))
-    .clip(false);
+    LuminousTextField({
+      value: value,
+      placeholder: placeholder,
+      fieldWidth: this.fieldSurfaceWidth(),
+      fieldHeight: controlId === 'verification-code' ? 58 : 54,
+      inputType: inputType,
+      maxLength: maxLength,
+      isEnabled: enabled,
+      onChange: onChange,
+    })
+      .margin({ top: -10 })
   }
 
   @Builder
   private UsernameField() {
-    Column({ space: $r('app.float.space_8') }) {
+    Column({ space: 2 }) {
       Text($r('app.string.settings_account_username'))
-        .width('100%')
+        .width(this.fieldSurfaceWidth())
         .fontSize($r('app.float.font_label'))
         .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_secondary'));
+        .fontColor($r('app.color.neu_text_secondary'));
 
-      this.FloatingInput(
-        'username',
-        $r('app.string.settings_account_username_placeholder'),
-        this.username,
-        InputType.Normal,
-        256,
-        !this.isBusy(),
-        (value: string) => this.username = value,
-      )
+      Row() {
+        this.FloatingInput(
+          'username',
+          $r('app.string.settings_account_username_placeholder'),
+          this.username,
+          InputType.Normal,
+          256,
+          !this.isBusy(),
+          (value: string) => this.username = value,
+        )
+      }
+      .width(this.fieldFrameWidth())
+      .justifyContent(FlexAlign.Center);
     }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start);
+    .width(this.fieldFrameWidth())
+    .alignItems(HorizontalAlign.Center);
   }
 
   @Builder
   private PasswordField() {
-    Column({ space: $r('app.float.space_8') }) {
+    Column({ space: 2 }) {
       Text($r('app.string.settings_account_password'))
-        .width('100%')
+        .width(this.fieldSurfaceWidth())
         .fontSize($r('app.float.font_label'))
         .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_secondary'));
+        .fontColor($r('app.color.neu_text_secondary'));
 
-      this.FloatingInput(
-        'password',
-        $r('app.string.settings_account_password_placeholder'),
-        this.password,
-        InputType.Password,
-        256,
-        !this.isBusy(),
-        (value: string) => this.password = value,
-      )
+      Row() {
+        this.FloatingInput(
+          'password',
+          $r('app.string.settings_account_password_placeholder'),
+          this.password,
+          InputType.Password,
+          256,
+          !this.isBusy(),
+          (value: string) => this.password = value,
+        )
+      }
+      .width(this.fieldFrameWidth())
+      .justifyContent(FlexAlign.Center);
     }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start);
+    .width(this.fieldFrameWidth())
+    .alignItems(HorizontalAlign.Center);
   }
 
   @Builder
   private VerificationField() {
-    Column({ space: $r('app.float.space_8') }) {
+    Column({ space: 2 }) {
       Text($r('app.string.settings_account_verification_code'))
-        .width('100%')
+        .width(this.fieldSurfaceWidth())
         .fontSize($r('app.float.font_label'))
         .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_secondary'));
+        .fontColor($r('app.color.neu_text_secondary'));
 
-      this.FloatingInput(
-        'verification-code',
-        $r('app.string.settings_account_code_placeholder'),
-        this.verificationCode,
-        InputType.Number,
-        8,
-        !this.isBusy(),
-        (value: string) => this.verificationCode = value,
-      )
+      Row() {
+        this.FloatingInput(
+          'verification-code',
+          $r('app.string.settings_account_code_placeholder'),
+          this.verificationCode,
+          InputType.Number,
+          8,
+          !this.isBusy(),
+          (value: string) => this.verificationCode = value,
+        )
+      }
+      .width(this.fieldFrameWidth())
+      .justifyContent(FlexAlign.Center);
     }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start);
+    .width(this.fieldFrameWidth())
+    .alignItems(HorizontalAlign.Center);
   }
 
   @Builder
   private ActionButton(label: ResourceStr, tone: string, enabled: boolean,
     onClick: () => void) {
-    Stack() {
-      FloatingActionSurface({
-        actionEnabled: enabled,
-        touchLight: true,
-        lightColor: tone === 'danger' ? $r('app.color.error') : $r('app.color.point_light'),
-        lightPeakIntensity: 0.58,
-        onActivate: onClick,
-      }) {
-        Row() {
-          Text(label)
-            .fontSize($r('app.float.font_body'))
-            .fontWeight(FontWeight.Medium)
-            .fontColor(enabled
-              ? (tone === 'primary'
-                ? $r('app.color.text_inverse')
-                : (tone === 'danger' ? $r('app.color.error') : $r('app.color.brand_primary')))
-              : $r('app.color.disabled_text'));
-        }
-        .width('100%')
-        .height('100%')
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor(enabled
-          ? (tone === 'primary'
-            ? $r('app.color.brand_primary')
-            : (tone === 'danger' ? $r('app.color.error_soft') : $r('app.color.brand_primary_soft')))
-          : $r('app.color.disabled_background'))
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true);
-      }
-    }
-    .width('100%')
-    .height($r('app.float.control_regular'));
+    LuminousButton({
+      label: label,
+      controlWidth: this.actionButtonWidth(),
+      controlSizeMode: LuminousControlSize.Regular,
+      tone: tone === 'primary'
+        ? LuminousTone.Accent
+        : (tone === 'danger' ? LuminousTone.Danger : LuminousTone.Neutral),
+      isEnabled: enabled,
+      onAction: onClick,
+    })
   }
 
   @Builder
   private LoginButton() {
-    this.ActionButton(
-      this.accountState.busy
+    LuminousButton({
+      label: this.accountState.busy
         ? $r('app.string.settings_account_logging_in')
         : $r('app.string.settings_account_login'),
-      'primary',
-      this.canLogin(),
-      () => this.requestLogin(),
-    )
+      controlWidth: this.actionButtonWidth(),
+      controlSizeMode: LuminousControlSize.Regular,
+      tone: LuminousTone.Accent,
+      isEnabled: this.canLogin(),
+      onAction: () => this.requestLogin(),
+    })
+      .margin({ top: -16 })
   }
 
   @Builder
   private OidcProviderButton(provider: AccountLoginProvider) {
-    this.ActionButton(
-      this.providerActionLabel(provider),
-      'secondary',
-      !this.isBusy(),
-      () => this.requestOidc(provider.name),
-    )
+    LuminousButton({
+      label: this.providerActionLabel(provider),
+      controlWidth: this.providerButtonWidth(),
+      controlSizeMode: LuminousControlSize.Compact,
+      tone: LuminousTone.Neutral,
+      isEnabled: !this.isBusy(),
+      onAction: () => this.requestOidc(provider.name),
+    })
   }
 
   @Builder
   private OidcProviderButtons() {
-    if (this.isWide() && this.loginProviders.length <= 3) {
-      Row({ space: $r('app.float.space_12') }) {
-        ForEach(this.loginProviders, (provider: AccountLoginProvider) => {
-          Column() {
-            this.OidcProviderButton(provider)
-          }
-          .layoutWeight(1);
-        })
-      }
-      .width('100%');
-    } else {
-      Column({ space: $r('app.float.space_12') }) {
-        ForEach(this.loginProviders, (provider: AccountLoginProvider) => {
+    Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Center }) {
+      ForEach(this.loginProviders, (provider: AccountLoginProvider) => {
+        Row() {
           this.OidcProviderButton(provider)
-        })
-      }
-      .width('100%');
+        }
+        .margin({ left: 3, right: 3, bottom: -8 });
+      })
     }
+    .width(this.fieldFrameWidth());
   }
 
   @Builder
   private OidcLoginContent() {
     if (this.loginProviders.length > 0) {
-      Column({ space: $r('app.float.space_12') }) {
-        Row({ space: $r('app.float.space_12') }) {
-          Divider()
-            .layoutWeight(1)
-            .strokeWidth(0.5)
-            .color($r('app.color.divider'));
-
-          Text($r('app.string.settings_account_oidc_divider'))
-            .fontSize($r('app.float.font_caption'))
-            .fontColor($r('app.color.text_tertiary'));
-
-          Divider()
-            .layoutWeight(1)
-            .strokeWidth(0.5)
-            .color($r('app.color.divider'));
-        }
-        .width('100%')
-        .alignItems(VerticalAlign.Center);
+      Column({ space: 2 }) {
+        Text('浏览器授权')
+          .width(this.fieldSurfaceWidth())
+          .fontSize($r('app.float.font_label'))
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.neu_text_primary'));
 
         Text(this.isOidcActive()
           ? $r('app.string.settings_account_oidc_active_hint')
           : $r('app.string.settings_account_oidc_hint'))
-          .width('100%')
-          .fontSize($r('app.float.font_label'))
-          .lineHeight(18)
-          .fontColor($r('app.color.text_secondary'));
+          .width(this.fieldSurfaceWidth())
+          .fontSize($r('app.float.font_caption'))
+          .lineHeight(17)
+          .fontColor($r('app.color.neu_text_secondary'));
 
         if (this.isOidcActive()) {
           Text(this.activeOidcProviderLabel())
-            .width('100%')
+            .width(this.fieldSurfaceWidth())
             .fontSize($r('app.float.font_body'))
             .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'));
+            .fontColor($r('app.color.neu_text_primary'));
 
           this.ActionButton(
             $r('app.string.settings_account_oidc_cancel'),
@@ -514,21 +494,63 @@ export struct AccountSettingsCard {
           this.OidcProviderButtons()
         }
       }
-      .width('100%')
-      .alignItems(HorizontalAlign.Start);
+      .width(this.fieldFrameWidth())
+      .alignItems(HorizontalAlign.Center);
     }
   }
 
   @Builder
+  private LoginStatus() {
+    Stack({ alignContent: Alignment.Center }) {
+      LuminousSurface({
+        state: LuminousSurfaceState.Inset,
+        surfaceWidth: this.fieldSurfaceWidth(),
+        surfaceHeight: 58,
+        cornerRadius: 21,
+      }) {
+        Row({ space: 10 }) {
+          Circle()
+            .width(8)
+            .height(8)
+            .fill(this.statusColor());
+          Column({ space: 2 }) {
+            Text(this.statusText())
+              .width('100%')
+              .fontSize(13)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.neu_text_primary'));
+            Text(this.apiServerText())
+              .width('100%')
+              .fontSize(10)
+              .fontColor($r('app.color.neu_text_secondary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis });
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start);
+        }
+        .width(this.fieldSurfaceWidth())
+        .height(58)
+        .padding({ left: 16, right: 16 })
+        .alignItems(VerticalAlign.Center);
+      }
+    }
+    .width(this.fieldFrameWidth())
+    .height(94)
+    .clip(false)
+  }
+
+  @Builder
   private LoginContent() {
-    Column({ space: $r('app.float.space_20') }) {
-      Text(this.officialServer
-        ? $r('app.string.settings_account_official_login_hint')
-        : $r('app.string.settings_account_login_hint'))
-        .width('100%')
-        .fontSize($r('app.float.font_body'))
-        .lineHeight(20)
-        .fontColor($r('app.color.text_secondary'));
+    Column({ space: 4 }) {
+      this.LoginStatus();
+
+      Text('登录后可在设备之间同步通讯录和账户信息。')
+        .width(this.fieldSurfaceWidth())
+        .fontSize($r('app.float.font_label'))
+        .lineHeight(19)
+        .fontColor($r('app.color.neu_text_secondary'))
+        .margin({ top: -8 });
 
       if (this.isWide()) {
         Row({ space: $r('app.float.space_16') }) {
@@ -545,37 +567,25 @@ export struct AccountSettingsCard {
         .width('100%')
         .alignItems(VerticalAlign.Top);
       } else {
-        Column({ space: $r('app.float.space_16') }) {
+        Column({ space: 2 }) {
           this.UsernameField()
           this.PasswordField()
         }
         .width('100%');
       }
 
-      if (this.viewportWidth >= 520) {
-        Row() {
-          Blank()
-            .layoutWeight(1);
-          Column() {
-            this.LoginButton()
-          }
-          .width(220);
-        }
-        .width('100%');
-      } else {
-        this.LoginButton()
-      }
+      this.LoginButton()
 
       Text($r('app.string.settings_account_password_note'))
-        .width('100%')
+        .width(this.fieldSurfaceWidth())
         .fontSize($r('app.float.font_caption'))
         .lineHeight(17)
-        .fontColor($r('app.color.text_secondary'));
+        .fontColor($r('app.color.neu_text_secondary'));
 
       this.OidcLoginContent()
     }
     .width('100%')
-    .alignItems(HorizontalAlign.Start);
+    .alignItems(HorizontalAlign.Center);
   }
 
   @Builder
@@ -750,8 +760,7 @@ export struct AccountSettingsCard {
       .width('100%')
       .padding($r('app.float.space_16'))
       .borderRadius($r('app.float.radius_18'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.contentReceiver());
+      .clip(true);
     }
     .width('100%');
   }
@@ -759,30 +768,34 @@ export struct AccountSettingsCard {
   @Builder
   private AccountDetails() {
     Stack() {
-      Column({ space: 0 }) {
-        this.AccountInfoRow(
-          $r('app.string.settings_account_username'),
-          this.optionalValue(this.accountState.name),
-          false,
-        )
-        this.AccountInfoRow(
-          $r('app.string.settings_account_email'),
-          this.optionalValue(this.accountState.email),
-          false,
-        )
-        this.AccountInfoRow(
-          $r('app.string.settings_server_effective_api'),
-          this.apiServerText(),
-          true,
-        )
+      FloatingGlassSurface({
+        inset: true,
+        radius: $r('app.float.radius_18'),
+      }) {
+        Column({ space: 0 }) {
+          this.AccountInfoRow(
+            $r('app.string.settings_account_username'),
+            this.optionalValue(this.accountState.name),
+            false,
+          )
+          this.AccountInfoRow(
+            $r('app.string.settings_account_email'),
+            this.optionalValue(this.accountState.email),
+            false,
+          )
+          this.AccountInfoRow(
+            $r('app.string.settings_server_effective_api'),
+            this.apiServerText(),
+            true,
+          )
+        }
+        .width('100%')
+        .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_16') });
       }
-      .width('100%')
-      .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_16') })
-      .borderRadius($r('app.float.radius_18'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.contentReceiver());
     }
-    .width('100%');
+    .width('100%')
+    .borderRadius($r('app.float.radius_18'))
+    .clip(false);
   }
 
   @Builder
@@ -837,38 +850,27 @@ export struct AccountSettingsCard {
   private SignedInContent() {
     Column({ space: $r('app.float.space_16') }) {
       Stack() {
-        Column({ space: 0 }) {
-          this.AccountIdentity()
+        FloatingGlassSurface({
+          radius: $r('app.float.radius_18'),
+        }) {
+          Column({ space: 0 }) {
+            this.AccountIdentity()
 
-          Divider()
-            .width('100%')
-            .strokeWidth(0.5)
-            .color($r('app.color.divider'));
+            Divider()
+              .width('100%')
+              .strokeWidth(0.5)
+              .color($r('app.color.divider'));
 
-          this.AccountDetails()
+            this.AccountDetails()
+          }
+          .width('100%')
+          .borderRadius($r('app.float.radius_18'))
+          .clip(true);
         }
-        .width('100%')
-        .borderRadius($r('app.float.radius_18'))
-        .clip(true);
       }
       .width('100%')
-      .backgroundColor($r('app.color.glass_surface'))
-      .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-        adaptiveColor: AdaptiveColor.DEFAULT,
-        scale: 0.48,
-      })
-      .linearGradient({
-        angle: 142,
-        colors: [
-          [$r('app.color.glass_gradient_high'), 0],
-          [$r('app.color.glass_gradient_mid'), 0.48],
-          [$r('app.color.glass_gradient_accent'), 1],
-        ],
-      })
-      .shadow(ShadowStyle.OUTER_DEFAULT_MD)
       .borderRadius($r('app.float.radius_18'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.featherReceiver());
+      .clip(false);
 
       this.SignedInActions()
     }
@@ -898,7 +900,7 @@ export struct AccountSettingsCard {
   }
 
   build() {
-    Column({ space: $r('app.float.space_24') }) {
+    Column({ space: 8 }) {
       if (this.showHeader) {
         this.Header()
       }

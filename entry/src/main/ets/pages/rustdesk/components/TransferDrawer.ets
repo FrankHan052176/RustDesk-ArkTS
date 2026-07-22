@@ -1,8 +1,7 @@
 import { LocalFileEntry, RemoteFileEntry, TransferItem } from '../RustDeskSessionTypes';
-import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
 import { RemoteFilePath } from '../RemoteFilePath';
 import { FloatingDepthOverlay } from './FloatingDepth';
-import { FloatingActionSurface } from './FloatingSurface';
+import { FloatingActionSurface, FloatingGlassSurface } from './FloatingSurface';
 
 export interface TransferDrawerProps {
   scroller: Scroller;
@@ -45,7 +44,6 @@ export struct TransferDrawer {
   @Param transfers: TransferItem[] = [];
   @Param bottomAvoidInset: number = 0;
   @Local viewportWidth: number = 390;
-  @Local adjustingControl: string = '';
   @Event onSelectLocal: (name: string) => void = (_name: string) => {};
   @Event onSelectRemote: (name: string) => void = (_name: string) => {};
   @Event onUpload: () => void = () => {};
@@ -119,10 +117,6 @@ export struct TransferDrawer {
     return entryCount > 0 ? entryCount * 56 : 96;
   }
 
-  private selectionBlurScale(prefix: string): number {
-    return this.adjustingControl.startsWith(prefix) ? 0.90 : 0.48;
-  }
-
   private actionEnabled(key: string): boolean {
     if (key === 'upload') {
       return this.sessionReady && this.selectedLocalName.length > 0;
@@ -136,19 +130,6 @@ export struct TransferDrawer {
     return true;
   }
 
-  private animateSelectionBlur(key: string, active: boolean): void {
-    this.getUIContext().animateTo({
-      duration: active ? 160 : 280,
-      curve: Curve.Friction,
-    }, () => {
-      if (active) {
-        this.adjustingControl = key;
-      } else if (this.adjustingControl === key) {
-        this.adjustingControl = '';
-      }
-    });
-  }
-
   @Builder
   private FloatingAction(key: string, label: string, emphasized: boolean, onClick: () => void) {
     Stack() {
@@ -156,6 +137,7 @@ export struct TransferDrawer {
         actionEnabled: this.actionEnabled(key),
         compact: true,
         stopTouchPropagation: true,
+        accessibilityLabel: label,
         onActivate: onClick,
       }) {
         Row() {
@@ -163,13 +145,12 @@ export struct TransferDrawer {
             .fontSize($r('app.float.font_label'))
             .fontWeight(FontWeight.Medium)
             .fontColor(this.actionEnabled(key)
-              ? (emphasized ? $r('app.color.white') : $r('app.color.text_primary'))
+              ? (emphasized ? $r('app.color.neu_accent') : $r('app.color.text_primary'))
               : $r('app.color.disabled_text'));
         }
         .width('100%')
         .height('100%')
         .justifyContent(FlexAlign.Center)
-        .backgroundColor(emphasized ? $r('app.color.brand_primary') : $r('app.color.transparent'))
         .borderRadius($r('app.float.radius_14'))
         .clip(true);
       }
@@ -184,13 +165,6 @@ export struct TransferDrawer {
   private LocalEntry(entry: LocalFileEntry, showDivider: boolean) {
     Button({ type: ButtonType.Normal, stateEffect: false }) {
       Stack() {
-        if (this.selectedLocalName === entry.name) {
-          Row()
-            .width('100%')
-            .height('100%')
-            .backgroundColor($r('app.color.brand_primary_soft'))
-            .opacity(0.78);
-        }
         Column({ space: $r('app.float.space_2') }) {
           Text(entry.name)
             .width('100%')
@@ -215,12 +189,7 @@ export struct TransferDrawer {
           color: $r('app.color.divider'),
         })
         .borderRadius($r('app.float.radius_14'))
-        .clip(true)
-        .visualEffect(RustDeskGlassEffect.interactiveContent(
-          this.adjustingControl === `local-${entry.path}`,
-          $r('app.color.point_light'),
-          0.42,
-        ));
+        .clip(true);
       }
       .width('100%')
       .height('100%')
@@ -233,13 +202,6 @@ export struct TransferDrawer {
     .backgroundColor($r('app.color.transparent'))
     .borderRadius($r('app.float.radius_14'))
     .clip(true)
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.animateSelectionBlur(`local-${entry.path}`, true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.animateSelectionBlur(`local-${entry.path}`, false);
-      }
-    })
     .onClick(() => this.onSelectLocal(entry.name));
   }
 
@@ -247,13 +209,6 @@ export struct TransferDrawer {
   private RemoteEntry(entry: RemoteFileEntry, showDivider: boolean) {
     Button({ type: ButtonType.Normal, stateEffect: false }) {
       Stack() {
-        if (this.selectedRemoteName === entry.name) {
-          Row()
-            .width('100%')
-            .height('100%')
-            .backgroundColor($r('app.color.brand_primary_soft'))
-            .opacity(0.78);
-        }
         Row({ space: $r('app.float.space_8') }) {
           Column({ space: $r('app.float.space_2') }) {
             Text(this.isDirectory(entry) ? `文件夹 · ${entry.name}` : entry.name)
@@ -286,12 +241,7 @@ export struct TransferDrawer {
           color: $r('app.color.divider'),
         })
         .borderRadius($r('app.float.radius_14'))
-        .clip(true)
-        .visualEffect(RustDeskGlassEffect.interactiveContent(
-          this.adjustingControl === `remote-${entry.name}`,
-          $r('app.color.point_light'),
-          0.42,
-        ));
+        .clip(true);
       }
       .width('100%')
       .height('100%')
@@ -304,13 +254,6 @@ export struct TransferDrawer {
     .backgroundColor($r('app.color.transparent'))
     .borderRadius($r('app.float.radius_14'))
     .clip(true)
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.animateSelectionBlur(`remote-${entry.name}`, true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.animateSelectionBlur(`remote-${entry.name}`, false);
-      }
-    })
     .onClick(() => {
       if (this.isDirectory(entry)) {
         this.onOpenRemoteDirectory(entry.name);
@@ -387,8 +330,7 @@ export struct TransferDrawer {
           .fontSize($r('app.float.font_body'))
           .fontColor($r('app.color.text_secondary'))
           .textAlign(TextAlign.Center)
-          .padding($r('app.float.space_20'))
-          .visualEffect(RustDeskGlassEffect.contentReceiver());
+          .padding($r('app.float.space_20'));
       }
     }
     .width('100%')
@@ -418,21 +360,31 @@ export struct TransferDrawer {
     .width('100%')
     .alignItems(VerticalAlign.Center);
 
-    Text(this.downloadRootPath.length > 0 ? this.downloadRootPath : '未选择下载位置')
-      .width('100%')
-      .fontSize($r('app.float.font_caption'))
-      .fontColor($r('app.color.text_secondary'))
-      .maxLines(1)
-      .textOverflow({ overflow: TextOverflow.Ellipsis })
-      .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_12'),
-        top: $r('app.float.space_8'), bottom: $r('app.float.space_8') })
-      .margin({ top: $r('app.float.space_12'), bottom: $r('app.float.space_8') })
-      .backgroundColor($r('app.color.field_background'))
-      .borderRadius($r('app.float.radius_10'));
+    Stack() {
+      FloatingGlassSurface({
+        compact: true,
+        inset: true,
+        radius: $r('app.float.radius_10'),
+      }) {
+        Text(this.downloadRootPath.length > 0 ? this.downloadRootPath : '未选择下载位置')
+          .width('100%')
+          .height('100%')
+          .fontSize($r('app.float.font_caption'))
+          .fontColor($r('app.color.text_secondary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_12') });
+      }
+    }
+    .width('100%')
+    .height(36)
+    .margin({ top: $r('app.float.space_12'), bottom: $r('app.float.space_8') })
+    .clip(false);
 
     Stack() {
       Stack() {
         FloatingDepthOverlay({
+          inset: true,
           radius: $r('app.float.radius_14'),
         });
 
@@ -449,23 +401,9 @@ export struct TransferDrawer {
       }
       .width('100%')
       .height('100%')
-      .backgroundColor($r('app.color.glass_surface'))
-      .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-        adaptiveColor: AdaptiveColor.DEFAULT,
-        scale: this.selectionBlurScale('local-'),
-      })
-      .linearGradient({
-        angle: 142,
-        colors: [
-          [$r('app.color.glass_gradient_high'), 0],
-          [$r('app.color.glass_gradient_mid'), 0.48],
-          [$r('app.color.glass_gradient_accent'), 1],
-        ],
-      })
+      .backgroundColor($r('app.color.transparent'))
       .borderRadius($r('app.float.radius_14'))
-      .clip(true)
-      .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-      .visualEffect(RustDeskGlassEffect.featherReceiver());
+      .clip(false);
     }
     .height(fillAvailable ? 0 : this.mobileEntrySurfaceHeight(this.localEntries.length) + 16)
     .layoutWeight(fillAvailable ? 1 : 0)
@@ -490,8 +428,7 @@ export struct TransferDrawer {
           .fontSize($r('app.float.font_body'))
           .fontColor($r('app.color.text_secondary'))
           .textAlign(TextAlign.Center)
-          .padding($r('app.float.space_20'))
-          .visualEffect(RustDeskGlassEffect.contentReceiver());
+          .padding($r('app.float.space_20'));
       }
     }
     .width('100%')
@@ -520,21 +457,31 @@ export struct TransferDrawer {
     .width('100%')
     .alignItems(VerticalAlign.Center);
 
-    Text(this.remoteDirectory)
-      .width('100%')
-      .fontSize($r('app.float.font_caption'))
-      .fontColor($r('app.color.text_secondary'))
-      .maxLines(1)
-      .textOverflow({ overflow: TextOverflow.Ellipsis })
-      .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_12'),
-        top: $r('app.float.space_8'), bottom: $r('app.float.space_8') })
-      .margin({ top: $r('app.float.space_12'), bottom: $r('app.float.space_8') })
-      .backgroundColor($r('app.color.field_background'))
-      .borderRadius($r('app.float.radius_10'));
+    Stack() {
+      FloatingGlassSurface({
+        compact: true,
+        inset: true,
+        radius: $r('app.float.radius_10'),
+      }) {
+        Text(this.remoteDirectory)
+          .width('100%')
+          .height('100%')
+          .fontSize($r('app.float.font_caption'))
+          .fontColor($r('app.color.text_secondary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_12') });
+      }
+    }
+    .width('100%')
+    .height(36)
+    .margin({ top: $r('app.float.space_12'), bottom: $r('app.float.space_8') })
+    .clip(false);
 
     Stack() {
       Stack() {
         FloatingDepthOverlay({
+          inset: true,
           radius: $r('app.float.radius_14'),
         });
 
@@ -551,23 +498,9 @@ export struct TransferDrawer {
       }
       .width('100%')
       .height('100%')
-      .backgroundColor($r('app.color.glass_surface'))
-      .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-        adaptiveColor: AdaptiveColor.DEFAULT,
-        scale: this.selectionBlurScale('remote-'),
-      })
-      .linearGradient({
-        angle: 142,
-        colors: [
-          [$r('app.color.glass_gradient_high'), 0],
-          [$r('app.color.glass_gradient_mid'), 0.48],
-          [$r('app.color.glass_gradient_accent'), 1],
-        ],
-      })
+      .backgroundColor($r('app.color.transparent'))
       .borderRadius($r('app.float.radius_14'))
-      .clip(true)
-      .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-      .visualEffect(RustDeskGlassEffect.featherReceiver());
+      .clip(false);
     }
     .height(fillAvailable ? 0 : this.mobileEntrySurfaceHeight(this.remoteEntries.length) + 16)
     .layoutWeight(fillAvailable ? 1 : 0)

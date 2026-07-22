@@ -1,8 +1,5 @@
 import { ImageQualityPreset } from '../SessionDisplayController';
 import { QualityTelemetry } from '../RustDeskSessionTypes';
-import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
-import { FloatingDepthOverlay } from './FloatingDepth';
-import { FloatingSegmentedControl } from './FloatingSegmentedControl';
 
 export type QualityPreset = ImageQualityPreset;
 
@@ -30,7 +27,7 @@ export struct QualityControlSheet {
     targetBitrate: '--',
     chroma: '--',
   };
-  @Local adjustingControl: string = '';
+  @Local viewportWidth: number = 390;
   @Event onSelectPreset: (preset: ImageQualityPreset) => void = (_preset: ImageQualityPreset) => {};
   @Event onCustomQualityChange: (value: number) => void = (_value: number) => {};
   @Event onCustomFpsChange: (value: number) => void = (_value: number) => {};
@@ -75,16 +72,42 @@ export struct QualityControlSheet {
     }
   }
 
-  private animateAdjustmentBlur(key: string, active: boolean): void {
-    this.getUIContext().animateTo({
-      duration: active ? 160 : 280,
-      curve: Curve.Friction,
-    }, () => {
-      if (active) {
-        this.adjustingControl = key;
-      } else if (this.adjustingControl === key) {
-        this.adjustingControl = '';
-      }
+  private sliderWidth(): number {
+    return Math.max(180, Math.min(520, this.viewportWidth - 48));
+  }
+
+  @Builder
+  private PresetButton(label: string, index: number) {
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Text(label)
+        .fontSize($r('app.float.font_label'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.presetIndex() === index
+          ? $r('app.color.white')
+          : $r('app.color.neu_text_primary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis });
+    }
+    .layoutWeight(1)
+    .height(40)
+    .padding({ left: $r('app.float.space_6'), right: $r('app.float.space_6') })
+    .backgroundColor(this.presetIndex() === index
+      ? $r('app.color.brand_primary')
+      : $r('app.color.mica_control'))
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
+      adaptiveColor: AdaptiveColor.DEFAULT,
+      scale: 0.56,
+    })
+    .border({
+      width: 1,
+      color: this.presetIndex() === index
+        ? $r('app.color.brand_primary')
+        : $r('app.color.mica_border'),
+    })
+    .borderRadius($r('app.float.radius_10'))
+    .hoverEffect(HoverEffect.None)
+    .onClick((): void => {
+      this.selectPresetIndex(index);
     });
   }
 
@@ -97,54 +120,34 @@ export struct QualityControlSheet {
     step: number,
     onChange: (value: number) => void,
   ) {
-    Stack() {
-      FloatingDepthOverlay({
-        radius: $r('app.float.radius_14'),
-      });
-
-      Row() {
-        Slider({
-          value,
-          min,
-          max,
-          step,
-          style: SliderStyle.InSet,
-        })
-          .width('100%')
-          .selectedColor($r('app.color.brand_primary'))
-          .trackColor($r('app.color.surface_tertiary'))
-          .blockColor($r('app.color.white'))
-          .onChange((nextValue: number, _mode: SliderChangeMode) => onChange(nextValue));
-      }
-      .width('100%')
-      .height('100%')
-      .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_8') })
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.interactiveContent(
-        this.adjustingControl === key,
-        $r('app.color.point_light'),
-        0.48,
-      ));
+    Stack({ alignContent: Alignment.Center }) {
+      Slider({
+        value: value,
+        min: min,
+        max: max,
+        step: step,
+        style: SliderStyle.OutSet,
+      })
+        .width(this.sliderWidth())
+        .selectedColor($r('app.color.brand_primary'))
+        .trackColor($r('app.color.mica_control'))
+        .blockColor($r('app.color.white'))
+        .showTips(false)
+        .onChange((nextValue: number, _mode: SliderChangeMode): void => {
+          onChange(nextValue);
+        });
     }
     .width('100%')
-    .height($r('app.float.control_regular'))
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
+    .height(48)
+    .backgroundColor($r('app.color.mica_control'))
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
       adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.adjustingControl === key ? 0.90 : 0.48,
+      scale: 0.56,
     })
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+    .border({ width: 1, color: $r('app.color.mica_border') })
     .borderRadius($r('app.float.radius_14'))
     .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver())
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.animateAdjustmentBlur(key, true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.animateAdjustmentBlur(key, false);
-      }
-    });
+    .accessibilityText(key);
   }
 
   @Builder
@@ -175,18 +178,12 @@ export struct QualityControlSheet {
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'));
 
-          FloatingSegmentedControl({
-            labels: ['最佳画质', '均衡', '低带宽', '自定义'],
-            badges: [],
-            selectedIndex: this.presetIndex(),
-            progress: -1,
-            controlId: 'session-quality-preset',
-            compact: true,
-            onPreviewIndex: (_index: number) => {},
-            onProgressChange: (_progress: number) => {},
-            onDragStateChange: (_dragging: boolean) => {},
-            onChange: (index: number) => this.selectPresetIndex(index),
-          })
+          Row({ space: $r('app.float.space_6') }) {
+            this.PresetButton('最佳画质', 0)
+            this.PresetButton('均衡', 1)
+            this.PresetButton('低带宽', 2)
+            this.PresetButton('自定义', 3)
+          }
           .width('100%')
           .constraintSize({ maxWidth: 620 });
         }
@@ -249,14 +246,23 @@ export struct QualityControlSheet {
       .padding({
         left: $r('app.float.space_8'),
         right: $r('app.float.space_8'),
+        top: $r('app.float.space_4'),
         bottom: $r('app.float.space_8'),
       })
       .alignItems(HorizontalAlign.Start)
-      .clip(false);
+      .clip(true);
     }
     .width('100%')
     .height('100%')
     .scrollBar(BarState.Off)
-    .clip(false);
+    .edgeEffect(EdgeEffect.None)
+    .borderRadius($r('app.float.radius_14'))
+    .clip(true)
+    .onAreaChange((_oldArea: Area, newArea: Area): void => {
+      let width: number = Number(newArea.width);
+      if (width > 0) {
+        this.viewportWidth = width;
+      }
+    });
   }
 }

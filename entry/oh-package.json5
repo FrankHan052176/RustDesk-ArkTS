@@ -5,5 +5,9 @@
   "main": "",
   "author": "",
   "license": "",
-  "dependencies": {}
+  "dependencies": {
+    "luminous_neo": "file:../../../P_SkeumUI/luminous_neo/build/default/outputs/default/luminous_neo.har"
+  },
+  "devDependencies": {},
+  "dynamicDependencies": {}
 }

@@ -8,7 +8,8 @@ export interface RustDeskTouchAction {
 
 export const TOUCH_TAP_MAX_MS: number = 220;
 export const TOUCH_TAP_MAX_DISTANCE: number = 18;
-export const TOUCH_LONG_PRESS_MS: number = 300;
+export const TOUCH_LONG_PRESS_MS: number = 500;
+export const TOUCH_LONG_PRESS_MAX_DISTANCE: number = 5;
 export const TOUCH_DOUBLE_TAP_MAX_MS: number = 260;
 
 export class RustDeskTouchGestureState {
@@ -19,6 +20,7 @@ export class RustDeskTouchGestureState {
   private lastY: number = 0;
   private downAt: number = 0;
   private movedBeyondTapDistance: boolean = false;
+  private longPressCancelledByMovement: boolean = false;
   private dragActive: boolean = false;
   private pendingTap: boolean = false;
   private pendingTapX: number = 0;
@@ -33,6 +35,7 @@ export class RustDeskTouchGestureState {
     this.lastY = y;
     this.downAt = at;
     this.movedBeyondTapDistance = false;
+    this.longPressCancelledByMovement = false;
     this.dragActive = false;
     return [];
   }
@@ -43,14 +46,19 @@ export class RustDeskTouchGestureState {
     }
     this.lastX = x;
     this.lastY = y;
-    if (!this.dragActive && this.distanceExceedsTapRange(x, y, this.downX, this.downY)) {
-      this.movedBeyondTapDistance = true;
+    if (!this.dragActive) {
+      if (this.distanceReachesLongPressRange(x, y, this.downX, this.downY)) {
+        this.longPressCancelledByMovement = true;
+      }
+      if (this.distanceExceedsTapRange(x, y, this.downX, this.downY)) {
+        this.movedBeyondTapDistance = true;
+      }
     }
     return [];
   }
 
   onLongPress(at: number): Array<RustDeskTouchAction> {
-    if (!this.downActive || this.dragActive || this.movedBeyondTapDistance) {
+    if (!this.downActive || this.dragActive || this.longPressCancelledByMovement) {
       return [];
     }
     if (at - this.downAt < TOUCH_LONG_PRESS_MS) {
@@ -117,6 +125,10 @@ export class RustDeskTouchGestureState {
     return Math.max(TOUCH_DOUBLE_TAP_MAX_MS - (at - this.pendingTapAt), 0);
   }
 
+  isLongPressPending(): boolean {
+    return this.downActive && !this.dragActive && !this.longPressCancelledByMovement;
+  }
+
   reset(): Array<RustDeskTouchAction> {
     const actions: Array<RustDeskTouchAction> = [];
     if (this.dragActive) {
@@ -133,6 +145,13 @@ export class RustDeskTouchGestureState {
     return deltaX * deltaX + deltaY * deltaY > TOUCH_TAP_MAX_DISTANCE * TOUCH_TAP_MAX_DISTANCE;
   }
 
+  private distanceReachesLongPressRange(x: number, y: number, referenceX: number, referenceY: number): boolean {
+    const deltaX = x - referenceX;
+    const deltaY = y - referenceY;
+    return deltaX * deltaX + deltaY * deltaY
+      >= TOUCH_LONG_PRESS_MAX_DISTANCE * TOUCH_LONG_PRESS_MAX_DISTANCE;
+  }
+
   private clearDownState(): void {
     this.downActive = false;
     this.downX = 0;
@@ -141,6 +160,7 @@ export class RustDeskTouchGestureState {
     this.lastY = 0;
     this.downAt = 0;
     this.movedBeyondTapDistance = false;
+    this.longPressCancelledByMovement = false;
     this.dragActive = false;
   }
 

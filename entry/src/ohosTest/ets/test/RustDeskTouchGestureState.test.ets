@@ -29,21 +29,53 @@ export default function touchGestureStateTest(): void {
       expect(actions[0].y).assertEqual(46);
     });
 
-    it('starts and ends a drag for an unmoved long press', 0, () => {
+    it('starts and ends a drag for a long press within the movement tolerance', 0, () => {
       const state = new RustDeskTouchGestureState();
       state.onDown(40, 40, 0);
+      state.onMove(42, 44);
 
-      const startActions = state.onLongPress(300);
+      const startActions = state.onLongPress(500);
       expect(startActions.length).assertEqual(1);
       expect(startActions[0].type).assertEqual('drag_start');
       expect(startActions[0].x).assertEqual(40);
       expect(startActions[0].y).assertEqual(40);
 
-      const endActions = state.onRelease(52, 54, 320, false);
+      state.onMove(52, 54);
+      const endActions = state.onRelease(52, 54, 520, false);
       expect(endActions.length).assertEqual(1);
       expect(endActions[0].type).assertEqual('drag_end');
       expect(endActions[0].x).assertEqual(52);
       expect(endActions[0].y).assertEqual(54);
+    });
+
+    it('does not start a long press before the hold duration', 0, () => {
+      const state = new RustDeskTouchGestureState();
+      state.onDown(40, 40, 0);
+
+      expect(state.onLongPress(499).length).assertEqual(0);
+      expect(state.isLongPressPending()).assertTrue();
+    });
+
+    it('cancels a pending long press when movement reaches five vp', 0, () => {
+      const state = new RustDeskTouchGestureState();
+      state.onDown(40, 40, 0);
+      state.onMove(45, 40);
+
+      expect(state.isLongPressPending()).assertFalse();
+      expect(state.onLongPress(500).length).assertEqual(0);
+    });
+
+    it('cancels a pending long press after cumulative slow movement', 0, () => {
+      const state = new RustDeskTouchGestureState();
+      state.onDown(40, 40, 0);
+      state.onMove(42, 40);
+      expect(state.isLongPressPending()).assertTrue();
+      state.onMove(44, 40);
+      expect(state.isLongPressPending()).assertTrue();
+      state.onMove(45, 40);
+
+      expect(state.isLongPressPending()).assertFalse();
+      expect(state.onLongPress(500).length).assertEqual(0);
     });
 
     it('reset ends an active drag and clears a pending tap', 0, () => {
@@ -51,7 +83,7 @@ export default function touchGestureStateTest(): void {
       state.onDown(20, 20, 0);
       state.onRelease(20, 20, 100, false);
       state.onDown(60, 60, 120);
-      state.onLongPress(420);
+      state.onLongPress(620);
 
       const resetActions = state.reset();
       expect(resetActions.length).assertEqual(1);
@@ -91,9 +123,9 @@ export default function touchGestureStateTest(): void {
     it('ends a drag once when a touch is cancelled', 0, () => {
       const state = new RustDeskTouchGestureState();
       state.onDown(10, 10, 0);
-      state.onLongPress(300);
+      state.onLongPress(500);
 
-      const cancelActions = state.onRelease(10, 10, 310, true);
+      const cancelActions = state.onRelease(10, 10, 510, true);
       expect(cancelActions.length).assertEqual(1);
       expect(cancelActions[0].type).assertEqual('drag_end');
       expect(state.onRelease(10, 10, 320, true).length).assertEqual(0);

@@ -1,5 +1,11 @@
-import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
-import { FloatingDepthOverlay, FloatingPressDepthShell } from './FloatingDepth';
+import {
+  LuminousButton,
+  LuminousControlSize,
+  LuminousNeoTokens,
+  LuminousSwitch,
+  LuminousTextField,
+  LuminousTone,
+} from 'luminous_neo';
 
 export interface PasswordDialogProps {
   visible: boolean;
@@ -16,201 +22,120 @@ export struct PasswordDialog {
   @Param visible: boolean = false;
   @Param password: string = '';
   @Param rememberPassword: boolean = false;
-  @Local pressedAction: string = '';
-  @Local panelContentHeight: number = 0;
+  @Local viewportWidth: number = 390;
   @Event onPasswordChange: (value: string) => void = (_value: string) => {};
   @Event onRememberChange: (value: boolean) => void = (_value: boolean) => {};
   @Event onCancel: () => void = () => {};
   @Event onSubmit: () => void = () => {};
 
-
-  private animateActionBlur(key: string, active: boolean): void {
-    this.getUIContext().animateTo({
-      duration: active ? 160 : 280,
-      curve: Curve.Friction,
-    }, () => {
-      if (active) {
-        this.pressedAction = key;
-      } else if (this.pressedAction === key) {
-        this.pressedAction = '';
-      }
-    });
+  private panelWidth(): number {
+    return Math.max(300, Math.min(440, this.viewportWidth - 48));
   }
 
-  private updatePanelContentHeight(newArea: Area): void {
-    const height = Number(newArea.height);
-    if (height > 0 && Math.abs(height - this.panelContentHeight) > 0.5) {
-      this.panelContentHeight = height;
-    }
+  private fieldWidth(): number {
+    return Math.max(220, this.panelWidth() - 96);
   }
 
-  @Builder
-  private DialogAction(key: string, label: string, primary: boolean, onClick: () => void) {
-    Stack() {
-      FloatingPressDepthShell({
-        pressed: this.pressedAction === key,
-        compact: true,
-        radius: $r('app.float.radius_14'),
-      }) {
-        Button({ type: ButtonType.Normal, stateEffect: false }) {
-          Stack() {
-            if (primary) {
-              Row()
-                .width('100%')
-                .height('100%')
-                .backgroundColor($r('app.color.brand_primary'));
-            }
-
-            FloatingDepthOverlay({
-              pressed: this.pressedAction === key,
-              compact: true,
-              radius: $r('app.float.radius_14'),
-            });
-
-            Row() {
-              Text(label)
-                .fontSize($r('app.float.font_body'))
-                .fontWeight(FontWeight.Medium)
-                .fontColor(primary ? $r('app.color.white') : $r('app.color.text_primary'));
-            }
-            .width('100%')
-            .height('100%')
-            .justifyContent(FlexAlign.Center)
-            .borderRadius($r('app.float.radius_14'))
-            .clip(true)
-            .visualEffect(RustDeskGlassEffect.interactiveContent(
-              this.pressedAction === key,
-              primary ? $r('app.color.point_light') : $r('app.color.brand_primary'),
-              0.58,
-            ));
-          }
-          .width('100%')
-          .height('100%')
-          .borderRadius($r('app.float.radius_14'))
-          .clip(true);
-        }
-        .width('100%')
-        .height('100%')
-        .padding(0)
-        .backgroundColor($r('app.color.glass_surface'))
-        .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
-          adaptiveColor: AdaptiveColor.DEFAULT,
-          scale: this.pressedAction === key ? 0.18 : 0.48,
-        })
-        .linearGradient({
-          angle: 142,
-          colors: [
-            [$r('app.color.glass_gradient_high'), 0],
-            [$r('app.color.glass_gradient_mid'), 0.48],
-            [$r('app.color.glass_gradient_accent'), 1],
-          ],
-        })
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true)
-        .visualEffect(RustDeskGlassEffect.featherReceiver())
-        .onTouch((event: TouchEvent) => {
-          if (event.type === TouchType.Down) {
-            this.animateActionBlur(key, true);
-          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-            this.animateActionBlur(key, false);
-          }
-        })
-        .onClick(onClick);
-      }
-    }
-    .layoutWeight(1)
-    .height($r('app.float.control_small'))
-    .borderRadius($r('app.float.radius_14'))
-    .clip(false);
+  private buttonWidth(): number {
+    let controlHeight: number = LuminousNeoTokens.controlHeight(LuminousControlSize.Compact);
+    let shadowPadding: number = LuminousNeoTokens.shadowPaddingFor(controlHeight);
+    return Math.max(112, (this.panelWidth() - 48 - shadowPadding * 4) / 2);
   }
 
-  build() {
+  build(): void {
     if (this.visible) {
-      Column() {
-        Stack() {
-          FloatingDepthOverlay({
-            radius: $r('app.float.radius_24'),
-          })
-            .height(this.panelContentHeight);
-
-          Column({ space: $r('app.float.space_16') }) {
-            Column({ space: $r('app.float.space_6') }) {
-              Text('输入密码')
-                .fontSize($r('app.float.font_title'))
-                .fontWeight(FontWeight.Bold)
-                .fontColor($r('app.color.text_primary'));
-
-              Text('保持竖屏完成验证；连接成功后再进入横屏会话。')
-                .fontSize($r('app.float.font_body'))
-                .fontColor($r('app.color.text_secondary'));
-            }
-            .width('100%')
-            .alignItems(HorizontalAlign.Start)
-            .visualEffect(RustDeskGlassEffect.contentReceiver());
-
-            TextInput({ text: this.password, placeholder: 'Password' })
+      Row() {
+        Column() {
+          Column({ space: $r('app.float.space_6') }) {
+            Text('输入密码')
               .width('100%')
-              .height($r('app.float.control_regular'))
-              .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_12') })
-              .backgroundColor($r('app.color.field_background'))
-              .fontColor($r('app.color.text_primary'))
-              .placeholderColor($r('app.color.text_tertiary'))
-              .type(InputType.Password)
-              .borderWidth(0)
-              .borderRadius($r('app.float.radius_14'))
-              .onChange((value: string) => this.onPasswordChange(value));
+              .fontSize($r('app.float.font_title'))
+              .fontWeight(FontWeight.Bold)
+              .fontColor($r('app.color.neu_text_primary'));
 
-            Row({ space: $r('app.float.space_8') }) {
-              Checkbox()
-                .select(this.rememberPassword)
-                .selectedColor($r('app.color.brand_primary'))
-                .onChange((value: boolean) => this.onRememberChange(value));
-
-              Text('记住密码')
-                .fontSize($r('app.float.font_body'))
-                .fontColor($r('app.color.text_primary'));
-            }
-            .width('100%')
-            .height($r('app.float.control_regular'))
-            .alignItems(VerticalAlign.Center)
-            .visualEffect(RustDeskGlassEffect.contentReceiver());
-
-            Row({ space: $r('app.float.space_8') }) {
-              this.DialogAction('cancel', '取消', false, () => this.onCancel())
-              this.DialogAction('submit', '提交', true, () => this.onSubmit())
-            }
-            .width('100%');
+            Text('验证完成后自动进入远端会话。')
+              .width('100%')
+              .fontSize($r('app.float.font_body'))
+              .fontColor($r('app.color.neu_text_secondary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis });
           }
           .width('100%')
-          .padding($r('app.float.card_padding'))
-          .onAreaChange((_oldArea: Area, newArea: Area) => {
-            this.updatePanelContentHeight(newArea);
-          });
+          .alignItems(HorizontalAlign.Start);
+
+          Row() {
+            LuminousTextField({
+              value: this.password,
+              placeholder: 'Password',
+              fieldWidth: this.fieldWidth(),
+              fieldHeight: 52,
+              inputType: InputType.Password,
+              onChange: (value: string): void => {
+                this.onPasswordChange(value);
+              },
+            })
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.Center)
+          .clip(false);
+
+          LuminousSwitch({
+            label: '记住密码',
+            description: '仅保存在本机安全配置中',
+            isOn: this.rememberPassword,
+            rowWidth: this.panelWidth() - 48,
+            onChange: (value: boolean): void => {
+              this.onRememberChange(value);
+            },
+          })
+
+          Row() {
+            LuminousButton({
+              label: '取消',
+              controlWidth: this.buttonWidth(),
+              controlSizeMode: LuminousControlSize.Compact,
+              tone: LuminousTone.Neutral,
+              onAction: (): void => {
+                this.onCancel();
+              },
+            })
+
+            LuminousButton({
+              label: '提交',
+              controlWidth: this.buttonWidth(),
+              controlSizeMode: LuminousControlSize.Compact,
+              tone: LuminousTone.Accent,
+              onAction: (): void => {
+                this.onSubmit();
+              },
+            })
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.Center)
+          .clip(false);
         }
-        .width('82%')
-        .constraintSize({ maxWidth: 480 })
-        .backgroundColor($r('app.color.glass_surface'))
-        .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-          adaptiveColor: AdaptiveColor.DEFAULT,
-          scale: 0.48,
-        })
-        .linearGradient({
-          angle: 142,
-          colors: [
-            [$r('app.color.glass_gradient_high'), 0],
-            [$r('app.color.glass_gradient_mid'), 0.48],
-            [$r('app.color.glass_gradient_accent'), 1],
-          ],
-        })
-        .borderRadius($r('app.float.radius_24'))
+        .width(this.panelWidth())
+        .height(338)
+        .padding(24)
+        .justifyContent(FlexAlign.SpaceBetween)
+        .alignItems(HorizontalAlign.Start)
+        .backgroundColor($r('app.color.surface'))
+        .border({ width: 1, color: $r('app.color.outline') })
+        .borderRadius(28)
         .clip(true)
-        .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-        .visualEffect(RustDeskGlassEffect.featherReceiver());
+        .shadow(ShadowStyle.OUTER_DEFAULT_MD);
       }
       .width('100%')
       .height('100%')
       .justifyContent(FlexAlign.Center)
-      .backgroundColor($r('app.color.overlay'));
+      .alignItems(VerticalAlign.Center)
+      .backgroundColor($r('app.color.overlay'))
+      .onAreaChange((_oldArea: Area, newArea: Area): void => {
+        let width: number = Number(newArea.width);
+        if (width > 0) {
+          this.viewportWidth = width;
+        }
+      });
     }
   }
 }

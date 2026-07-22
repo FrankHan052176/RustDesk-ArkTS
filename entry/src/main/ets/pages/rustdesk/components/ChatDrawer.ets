@@ -1,6 +1,4 @@
 import { ChatMessage } from '../RustDeskSessionTypes';
-import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
-import { FloatingDepthOverlay, FloatingPressDepthShell } from './FloatingDepth';
 
 export interface ChatDrawerProps {
   messages: ChatMessage[];
@@ -17,9 +15,7 @@ export struct ChatDrawer {
   @Param messages: ChatMessage[] = [];
   @Param draft: string = '';
   @Param unreadCount: number = 0;
-  @Local pressedControl: string = '';
   @Local draftValue: string = '';
-  @Local inputFocused: boolean = false;
   @Event onDraftChange: (value: string) => void = (_value: string) => {};
   @Event onSend: (value: string) => void = (_value: string) => {};
   @Event onRetry: (localId: string) => void = (_localId: string) => {};
@@ -66,101 +62,29 @@ export struct ChatDrawer {
     return '已发送';
   }
 
-  private blurScale(key: string): number {
-    return this.pressedControl === key ? 0.18 : 0.48;
-  }
-
-  private animateBlur(key: string, active: boolean): void {
-    this.getUIContext().animateTo({
-      duration: active ? 160 : 280,
-      curve: Curve.Friction,
-    }, () => {
-      if (active) {
-        this.pressedControl = key;
-      } else if (this.pressedControl === key) {
-        this.pressedControl = '';
-      }
-    });
-  }
-
-  private buttonLightIntensity(key: string, emphasized: boolean): number {
-    if (this.pressedControl === key) {
-      return 0.62;
-    }
-    return emphasized ? 0.14 : 0;
-  }
-
   @Builder
-  private FloatingButton(key: string, label: string, emphasized: boolean, onClick: () => void) {
-    Stack() {
-      FloatingPressDepthShell({
-        pressed: this.pressedControl === key,
-        compact: true,
-        radius: $r('app.float.radius_14'),
-      }) {
-        Button({ type: ButtonType.Normal, stateEffect: false }) {
-          Stack({ alignContent: Alignment.Center }) {
-            if (emphasized) {
-              Row()
-                .width('100%')
-                .height('100%')
-                .backgroundColor($r('app.color.brand_primary'));
-            }
-
-            FloatingDepthOverlay({
-              pressed: this.pressedControl === key,
-              compact: true,
-              radius: $r('app.float.radius_14'),
-            });
-
-            Text(label)
-              .fontSize($r('app.float.font_body'))
-              .fontWeight(FontWeight.Medium)
-              .fontColor(emphasized ? $r('app.color.white') : $r('app.color.text_primary'));
-          }
-          .width('100%')
-          .height('100%')
-          .borderRadius($r('app.float.radius_14'))
-          .clip(true)
-          .visualEffect(RustDeskGlassEffect.interactiveContent(
-            this.buttonLightIntensity(key, emphasized) > 0,
-            emphasized ? $r('app.color.point_light') : $r('app.color.brand_primary'),
-            this.buttonLightIntensity(key, emphasized),
-          ));
-        }
-        .width('100%')
-        .height('100%')
-        .padding(0)
-        .backgroundColor($r('app.color.glass_surface'))
-        .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
-          adaptiveColor: AdaptiveColor.DEFAULT,
-          scale: this.blurScale(key),
-        })
-        .linearGradient({
-          angle: 142,
-          colors: [
-            [$r('app.color.glass_gradient_high'), 0],
-            [$r('app.color.glass_gradient_mid'), 0.48],
-            [$r('app.color.glass_gradient_accent'), 1],
-          ],
-        })
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true)
-        .visualEffect(RustDeskGlassEffect.featherReceiver())
-        .onTouch((event: TouchEvent) => {
-          if (event.type === TouchType.Down) {
-            this.animateBlur(key, true);
-          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-            this.animateBlur(key, false);
-          }
-        })
-        .onClick(onClick);
-      }
+  private FloatingButton(_key: string, label: string, emphasized: boolean, onClick: () => void) {
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Text(label)
+        .fontSize($r('app.float.font_label'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor(emphasized ? $r('app.color.neu_accent') : $r('app.color.neu_text_primary'));
     }
     .width(72)
     .height(42)
+    .padding(0)
+    .backgroundColor($r('app.color.mica_control'))
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
+      adaptiveColor: AdaptiveColor.DEFAULT,
+      scale: 0.56,
+    })
+    .border({ width: 1, color: $r('app.color.mica_border') })
     .borderRadius($r('app.float.radius_14'))
-    .clip(false);
+    .hoverEffect(HoverEffect.None)
+    .accessibilityText(label)
+    .onClick((): void => {
+      onClick();
+    });
   }
 
   @Builder
@@ -182,8 +106,14 @@ export struct ChatDrawer {
     .width('100%')
     .alignItems(HorizontalAlign.Start)
     .padding($r('app.float.space_12'))
-    .backgroundColor(message.outgoing ? $r('app.color.brand_primary_soft') : $r('app.color.surface_secondary'))
-    .borderRadius($r('app.float.radius_14'));
+    .backgroundColor(message.outgoing ? $r('app.color.brand_primary_soft') : $r('app.color.mica_control'))
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
+      adaptiveColor: AdaptiveColor.DEFAULT,
+      scale: 0.56,
+    })
+    .border({ width: 1, color: $r('app.color.mica_border') })
+    .borderRadius($r('app.float.radius_14'))
+    .clip(true);
   }
 
   build() {
@@ -208,55 +138,27 @@ export struct ChatDrawer {
       .layoutWeight(1)
       .width('100%')
       .scrollBar(BarState.Off)
-      .clip(false);
+      .edgeEffect(EdgeEffect.None)
+      .borderRadius($r('app.float.radius_14'))
+      .clip(true);
 
       Row({ space: $r('app.float.space_8') }) {
-        Stack() {
-          FloatingDepthOverlay({
-            radius: $r('app.float.radius_14'),
-          });
-
-          Stack() {
-            TextInput({ text: this.draftValue, placeholder: '输入消息' })
-              .width('100%')
-              .height('100%')
-              .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_12') })
-              .backgroundColor($r('app.color.transparent'))
-              .fontColor($r('app.color.text_primary'))
-              .placeholderColor($r('app.color.text_tertiary'))
-              .borderWidth(0)
-              .enterKeyType(EnterKeyType.Send)
-              .onFocus(() => this.inputFocused = true)
-              .onBlur(() => this.inputFocused = false)
-              .onChange((value: string) => this.updateDraft(value))
-              .onSubmit((_enterKey: EnterKeyType) => this.submitDraft());
-          }
-          .width('100%')
-          .height('100%')
+        TextInput({ text: this.draftValue, placeholder: '输入消息' })
+          .layoutWeight(1)
+          .height($r('app.float.control_regular'))
+          .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_12') })
+          .backgroundColor($r('app.color.mica_control'))
+          .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
+            adaptiveColor: AdaptiveColor.DEFAULT,
+            scale: 0.56,
+          })
+          .fontColor($r('app.color.text_primary'))
+          .placeholderColor($r('app.color.text_tertiary'))
+          .border({ width: 1, color: $r('app.color.mica_border') })
           .borderRadius($r('app.float.radius_14'))
-          .clip(true)
-          .visualEffect(RustDeskGlassEffect.contentReceiver());
-
-        }
-        .layoutWeight(1)
-        .height($r('app.float.control_regular'))
-        .backgroundColor($r('app.color.glass_surface'))
-        .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-          adaptiveColor: AdaptiveColor.DEFAULT,
-          scale: this.inputFocused ? 0.90 : 0.48,
-        })
-        .linearGradient({
-          angle: 142,
-          colors: [
-            [$r('app.color.glass_gradient_high'), 0],
-            [$r('app.color.glass_gradient_mid'), 0.48],
-            [$r('app.color.glass_gradient_accent'), 1],
-          ],
-        })
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true)
-        .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-        .visualEffect(RustDeskGlassEffect.featherReceiver());
+          .enterKeyType(EnterKeyType.Send)
+          .onChange((value: string) => this.updateDraft(value))
+          .onSubmit((_enterKey: EnterKeyType) => this.submitDraft());
 
         this.FloatingButton('send', '发送', true, () => this.submitDraft())
       }
@@ -268,8 +170,10 @@ export struct ChatDrawer {
     .padding({
       left: $r('app.float.space_8'),
       right: $r('app.float.space_8'),
+      top: $r('app.float.space_4'),
       bottom: $r('app.float.space_8'),
     })
-    .clip(false);
+    .borderRadius($r('app.float.radius_14'))
+    .clip(true);
   }
 }

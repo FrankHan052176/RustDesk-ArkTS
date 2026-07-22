@@ -1,71 +1,172 @@
-import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
-import { FloatingDepthOverlay, FloatingPressDepthShell } from './FloatingDepth';
+import {
+  LuminousNeoTokens,
+  LuminousSurface,
+  LuminousSurfaceState,
+} from 'luminous_neo';
 
+/**
+ * 兼容原有业务页面的自适应容器。首次布局只测量内容尺寸；获得实体尺寸后，
+ * 真实内容由 LuminousSurface 自己承载，避免在拟态实体上再叠一层顶层容器。
+ */
 @ComponentV2
 export struct FloatingGlassSurface {
   @Param compact: boolean = false;
   @Param showDepth: boolean = true;
-  @Param blurScale: number = 0.48;
+  @Param inset: boolean = false;
+  @Param subtleDepth: boolean = false;
   @Param radius: Resource = $r('app.float.radius_14');
-  @Param surfaceColor: ResourceColor = $r('app.color.glass_surface');
+  /** 已知实体尺寸时直接渲染，避免首帧依赖 onAreaChange 的透明测量分支。 */
+  @Param surfaceWidth: number = 0;
+  @Param surfaceHeight: number = 0;
+  @Local measuredSurfaceWidth: number = 0;
+  @Local measuredSurfaceHeight: number = 0;
 
   @BuilderParam content: () => void = this.Empty;
 
   @Builder
   private Empty() {}
 
-  build() {
-    Stack() {
-      if (this.showDepth) {
-        FloatingDepthOverlay({
-          compact: this.compact,
-          radius: this.radius,
-        });
-      }
+  private cornerRadius(): number {
+    return this.compact ? 14 : 20;
+  }
 
-      Stack() {
-        this.content();
+  private shortEdge(): number {
+    return Math.max(1, Math.min(this.resolvedSurfaceHeight(), LuminousNeoTokens.BASE_SURFACE_SIZE));
+  }
+
+  private resolvedSurfaceWidth(): number {
+    return this.surfaceWidth > 0 ? this.surfaceWidth : this.measuredSurfaceWidth;
+  }
+
+  private resolvedSurfaceHeight(): number {
+    return this.surfaceHeight > 0 ? this.surfaceHeight : this.measuredSurfaceHeight;
+  }
+
+  private raisedDistance(): number {
+    if (this.subtleDepth) {
+      return LuminousNeoTokens.movingRaisedDistanceFor(this.shortEdge());
+    }
+    return LuminousNeoTokens.raisedDistanceFor(this.shortEdge());
+  }
+
+  private raisedBlur(): number {
+    if (this.subtleDepth) {
+      return LuminousNeoTokens.movingRaisedBlurFor(this.shortEdge());
+    }
+    return LuminousNeoTokens.raisedBlurFor(this.shortEdge());
+  }
+
+  private insetDistance(): number {
+    let distance: number = LuminousNeoTokens.insetDistanceFor(this.shortEdge());
+    return this.subtleDepth ? distance / 2 : distance;
+  }
+
+  private insetBlur(): number {
+    let blur: number = LuminousNeoTokens.insetBlurFor(this.shortEdge());
+    return this.subtleDepth ? blur / 2 : blur;
+  }
+
+  private shadowPadding(): number {
+    return Math.max(
+      this.raisedDistance() + this.raisedBlur(),
+      this.insetDistance() + this.insetBlur(),
+    );
+  }
+
+  private surfaceState(): LuminousSurfaceState {
+    if (!this.showDepth) {
+      return LuminousSurfaceState.Flat;
+    }
+    return this.inset ? LuminousSurfaceState.Inset : LuminousSurfaceState.Raised;
+  }
+
+  private hasSurfaceSize(): boolean {
+    return this.resolvedSurfaceWidth() > 0 && this.resolvedSurfaceHeight() > 0;
+  }
+
+  private updateSurfaceSize(newArea: Area): void {
+    let nextWidth: number = Number(newArea.width);
+    let nextHeight: number = Number(newArea.height);
+    if (this.surfaceWidth <= 0 && this.measuredSurfaceWidth > 0 && nextWidth > 0 &&
+      Math.abs(nextWidth - this.measuredSurfaceWidth) > 0.5) {
+      this.measuredSurfaceWidth = nextWidth;
+      if (this.surfaceHeight <= 0) {
+        this.measuredSurfaceHeight = 0;
       }
-      .width('100%')
-      .height('100%')
-      .borderRadius(this.radius)
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.contentReceiver());
+      return;
+    }
+    if (this.surfaceWidth <= 0 && nextWidth > 0) {
+      this.measuredSurfaceWidth = nextWidth;
+    }
+    if (this.surfaceHeight <= 0 && nextHeight > 0) {
+      this.measuredSurfaceHeight = nextHeight;
+    }
+  }
+
+  build(): void {
+    Stack({ alignContent: Alignment.TopStart }) {
+      if (this.hasSurfaceSize()) {
+        Stack({ alignContent: Alignment.TopStart }) {
+          Stack({ alignContent: Alignment.TopStart }) {
+            LuminousSurface({
+              state: this.surfaceState(),
+              surfaceWidth: this.resolvedSurfaceWidth(),
+              surfaceHeight: this.resolvedSurfaceHeight(),
+              cornerRadius: this.cornerRadius(),
+              raisedShadowDistance: this.raisedDistance(),
+              raisedShadowBlur: this.raisedBlur(),
+              insetShadowDistance: this.insetDistance(),
+              insetShadowBlur: this.insetBlur(),
+              contentAlignment: Alignment.TopStart,
+            }) {
+              this.content();
+            }
+          }
+          .width(this.resolvedSurfaceWidth() + this.shadowPadding() * 2)
+          .height(this.resolvedSurfaceHeight() + this.shadowPadding() * 2)
+          .clip(false)
+          .position({ x: -this.shadowPadding(), y: -this.shadowPadding() });
+        }
+        .width('100%')
+        .height(this.resolvedSurfaceHeight())
+        .clip(false);
+      } else {
+        Stack() {
+          this.content();
+        }
+        .width('100%')
+        .borderRadius(this.radius)
+        .clip(true)
+        .opacity(0)
+        .hitTestBehavior(HitTestMode.None)
+        .accessibilityLevel('no');
+      }
     }
     .width('100%')
-    .backgroundColor(this.surfaceColor)
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.blurScale,
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
-    .shadow(this.compact ? ShadowStyle.OUTER_DEFAULT_SM : ShadowStyle.OUTER_DEFAULT_MD)
-    .borderRadius(this.radius)
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver());
+    .backgroundColor($r('app.color.transparent'))
+    .clip(false)
+    .onAreaChange((_oldArea: Area, newArea: Area): void => {
+      this.updateSurfaceSize(newArea);
+    });
   }
 }
 
+/**
+ * Raised 动作面在按下时经真实 Flat 进入 Inset。保留旧参数仅用于兼容调用方，
+ * 不再创建触点光源、受光边框或 Hover 阴影。
+ */
 @ComponentV2
 export struct FloatingActionSurface {
   @Param actionEnabled: boolean = true;
+  @Param selected: boolean = false;
   @Param compact: boolean = false;
-  @Param touchLight: boolean = false;
+  @Param subtleDepth: boolean = false;
+  @Param accessibilityLabel: ResourceStr = '';
   @Param stopTouchPropagation: boolean = false;
-  @Param lightPeakIntensity: number = 0.62;
-  @Param lightColor: ResourceColor = $r('app.color.point_light');
   @Param radius: Resource = $r('app.float.radius_14');
   @Local pressed: boolean = false;
-  @Local touchLightX: number = 24;
-  @Local touchLightY: number = 24;
-  @Local touchLightIntensity: number = 0;
+  @Local surfaceWidth: number = 0;
+  @Local surfaceHeight: number = 0;
 
   @Event onActivate: () => void = () => {};
   @BuilderParam content: () => void = this.Empty;
@@ -73,34 +174,43 @@ export struct FloatingActionSurface {
   @Builder
   private Empty() {}
 
-  private updateTouchLightPosition(event: TouchEvent): void {
-    if (event.touches.length === 0) {
-      return;
-    }
-    this.touchLightX = event.touches[0].x;
-    this.touchLightY = event.touches[0].y;
+  private cornerRadius(): number {
+    return this.compact ? 14 : 18;
   }
 
-  private animatePressed(active: boolean): void {
-    this.getUIContext().animateTo({
-      duration: active ? 160 : 280,
-      curve: Curve.Friction,
-    }, () => {
-      this.pressed = active;
-    });
+  private shortEdge(): number {
+    return Math.max(1, Math.min(this.surfaceHeight, LuminousNeoTokens.BASE_SURFACE_SIZE));
   }
 
-  private animateTouchLight(active: boolean): void {
-    if (!this.touchLight) {
-      this.touchLightIntensity = 0;
-      return;
+  private shadowPadding(): number {
+    return Math.max(
+      this.raisedDistance() + this.raisedBlur(),
+      this.insetDistance() + this.insetBlur(),
+    );
+  }
+
+  private raisedDistance(): number {
+    if (this.subtleDepth) {
+      return LuminousNeoTokens.movingRaisedDistanceFor(this.shortEdge());
     }
-    this.getUIContext().animateTo({
-      duration: active ? 160 : 380,
-      curve: Curve.Friction,
-    }, () => {
-      this.touchLightIntensity = active ? this.lightPeakIntensity : 0;
-    });
+    return LuminousNeoTokens.raisedDistanceFor(this.shortEdge());
+  }
+
+  private raisedBlur(): number {
+    if (this.subtleDepth) {
+      return LuminousNeoTokens.movingRaisedBlurFor(this.shortEdge());
+    }
+    return LuminousNeoTokens.raisedBlurFor(this.shortEdge());
+  }
+
+  private insetDistance(): number {
+    let distance: number = LuminousNeoTokens.insetDistanceFor(this.shortEdge());
+    return this.subtleDepth ? distance / 2 : distance;
+  }
+
+  private insetBlur(): number {
+    let blur: number = LuminousNeoTokens.insetBlurFor(this.shortEdge());
+    return this.subtleDepth ? blur / 2 : blur;
   }
 
   private handleTouch(event: TouchEvent): void {
@@ -108,94 +218,88 @@ export struct FloatingActionSurface {
       event.stopPropagation();
     }
     if (!this.actionEnabled) {
+      this.pressed = false;
       return;
     }
     if (event.type === TouchType.Down) {
-      this.updateTouchLightPosition(event);
-      this.animatePressed(true);
-      this.animateTouchLight(true);
-    } else if (event.type === TouchType.Move) {
-      this.updateTouchLightPosition(event);
+      this.pressed = true;
     } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-      this.animatePressed(false);
-      this.animateTouchLight(false);
+      this.pressed = false;
     }
   }
 
-  build() {
-    Stack() {
-      FloatingPressDepthShell({
-        pressed: this.actionEnabled && this.pressed,
-        compact: this.compact,
-        radius: this.radius,
-      }) {
-        Button({ type: ButtonType.Normal, stateEffect: false }) {
-          Stack() {
-            FloatingDepthOverlay({
-              pressed: this.actionEnabled && this.pressed,
-              compact: this.compact,
-              radius: this.radius,
-            });
+  private updateSurfaceSize(newArea: Area): void {
+    let nextWidth: number = Number(newArea.width);
+    let nextHeight: number = Number(newArea.height);
+    if (nextWidth > 0) {
+      this.surfaceWidth = nextWidth;
+    }
+    if (nextHeight > 0) {
+      this.surfaceHeight = nextHeight;
+    }
+  }
 
+  build(): void {
+    Stack({ alignContent: Alignment.TopStart }) {
+      if (this.surfaceWidth > 0 && this.surfaceHeight > 0) {
+        Stack({ alignContent: Alignment.TopStart }) {
+          LuminousSurface({
+            state: (this.selected || this.pressed) && this.actionEnabled
+              ? LuminousSurfaceState.Inset
+              : LuminousSurfaceState.Raised,
+            surfaceWidth: this.surfaceWidth,
+            surfaceHeight: this.surfaceHeight,
+            cornerRadius: this.cornerRadius(),
+            raisedShadowDistance: this.raisedDistance(),
+            raisedShadowBlur: this.raisedBlur(),
+            insetShadowDistance: this.insetDistance(),
+            insetShadowBlur: this.insetBlur(),
+          }) {
             Stack() {
               this.content();
             }
             .width('100%')
             .height('100%')
-            .borderRadius(this.radius)
-            .clip(true)
-            .visualEffect(RustDeskGlassEffect.contentReceiver());
-
-            if (this.touchLight) {
-              Stack()
-                .width(1)
-                .height(1)
-                .position({ x: this.touchLightX - 0.5, y: this.touchLightY - 0.5 })
-                .backgroundColor($r('app.color.transparent'))
-                .visualEffect(RustDeskGlassEffect.movableContentSource(
-                  this.lightColor,
-                  this.touchLightIntensity,
-                ))
-                .hitTestBehavior(HitTestMode.None);
-            }
+            .accessibilityLevel('no');
           }
-          .width('100%')
-          .height('100%')
-          .borderRadius(this.radius)
-          .clip(true);
         }
-        .width('100%')
-        .height('100%')
-        .padding(0)
-        .enabled(this.actionEnabled)
-        .backgroundColor($r('app.color.glass_surface'))
-        .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
-          adaptiveColor: AdaptiveColor.DEFAULT,
-          scale: this.actionEnabled && this.pressed ? 0.18 : 0.48,
-        })
-        .linearGradient({
-          angle: 142,
-          colors: [
-            [$r('app.color.glass_gradient_high'), 0],
-            [$r('app.color.glass_gradient_mid'), 0.48],
-            [$r('app.color.glass_gradient_accent'), 1],
-          ],
-        })
-        .borderRadius(this.radius)
-        .clip(true)
-        .visualEffect(RustDeskGlassEffect.featherReceiver())
-        .onTouch((event: TouchEvent) => this.handleTouch(event))
-        .onClick(() => {
-          if (this.actionEnabled) {
-            this.onActivate();
-          }
-        });
+        .width(this.surfaceWidth + this.shadowPadding() * 2)
+        .height(this.surfaceHeight + this.shadowPadding() * 2)
+        .clip(false)
+        .position({ x: -this.shadowPadding(), y: -this.shadowPadding() })
+        .accessibilityLevel('no');
       }
+
+      Button({ type: ButtonType.Normal, stateEffect: false }) {
+        Row()
+      }
+      .width('100%')
+      .height('100%')
+      .padding(0)
+      .backgroundColor($r('app.color.transparent'))
+      .hoverEffect(HoverEffect.None)
+      .borderRadius(this.radius)
+      .enabled(this.actionEnabled)
+      .accessibilityText(this.accessibilityLabel as Resource)
+      .onTouch((event: TouchEvent): void => {
+        this.handleTouch(event);
+      })
+      .onClick((): void => {
+        if (this.actionEnabled) {
+          this.onActivate();
+        }
+      })
+      .onBlur((): void => {
+        this.pressed = false;
+      });
     }
     .width('100%')
     .height('100%')
-    .borderRadius(this.radius)
-    .clip(false);
+    .backgroundColor($r('app.color.transparent'))
+    .clip(false)
+    .onAreaChange((_oldArea: Area, newArea: Area): void => {
+      this.updateSurfaceSize(newArea);
+    });
   }
 }
 
@@ -205,20 +309,20 @@ export struct FloatingSectionHeading {
   @Param description: ResourceStr = '';
   @Param descriptionMaxLines: number = 2;
 
-  build() {
+  build(): void {
     Column({ space: $r('app.float.space_4') }) {
       Text(this.title)
         .width('100%')
         .fontSize($r('app.float.font_title'))
         .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.text_primary'));
+        .fontColor($r('app.color.neu_text_primary'));
 
       if (this.description !== '') {
         Text(this.description)
           .width('100%')
           .fontSize($r('app.float.font_body'))
-          .lineHeight(20)
-          .fontColor($r('app.color.text_secondary'))
+          .lineHeight(22)
+          .fontColor($r('app.color.neu_text_secondary'))
           .maxLines(this.descriptionMaxLines)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
       }

@@ -1,92 +1,76 @@
+import {
+  LuminousNeoTokens,
+  LuminousSurface,
+  LuminousSurfaceState,
+} from 'luminous_neo';
+
+/**
+ * 旧浮层深度装饰的兼容入口。实际深度统一由 LuminousSurface 绘制，
+ * 不再叠加玻璃高光、方向性渐变或独立的触点光源。
+ */
 @ComponentV2
 export struct FloatingDepthOverlay {
   @Param pressed: boolean = false;
+  @Param inset: boolean = false;
   @Param compact: boolean = false;
   @Param radius: Resource = $r('app.float.radius_14');
+  @Local surfaceWidth: number = 0;
+  @Local surfaceHeight: number = 0;
 
-  build() {
-    Stack() {
-      Row()
-        .width('100%')
-        .height('100%')
-        .backgroundColor($r('app.color.transparent'))
-        .borderRadius(this.radius)
-        .shadow({
-          radius: this.pressed ? (this.compact ? 3 : 3.5) : (this.compact ? 5.5 : 7),
-          color: $r('app.color.depth_occlusion'),
-          offsetX: this.pressed ? (this.compact ? 0.35 : 0.4) : (this.compact ? 1 : 1.25),
-          offsetY: this.pressed ? (this.compact ? 0.6 : 0.7) : (this.compact ? 1.25 : 1.75),
-          fill: true,
-        })
-        .opacity(this.pressed ? 0.30 : 0.56);
-
-      Row()
-        .width('100%')
-        .height('100%')
-        .backgroundColor($r('app.color.transparent'))
-        .borderRadius(this.radius)
-        .shadow({
-          radius: this.pressed ? (this.compact ? 1.75 : 2) : (this.compact ? 3.5 : 4.5),
-          color: $r('app.color.depth_highlight'),
-          offsetX: this.pressed ? (this.compact ? -0.25 : -0.3) : (this.compact ? -0.65 : -0.8),
-          offsetY: this.pressed ? (this.compact ? -0.25 : -0.3) : (this.compact ? -0.65 : -0.8),
-          fill: true,
-        })
-        .opacity(this.pressed ? 0.18 : 0.32);
-
-      Row()
-        .width('100%')
-        .height('100%')
-        .backgroundColor($r('app.color.transparent'))
-        .linearGradient({
-          angle: 142,
-          colors: [
-            [$r('app.color.depth_specular'), 0],
-            [$r('app.color.transparent'), 0.28],
-            [$r('app.color.transparent'), 1],
-          ],
-        })
-        .borderRadius(this.radius)
-        .opacity(this.pressed ? 0.12 : 0.26);
-    }
-    .width('100%')
-    .height('100%')
-    .borderRadius(this.radius)
-    .clip(true)
-    .hitTestBehavior(HitTestMode.None);
+  private cornerRadius(): number {
+    return this.compact ? 14 : 20;
   }
-}
 
-@ComponentV2
-export struct FloatingPressDepthShell {
-  @Param pressed: boolean = false;
-  @Param compact: boolean = false;
-  @Param radius: Resource = $r('app.float.radius_14');
-  @Param shadowColor: ResourceColor = $r('app.color.depth_shadow_level2');
+  private shortEdge(): number {
+    return Math.max(1, Math.min(this.surfaceHeight, LuminousNeoTokens.BASE_SURFACE_SIZE));
+  }
 
-  @BuilderParam content: () => void = this.Empty;
+  private shadowPadding(): number {
+    return LuminousNeoTokens.shadowPaddingFor(this.shortEdge());
+  }
 
-  @Builder
-  private Empty() {}
+  private surfaceState(): LuminousSurfaceState {
+    return this.inset || this.pressed ? LuminousSurfaceState.Inset : LuminousSurfaceState.Raised;
+  }
 
-  build() {
-    Stack() {
-      Stack() {
-        this.content();
+  private updateSurfaceSize(newArea: Area): void {
+    let nextWidth: number = Number(newArea.width);
+    let nextHeight: number = Number(newArea.height);
+    if (nextWidth > 0) {
+      this.surfaceWidth = nextWidth;
+    }
+    if (nextHeight > 0) {
+      this.surfaceHeight = nextHeight;
+    }
+  }
+
+  build(): void {
+    Stack({ alignContent: Alignment.TopStart }) {
+      if (this.surfaceWidth > 0 && this.surfaceHeight > 0) {
+        Stack() {
+          LuminousSurface({
+            state: this.surfaceState(),
+            surfaceWidth: this.surfaceWidth,
+            surfaceHeight: this.surfaceHeight,
+            cornerRadius: this.cornerRadius(),
+            raisedShadowDistance: LuminousNeoTokens.raisedDistanceFor(this.shortEdge()),
+            raisedShadowBlur: LuminousNeoTokens.raisedBlurFor(this.shortEdge()),
+            insetShadowDistance: LuminousNeoTokens.insetDistanceFor(this.shortEdge()),
+            insetShadowBlur: LuminousNeoTokens.insetBlurFor(this.shortEdge()),
+          }) {
+            Stack()
+          }
+        }
+        .position({ x: -this.shadowPadding(), y: -this.shadowPadding() });
       }
-      .width('100%')
-      .height('100%')
-      .translate({ y: this.pressed ? 1 : 0 });
     }
     .width('100%')
     .height('100%')
-    .backgroundColor($r('app.color.transparent'))
-    .shadow({
-      radius: this.pressed ? (this.compact ? 4.5 : 6) : (this.compact ? 10 : 14),
-      color: this.shadowColor,
-      offsetX: 0,
-      offsetY: this.pressed ? (this.compact ? 1 : 1.5) : (this.compact ? 3.5 : 5),
-    })
-    .borderRadius(this.radius);
+    .clip(false)
+    .hitTestBehavior(HitTestMode.None)
+    .accessibilityLevel('no')
+    .onAreaChange((_oldArea: Area, newArea: Area): void => {
+      this.updateSurfaceSize(newArea);
+    });
   }
 }

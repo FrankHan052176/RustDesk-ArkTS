@@ -1,4 +1,9 @@
-import { FloatingActionSurface, FloatingGlassSurface } from './FloatingSurface';
+import {
+  LuminousButton,
+  LuminousControlSize,
+  LuminousTone,
+} from 'luminous_neo';
+import { FloatingGlassSurface } from './FloatingSurface';
 
 export interface StatusPageProps {
   sessionPhase: string;
@@ -63,26 +68,17 @@ export struct StatusPage {
 
   @Builder
   private BackButton() {
-    Stack() {
-      FloatingActionSurface({
-        onActivate: () => this.onBack(),
-      }) {
-        Row() {
-          Text('返回连接页')
-            .fontSize($r('app.float.font_body'))
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_inverse'));
-        }
-        .width('100%')
-        .height('100%')
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor($r('app.color.brand_primary'))
-        .opacity(0.86);
-      }
+    Row() {
+      LuminousButton({
+        label: '返回连接页',
+        controlWidth: 220,
+        controlSizeMode: LuminousControlSize.Regular,
+        tone: LuminousTone.Accent,
+        onAction: (): void => this.onBack(),
+      })
     }
     .width('100%')
-    .height($r('app.float.control_regular'))
-    .borderRadius($r('app.float.radius_14'))
+    .justifyContent(FlexAlign.Center)
     .clip(false)
     .accessibilityText('返回连接页');
   }
@@ -121,4 +117,3 @@ export struct StatusPage {
     .backgroundColor($r('app.color.transparent'));
   }
 }
-import { RustDeskGlassEffect } from '../RustDeskGlassEffect';

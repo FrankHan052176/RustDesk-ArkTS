@@ -2,15 +2,18 @@ import {
   HdsNavigation,
   HdsNavigationTitleMode,
   IconStyleMode,
-  ScrollEffectType,
   hdsMaterial,
 } from '@kit.UIDesignKit';
-import { LengthMetrics } from '@kit.ArkUI';
+import {
+  LuminousButton,
+  LuminousControlSize,
+  LuminousSurface,
+  LuminousSurfaceState,
+  LuminousTone,
+} from 'luminous_neo';
 import { AccountLoginProvider, AccountState, ServerConfig, SessionDefaults } from '../RustDeskDirectoryTypes';
-import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
 import { DecoderCapability } from '../RustDeskTypes';
 import { AccountSettingsCard } from './AccountSettingsCard';
-import { FloatingActionSurface } from './FloatingSurface';
 import { ServerSettingsCard } from './ServerSettingsCard';
 import { SessionDefaultsCard } from './SessionDefaultsCard';
 
@@ -74,6 +77,7 @@ export struct SettingsTab {
   @Local sheetViewportHeight: number = 0;
   @Local selectedSection: SettingsSection = 'server';
   @Local settingsSheetVisible: boolean = false;
+  @Local pressedSection: string = '';
   @Local sessionDefaultsDraft: SessionDefaults = new SessionDefaults();
   @Param scroller: Scroller = new Scroller();
   private sheetScroller: Scroller = new Scroller();
@@ -142,6 +146,33 @@ export struct SettingsTab {
 
   private hubBottomPadding(): number {
     return (this.wideLayout ? 40 : 120) + this.bottomAvoidInset;
+  }
+
+  private hubFrameWidth(): number {
+    const sideRoom = this.viewportWidth < 600 ? 32 : 64;
+    return Math.max(320, Math.min(this.viewportWidth - sideRoom, 820));
+  }
+
+  private useTwoTileColumns(): boolean {
+    return this.viewportWidth >= 720;
+  }
+
+  private tileFrameWidth(): number {
+    if (!this.useTwoTileColumns()) {
+      return this.hubFrameWidth();
+    }
+    return (this.hubFrameWidth() - 14) / 2;
+  }
+
+  private tileSurfaceWidth(): number {
+    if (!this.useTwoTileColumns()) {
+      return Math.max(220, this.tileFrameWidth() - 8);
+    }
+    return Math.max(220, this.tileFrameWidth() - 24);
+  }
+
+  private tileFrameHeight(): number {
+    return 88;
   }
 
   private copySessionDefaults(source: SessionDefaults): SessionDefaults {
@@ -245,46 +276,58 @@ export struct SettingsTab {
     return '正在检查核心服务与设备能力';
   }
 
+  private diagnosticPanelWidth(): number {
+    if (this.useDiagnosticColumns()) {
+      return Math.max(300, (this.sheetViewportWidth - 24) / 2 - 16);
+    }
+    return Math.max(280, this.sheetViewportWidth - 16);
+  }
+
+  private diagnosticDecoderHeight(): number {
+    if (this.decoderCapabilities.length === 0) {
+      return 60;
+    }
+    return this.decoderCapabilities.length * 58;
+  }
+
   @Builder
-  private SettingsToolRow(
+  private SettingsTile(
     section: SettingsSection,
     icon: Resource,
     title: ResourceStr,
     summary: ResourceStr,
     accentColor: ResourceColor,
-    accentBackground: ResourceColor,
   ) {
-    Stack() {
-      FloatingActionSurface({
-        touchLight: true,
-        lightColor: accentColor,
-        lightPeakIntensity: 0.66,
-        onActivate: () => this.selectSection(section),
+    Stack({ alignContent: Alignment.Center }) {
+      LuminousSurface({
+        state: this.pressedSection === section
+          ? LuminousSurfaceState.Inset
+          : LuminousSurfaceState.Raised,
+        surfaceWidth: this.tileSurfaceWidth(),
+        surfaceHeight: 72,
+        cornerRadius: 22,
       }) {
-        Row({ space: $r('app.float.space_12') }) {
-          Stack({ alignContent: Alignment.Center }) {
-            SymbolGlyph(icon)
-              .fontSize($r('app.float.icon_regular'))
-              .fontColor([accentColor]);
-          }
-          .width($r('app.float.control_small'))
-          .height($r('app.float.control_small'))
-          .backgroundColor(accentBackground)
-          .borderRadius($r('app.float.radius_14'))
-          .clip(true);
+        Row({ space: 12 }) {
+          SymbolGlyph(icon)
+            .width(34)
+            .fontSize(27)
+            .fontColor([accentColor]);
 
-          Column({ space: $r('app.float.space_2') }) {
+          Column({ space: 4 }) {
             Text(title)
               .width('100%')
-              .fontSize($r('app.float.font_body_large'))
-              .fontWeight(FontWeight.Medium)
-              .fontColor($r('app.color.text_primary'))
+              .fontSize(14)
+              .lineHeight(18)
+              .fontWeight(FontWeight.Bold)
+              .fontColor($r('app.color.neu_text_primary'))
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis });
+
             Text(summary)
               .width('100%')
-              .fontSize($r('app.float.font_label'))
-              .fontColor($r('app.color.text_secondary'))
+              .fontSize(11)
+              .lineHeight(16)
+              .fontColor($r('app.color.neu_text_secondary'))
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis });
           }
@@ -292,80 +335,146 @@ export struct SettingsTab {
           .alignItems(HorizontalAlign.Start);
 
           SymbolGlyph($r('sys.symbol.chevron_right'))
-            .fontSize($r('app.float.icon_small'))
-            .fontColor([$r('app.color.text_tertiary')]);
+            .fontSize(14)
+            .fontColor([$r('app.color.neu_text_secondary')]);
         }
-        .width('100%')
-        .height('100%')
-        .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_12') })
-        .alignItems(VerticalAlign.Center)
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true);
+        .width(this.tileSurfaceWidth())
+        .height(72)
+        .padding({ left: 14, right: 12 })
+        .alignItems(VerticalAlign.Center);
       }
+
+      Button({ type: ButtonType.Normal, stateEffect: false }) {
+        Row()
+      }
+      .width(this.tileSurfaceWidth())
+      .height(72)
+      .padding(0)
+      .backgroundColor(Color.Transparent)
+      .hoverEffect(HoverEffect.None)
+      .borderRadius(22)
+      .accessibilityText(title as Resource)
+      .onTouch((event: TouchEvent) => {
+        if (event.type === TouchType.Down) {
+          this.pressedSection = section;
+        } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+          this.pressedSection = '';
+        }
+      })
+      .onClick(() => {
+        this.pressedSection = '';
+        this.selectSection(section);
+      });
     }
-    .width('100%')
-    .height(72)
-    .borderRadius($r('app.float.radius_14'));
+    .width(this.tileFrameWidth())
+    .height(this.tileFrameHeight())
+    .clip(false);
+  }
+
+  @Builder
+  private TileGrid() {
+    if (this.useTwoTileColumns()) {
+      Column({ space: 16 }) {
+        Row({ space: 14 }) {
+          this.SettingsTile(
+            'server',
+            $r('sys.symbol.wifi_router'),
+            '服务器',
+            this.serverSummary(),
+            $r('app.color.neu_accent'),
+          )
+          this.SettingsTile(
+            'account',
+            $r('sys.symbol.person_crop_circle_fill'),
+            '账户',
+            this.accountSummary(),
+            $r('app.color.neu_accent'),
+          )
+        }
+        .width(this.hubFrameWidth());
+
+        Row({ space: 14 }) {
+          this.SettingsTile(
+            'session',
+            $r('sys.symbol.slider_horizontal_2'),
+            '远控默认',
+            this.sessionSummary(),
+            $r('app.color.success'),
+          )
+          this.SettingsTile(
+            'diagnostics',
+            $r('sys.symbol.info_circle'),
+            '诊断',
+            this.diagnosticSummary(),
+            this.hasError() ? $r('app.color.error') : $r('app.color.warning'),
+          )
+        }
+        .width(this.hubFrameWidth());
+      }
+      .width(this.hubFrameWidth());
+    } else {
+      Column({ space: 16 }) {
+        this.SettingsTile(
+          'server',
+          $r('sys.symbol.wifi_router'),
+          '服务器',
+          this.serverSummary(),
+          $r('app.color.neu_accent'),
+        )
+        this.SettingsTile(
+          'account',
+          $r('sys.symbol.person_crop_circle_fill'),
+          '账户',
+          this.accountSummary(),
+          $r('app.color.neu_accent'),
+        )
+        this.SettingsTile(
+          'session',
+          $r('sys.symbol.slider_horizontal_2'),
+          '远控默认',
+          this.sessionSummary(),
+          $r('app.color.success'),
+        )
+        this.SettingsTile(
+          'diagnostics',
+          $r('sys.symbol.info_circle'),
+          '诊断',
+          this.diagnosticSummary(),
+          this.hasError() ? $r('app.color.error') : $r('app.color.warning'),
+        )
+      }
+      .width(this.hubFrameWidth())
+      .alignItems(HorizontalAlign.Center);
+    }
   }
 
   @Builder
   private SettingsHub() {
-    Column({ space: $r('app.float.space_12') }) {
-      this.SettingsToolRow(
-        'server',
-        $r('sys.symbol.wifi_router'),
-        $r('app.string.settings_server_title'),
-        this.serverSummary(),
-        $r('app.color.brand_primary'),
-        $r('app.color.brand_primary_soft'),
-      )
-      this.SettingsToolRow(
-        'account',
-        $r('sys.symbol.person_crop_circle_fill'),
-        $r('app.string.settings_account_title'),
-        this.accountSummary(),
-        $r('app.color.brand_primary'),
-        $r('app.color.brand_primary_soft'),
-      )
-      this.SettingsToolRow(
-        'session',
-        $r('sys.symbol.slider_horizontal_2'),
-        '远控默认值',
-        this.sessionSummary(),
-        $r('app.color.success'),
-        $r('app.color.success_soft'),
-      )
-      this.SettingsToolRow(
-        'diagnostics',
-        $r('sys.symbol.info_circle'),
-        '诊断与关于',
-        this.diagnosticSummary(),
-        this.hasError() ? $r('app.color.error') : $r('app.color.warning'),
-        this.hasError() ? $r('app.color.error_soft') : $r('app.color.warning_soft'),
-      )
+    Column() {
+      this.TileGrid();
     }
     .width('100%')
-    .alignItems(HorizontalAlign.Start);
+    .alignItems(HorizontalAlign.Center);
   }
 
   @Builder
   private InfoRow(label: string, value: string, showDivider: boolean = true) {
-    Row({ space: $r('app.float.space_12') }) {
+    Row({ space: 10 }) {
       Text(label)
-        .width(88)
-        .fontSize($r('app.float.font_label'))
-        .fontColor($r('app.color.text_secondary'));
+        .width(72)
+        .fontSize(12)
+        .fontColor($r('app.color.neu_text_secondary'));
       Text(value || '--')
         .layoutWeight(1)
-        .fontSize($r('app.float.font_label'))
+        .fontSize(12)
         .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'))
+        .fontColor($r('app.color.neu_text_primary'))
         .textAlign(TextAlign.End)
         .maxLines(2)
         .textOverflow({ overflow: TextOverflow.Ellipsis });
     }
     .width('100%')
-    .constraintSize({ minHeight: 42 })
+    .constraintSize({ minHeight: 44 })
     .border({
       width: { bottom: showDivider ? 0.5 : 0 },
       color: $r('app.color.divider'),
@@ -373,283 +482,235 @@ export struct SettingsTab {
   }
 
   @Builder
-  private StatusTag(text: string, color: ResourceColor, background: ResourceColor) {
-    Text(text)
-      .fontSize($r('app.float.font_caption'))
-      .fontWeight(FontWeight.Medium)
-      .fontColor(color)
-      .padding({
-        left: $r('app.float.space_8'),
-        right: $r('app.float.space_8'),
-        top: $r('app.float.space_4'),
-        bottom: $r('app.float.space_4'),
-      })
-      .backgroundColor(background)
-      .borderRadius($r('app.float.radius_10'));
+  private StatusTag(text: string, color: ResourceColor, _background: ResourceColor) {
+    Stack({ alignContent: Alignment.Center }) {
+      LuminousSurface({
+        state: LuminousSurfaceState.Inset,
+        surfaceWidth: 62,
+        surfaceHeight: 28,
+        cornerRadius: 10,
+        raisedShadowDistance: 2,
+        raisedShadowBlur: 4,
+        insetShadowDistance: 2,
+        insetShadowBlur: 4,
+      }) {
+        Text(text)
+          .fontSize(10)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(color)
+          .maxLines(1);
+      }
+    }
+    .width(68)
+    .height(32)
+    .clip(false);
   }
 
   @Builder
   private DiagnosticIdentityUnit() {
-    Stack() {
-      Row({ space: $r('app.float.space_12') }) {
-        Image($r('app.media.startIcon'))
-          .width($r('app.float.control_regular'))
-          .height($r('app.float.control_regular'))
-          .borderRadius($r('app.float.radius_14'));
+    Stack({ alignContent: Alignment.Center }) {
+      LuminousSurface({
+        state: LuminousSurfaceState.Raised,
+        surfaceWidth: this.diagnosticPanelWidth(),
+        surfaceHeight: 78,
+        cornerRadius: 22,
+      }) {
+        Row({ space: 12 }) {
+          Image($r('app.media.startIcon'))
+            .width(44)
+            .height(44)
+            .borderRadius(12);
 
-        Column({ space: $r('app.float.space_4') }) {
-          Text('RustDesk HMOS')
-            .width('100%')
-            .fontSize($r('app.float.font_body_large'))
-            .fontWeight(FontWeight.Bold)
-            .fontColor($r('app.color.text_primary'));
-          Text(this.nativeVersion)
-            .width('100%')
-            .fontSize($r('app.float.font_label'))
-            .fontColor($r('app.color.text_secondary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis });
+          Column({ space: 3 }) {
+            Text('RustDesk HMOS')
+              .width('100%')
+              .fontSize(16)
+              .fontWeight(FontWeight.Bold)
+              .fontColor($r('app.color.neu_text_primary'));
+            Text(this.nativeVersion)
+              .width('100%')
+              .fontSize(11)
+              .fontColor($r('app.color.neu_text_secondary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis });
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start);
+
+          this.StatusTag(
+            this.bridgeReady() ? '已就绪' : '检查中',
+            this.bridgeReady() ? $r('app.color.success') : $r('app.color.warning'),
+            this.bridgeReady() ? $r('app.color.success_soft') : $r('app.color.warning_soft'),
+          )
         }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start);
-
-        this.StatusTag(
-          this.bridgeReady() ? '已就绪' : '检查中',
-          this.bridgeReady() ? $r('app.color.success') : $r('app.color.warning'),
-          this.bridgeReady() ? $r('app.color.success_soft') : $r('app.color.warning_soft'),
-        )
+        .width(this.diagnosticPanelWidth())
+        .height(78)
+        .padding({ left: 14, right: 14 })
+        .alignItems(VerticalAlign.Center);
       }
-      .width('100%')
-      .padding($r('app.float.space_16'))
-      .alignItems(VerticalAlign.Center)
-      .borderRadius($r('app.float.radius_18'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.contentReceiver());
     }
-    .width('100%')
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.48,
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
-    .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-    .borderRadius($r('app.float.radius_18'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver());
+    .width(this.diagnosticPanelWidth() + 16)
+    .height(94)
+    .clip(false);
   }
 
   @Builder
   private RuntimeUnit() {
-    Column({ space: $r('app.float.space_8') }) {
+    Column({ space: 6 }) {
       Text('核心状态')
         .width('100%')
-        .fontSize($r('app.float.font_body_large'))
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'));
+        .fontSize(16)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.neu_text_primary'));
 
-      Stack() {
-        Column({ space: 0 }) {
-          this.InfoRow('健康状态', this.health || 'waiting...', true)
-          this.InfoRow('集成阶段', this.integrationStage, false)
+      Stack({ alignContent: Alignment.Center }) {
+        LuminousSurface({
+          state: LuminousSurfaceState.Raised,
+          surfaceWidth: this.diagnosticPanelWidth(),
+          surfaceHeight: 104,
+          cornerRadius: 20,
+        }) {
+          Column({ space: 0 }) {
+            this.InfoRow('健康状态', this.health || 'waiting...', true)
+            this.InfoRow('集成阶段', this.integrationStage, false)
+          }
+          .width(this.diagnosticPanelWidth())
+          .height(104)
+          .padding({ left: 14, right: 14, top: 8, bottom: 8 });
         }
-        .width('100%')
-        .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_16') })
-        .borderRadius($r('app.float.radius_18'))
-        .clip(true)
-        .visualEffect(RustDeskGlassEffect.contentReceiver());
       }
-      .width('100%')
-      .backgroundColor($r('app.color.glass_surface'))
-      .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-        adaptiveColor: AdaptiveColor.DEFAULT,
-        scale: 0.48,
-      })
-      .linearGradient({
-        angle: 142,
-        colors: [
-          [$r('app.color.glass_gradient_high'), 0],
-          [$r('app.color.glass_gradient_mid'), 0.48],
-          [$r('app.color.glass_gradient_accent'), 1],
-        ],
-      })
-      .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-      .borderRadius($r('app.float.radius_18'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.featherReceiver());
+      .width(this.diagnosticPanelWidth() + 16)
+      .height(120)
+      .clip(false);
     }
-    .width('100%')
+    .width(this.diagnosticPanelWidth() + 16)
     .alignItems(HorizontalAlign.Start);
   }
 
   @Builder
   private BuildUnit() {
-    Column({ space: $r('app.float.space_8') }) {
+    Column({ space: 6 }) {
       Text('构建与关于')
         .width('100%')
-        .fontSize($r('app.float.font_body_large'))
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'));
+        .fontSize(16)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.neu_text_primary'));
 
-      Stack() {
-        Column({ space: 0 }) {
-          this.InfoRow('构建标识', this.buildMarker, true)
-          this.InfoRow('上游仓库', this.upstreamRepo, this.notes.trim().length > 0)
-          if (this.notes.trim().length > 0) {
-            this.InfoRow('运行说明', this.notes, false)
+      Stack({ alignContent: Alignment.Center }) {
+        LuminousSurface({
+          state: LuminousSurfaceState.Raised,
+          surfaceWidth: this.diagnosticPanelWidth(),
+          surfaceHeight: 160,
+          cornerRadius: 20,
+        }) {
+          Column({ space: 0 }) {
+            this.InfoRow('构建标识', this.buildMarker, true)
+            this.InfoRow('上游仓库', this.upstreamRepo, this.notes.trim().length > 0)
+            if (this.notes.trim().length > 0) {
+              this.InfoRow('运行说明', this.notes, false)
+            }
           }
+          .width(this.diagnosticPanelWidth())
+          .height(160)
+          .padding({ left: 14, right: 14, top: 10, bottom: 10 });
         }
-        .width('100%')
-        .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_16') })
-        .borderRadius($r('app.float.radius_18'))
-        .clip(true)
-        .visualEffect(RustDeskGlassEffect.contentReceiver());
       }
-      .width('100%')
-      .backgroundColor($r('app.color.glass_surface'))
-      .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-        adaptiveColor: AdaptiveColor.DEFAULT,
-        scale: 0.48,
-      })
-      .linearGradient({
-        angle: 142,
-        colors: [
-          [$r('app.color.glass_gradient_high'), 0],
-          [$r('app.color.glass_gradient_mid'), 0.48],
-          [$r('app.color.glass_gradient_accent'), 1],
-        ],
-      })
-      .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-      .borderRadius($r('app.float.radius_18'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.featherReceiver());
+      .width(this.diagnosticPanelWidth() + 16)
+      .height(176)
+      .clip(false);
     }
-    .width('100%')
+    .width(this.diagnosticPanelWidth() + 16)
     .alignItems(HorizontalAlign.Start);
   }
 
   @Builder
   private DecoderUnit(item: DecoderCapability, showDivider: boolean) {
-    Stack() {
-      Row({ space: $r('app.float.space_12') }) {
-        Column({ space: $r('app.float.space_4') }) {
-          Text(item.codec)
-            .width('100%')
-            .fontSize($r('app.float.font_body'))
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'));
-          Text(this.decoderDisplayName(item))
-            .width('100%')
-            .fontSize($r('app.float.font_caption'))
-            .fontColor($r('app.color.text_secondary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis });
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start);
-
-        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.End }) {
-          if (item.hardwareAvailable) {
-            this.StatusTag('硬解', $r('app.color.success'), $r('app.color.success_soft'))
-          }
-          if (item.softwareAvailable) {
-            Text('软解')
-              .fontSize($r('app.float.font_caption'))
-              .fontWeight(FontWeight.Medium)
-              .fontColor($r('app.color.brand_primary'))
-              .padding({
-                left: $r('app.float.space_8'),
-                right: $r('app.float.space_8'),
-                top: $r('app.float.space_4'),
-                bottom: $r('app.float.space_4'),
-              })
-              .margin({ left: $r('app.float.space_4') })
-              .backgroundColor($r('app.color.brand_primary_soft'))
-              .borderRadius($r('app.float.radius_10'));
-          }
-          if (item.mimeAvailable && !item.hardwareAvailable && !item.softwareAvailable) {
-            this.StatusTag('MIME', $r('app.color.warning'), $r('app.color.warning_soft'))
-          }
-          if (!this.decoderAvailable(item)) {
-            this.StatusTag('不支持', $r('app.color.error'), $r('app.color.error_soft'))
-          }
-        }
+    Row({ space: 10 }) {
+      Column({ space: 2 }) {
+        Text(item.codec)
+          .width('100%')
+          .fontSize(13)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.neu_text_primary'));
+        Text(this.decoderDisplayName(item))
+          .width('100%')
+          .fontSize(10)
+          .fontColor($r('app.color.neu_text_secondary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
       }
-      .width('100%')
-      .padding($r('app.float.space_16'))
-      .alignItems(VerticalAlign.Center)
-      .border({
-        width: { bottom: showDivider ? 0.5 : 0 },
-        color: $r('app.color.divider'),
-      })
-      .visualEffect(RustDeskGlassEffect.contentReceiver());
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start);
+
+      if (item.hardwareAvailable) {
+        this.StatusTag('硬解', $r('app.color.success'), $r('app.color.success_soft'))
+      } else if (item.softwareAvailable) {
+        this.StatusTag('软解', $r('app.color.neu_accent'), $r('app.color.brand_primary_soft'))
+      } else if (item.mimeAvailable) {
+        this.StatusTag('MIME', $r('app.color.warning'), $r('app.color.warning_soft'))
+      } else {
+        this.StatusTag('不支持', $r('app.color.error'), $r('app.color.error_soft'))
+      }
     }
-    .width('100%');
+    .width(this.diagnosticPanelWidth())
+    .constraintSize({ minHeight: 58 })
+    .padding({ left: 14, right: 14 })
+    .alignItems(VerticalAlign.Center)
+    .border({
+      width: { bottom: showDivider ? 0.5 : 0 },
+      color: $r('app.color.divider'),
+    });
   }
 
   @Builder
   private DecoderUnits() {
-    Column({ space: $r('app.float.space_8') }) {
+    Column({ space: 6 }) {
       Text('视频解码')
         .width('100%')
-        .fontSize($r('app.float.font_body_large'))
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'));
+        .fontSize(16)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.neu_text_primary'));
 
-      Stack() {
-        Column({ space: 0 }) {
-          if (this.decoderCapabilities.length === 0) {
-            Row({ space: $r('app.float.space_12') }) {
-              Text('解码器')
-                .fontSize($r('app.float.font_body'))
-                .fontWeight(FontWeight.Medium)
-                .fontColor($r('app.color.text_primary'));
-              Text('正在查询设备能力')
-                .layoutWeight(1)
-                .fontSize($r('app.float.font_label'))
-                .fontColor($r('app.color.text_secondary'))
-                .textAlign(TextAlign.End);
+      Stack({ alignContent: Alignment.Center }) {
+        LuminousSurface({
+          state: LuminousSurfaceState.Raised,
+          surfaceWidth: this.diagnosticPanelWidth(),
+          surfaceHeight: this.diagnosticDecoderHeight(),
+          cornerRadius: 20,
+        }) {
+          Column({ space: 0 }) {
+            if (this.decoderCapabilities.length === 0) {
+              Row({ space: 10 }) {
+                Text('解码器')
+                  .fontSize(13)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor($r('app.color.neu_text_primary'));
+                Text('正在查询设备能力')
+                  .layoutWeight(1)
+                  .fontSize(11)
+                  .fontColor($r('app.color.neu_text_secondary'))
+                  .textAlign(TextAlign.End);
+              }
+              .width(this.diagnosticPanelWidth())
+              .height(60)
+              .padding({ left: 14, right: 14 });
+            } else {
+              ForEach(this.decoderCapabilities, (item: DecoderCapability, index: number) => {
+                this.DecoderUnit(item, index < this.decoderCapabilities.length - 1)
+              }, (item: DecoderCapability) => item.codec)
             }
-            .width('100%')
-            .padding($r('app.float.space_16'))
-            .visualEffect(RustDeskGlassEffect.contentReceiver());
-          } else {
-            ForEach(this.decoderCapabilities, (item: DecoderCapability, index: number) => {
-              this.DecoderUnit(item, index < this.decoderCapabilities.length - 1)
-            }, (item: DecoderCapability) => item.codec)
           }
+          .width(this.diagnosticPanelWidth())
+          .height(this.diagnosticDecoderHeight())
+          .borderRadius(20)
+          .clip(true);
         }
-        .width('100%')
-        .borderRadius($r('app.float.radius_18'))
-        .clip(true);
       }
-      .width('100%')
-      .backgroundColor($r('app.color.glass_surface'))
-      .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-        adaptiveColor: AdaptiveColor.DEFAULT,
-        scale: 0.48,
-      })
-      .linearGradient({
-        angle: 142,
-        colors: [
-          [$r('app.color.glass_gradient_high'), 0],
-          [$r('app.color.glass_gradient_mid'), 0.48],
-          [$r('app.color.glass_gradient_accent'), 1],
-        ],
-      })
-      .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-      .borderRadius($r('app.float.radius_18'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.featherReceiver());
+      .width(this.diagnosticPanelWidth() + 16)
+      .height(this.diagnosticDecoderHeight() + 16)
+      .clip(false);
     }
-    .width('100%')
+    .width(this.diagnosticPanelWidth() + 16)
     .alignItems(HorizontalAlign.Start);
   }
 
@@ -691,37 +752,21 @@ export struct SettingsTab {
 
   @Builder
   private DiagnosticRefreshButton() {
-    Stack() {
-      FloatingActionSurface({
-        touchLight: true,
-        onActivate: () => this.onRefresh(),
-      }) {
-        Row() {
-          Text('刷新底层状态')
-            .fontSize($r('app.float.font_body'))
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_inverse'));
-        }
-        .width('100%')
-        .height('100%')
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor($r('app.color.brand_primary'))
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true);
-      }
-    }
-    .width('100%')
-    .height($r('app.float.control_regular'))
-    .borderRadius($r('app.float.radius_14'))
-    .clip(false);
+    LuminousButton({
+      label: '刷新底层状态',
+      controlWidth: this.diagnosticPanelWidth(),
+      controlSizeMode: LuminousControlSize.Compact,
+      tone: LuminousTone.Accent,
+      onAction: () => this.onRefresh(),
+    })
   }
 
   @Builder
   private DiagnosticsPage() {
-    Column({ space: $r('app.float.space_20') }) {
+    Column({ space: 12 }) {
       if (this.useDiagnosticColumns()) {
-        Row({ space: $r('app.float.space_24') }) {
-          Column({ space: $r('app.float.space_20') }) {
+        Row({ space: 24 }) {
+          Column({ space: 12 }) {
             this.DiagnosticIdentityUnit()
             this.RuntimeUnit()
             this.DiagnosticRefreshButton()
@@ -729,7 +774,7 @@ export struct SettingsTab {
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Start);
 
-          Column({ space: $r('app.float.space_20') }) {
+          Column({ space: 12 }) {
             this.BuildUnit()
             this.DecoderUnits()
             this.DiagnosticErrorUnit()
@@ -740,7 +785,7 @@ export struct SettingsTab {
         .width('100%')
         .alignItems(VerticalAlign.Top);
       } else {
-        Column({ space: $r('app.float.space_20') }) {
+        Column({ space: 12 }) {
           this.DiagnosticIdentityUnit()
           this.RuntimeUnit()
           this.BuildUnit()
@@ -806,27 +851,27 @@ export struct SettingsTab {
             this.SettingsHub()
           }
           .width('100%')
-          .constraintSize({ maxWidth: 720 })
-          .alignItems(HorizontalAlign.Start);
+          .constraintSize({ maxWidth: 860 })
+          .alignItems(HorizontalAlign.Center);
         }
         .width('100%')
-        .constraintSize({ minHeight: this.hubViewportHeight })
         .justifyContent(FlexAlign.Center)
         .alignItems(VerticalAlign.Top)
         .padding({
           left: this.horizontalPadding(),
           right: this.horizontalPadding(),
-          top: this.viewportWidth < 600 ? $r('app.float.space_16') : $r('app.float.space_20'),
+          top: this.viewportWidth < 600 ? $r('app.float.space_12') : $r('app.float.space_16'),
           bottom: this.hubBottomPadding(),
-        });
+        })
+        .margin({ top: -48 });
       }
       .width('100%')
-      .backgroundColor($r('app.color.transparent'));
+      .backgroundColor($r('app.color.neu_base'));
     }
     .width('100%')
     .height('100%')
     .scrollBar(BarState.Off)
-    .backgroundColor($r('app.color.transparent'))
+    .backgroundColor($r('app.color.neu_base'))
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       const height = Number(newArea.height);
       if (height > 0) {
@@ -861,19 +906,19 @@ export struct SettingsTab {
           .padding({
             left: this.sheetHorizontalPadding(),
             right: this.sheetHorizontalPadding(),
-            top: $r('app.float.space_16'),
-            bottom: $r('app.float.space_40'),
+            top: $r('app.float.space_8'),
+            bottom: $r('app.float.space_24'),
           });
         }
         .width('100%')
         .alignItems(HorizontalAlign.Center)
-        .backgroundColor($r('app.color.background'));
+        .backgroundColor($r('app.color.neu_base'));
       }
       .width('100%')
       .height('100%')
       .clip(false)
       .scrollBar(BarState.Off)
-      .backgroundColor($r('app.color.background'))
+      .backgroundColor($r('app.color.neu_base'))
       .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
       .nestedScroll({
         scrollForward: NestedScrollMode.PARENT_FIRST,
@@ -910,10 +955,7 @@ export struct SettingsTab {
       },
       style: {
         scrollEffectOpts: {
-          enableScrollEffect: true,
-          scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
-          blurEffectiveStartOffset: LengthMetrics.vp(0),
-          blurEffectiveEndOffset: LengthMetrics.vp(20),
+          enableScrollEffect: false,
         },
         systemMaterialEffect: {
           materialType: hdsMaterial.MaterialType.ADAPTIVE,
@@ -924,7 +966,7 @@ export struct SettingsTab {
     .bindToScrollable([this.sheetScroller])
     .width('100%')
     .height('100%')
-    .backgroundColor($r('app.color.background'))
+    .backgroundColor($r('app.color.neu_base'))
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM]);
   }
 
@@ -934,14 +976,14 @@ export struct SettingsTab {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor($r('app.color.transparent'))
+    .backgroundColor($r('app.color.neu_base'))
     .bindSheet(this.settingsSheetVisible!!, this.SettingsSheet(), {
       height: SheetSize.LARGE,
       preferType: SheetType.CENTER,
       showClose: false,
       dragBar: false,
       enableFloatingDragBar: false,
-      backgroundColor: $r('app.color.background'),
+      backgroundColor: $r('app.color.neu_base'),
     })
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       const width = Number(newArea.width);

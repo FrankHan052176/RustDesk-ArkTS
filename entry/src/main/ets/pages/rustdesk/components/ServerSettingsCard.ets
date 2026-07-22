@@ -1,7 +1,14 @@
-import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
-import { FloatingActionSurface, FloatingGlassSurface } from './FloatingSurface';
+import {
+  LuminousButton,
+  LuminousControlSize,
+  LuminousSegmentedControl,
+  LuminousSelectionItem,
+  LuminousSurface,
+  LuminousSurfaceState,
+  LuminousTextField,
+  LuminousTone,
+} from 'luminous_neo';
 import { ServerConfig, ServerMode } from '../RustDeskDirectoryTypes';
-import { FloatingSegmentedControl } from './FloatingSegmentedControl';
 
 export interface ServerSettingsCardProps {
   showHeader: boolean;
@@ -32,6 +39,32 @@ export struct ServerSettingsCard {
 
   private isBusy(): boolean {
     return this.validating || this.saving;
+  }
+
+  private selectorWidth(): number {
+    return Math.max(280, Math.min(this.viewportWidth - 40, 560));
+  }
+
+  private inputWidth(): number {
+    if (this.isWide()) {
+      return Math.max(280, (this.viewportWidth - 72) / 2);
+    }
+    return Math.max(280, Math.min(this.viewportWidth - 40, 560));
+  }
+
+  private actionButtonWidth(): number {
+    if (this.viewportWidth >= 520) {
+      return Math.max(150, (this.viewportWidth - 96) / 2);
+    }
+    return Math.max(104, (this.viewportWidth - 84) / 2);
+  }
+
+  private statusSummaryHeight(): number {
+    return 150;
+  }
+
+  private statusRowHeight(): number {
+    return this.statusSummaryHeight() / 3;
   }
 
   private copyConfig(): ServerConfig {
@@ -200,38 +233,42 @@ export struct ServerSettingsCard {
   @Builder
   private ServerInput(controlId: string, placeholder: ResourceStr, value: string,
     onChange: (value: string) => void) {
-    Stack() {
-      FloatingGlassSurface() {
-        Row() {
-          TextInput({ text: value, placeholder: placeholder })
-            .width('100%')
-            .height('100%')
-            .fontSize($r('app.float.font_body'))
-            .fontColor($r('app.color.text_primary'))
-            .placeholderColor($r('app.color.text_tertiary'))
-            .caretColor($r('app.color.brand_primary'))
-            .borderWidth(0)
-            .backgroundColor($r('app.color.transparent'))
-            .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_16') })
-            .maxLength(512)
-            .onChange(onChange);
-        }
-        .width('100%')
-        .height('100%')
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true);
-      }
+    Row() {
+      LuminousTextField({
+        value: value,
+        placeholder: placeholder,
+        fieldWidth: this.inputWidth(),
+        fieldHeight: 48,
+        onChange: onChange,
+      })
+        .margin({ top: -10 })
     }
     .width('100%')
-    .height($r('app.float.control_regular'))
-    .borderRadius($r('app.float.radius_14'))
-    .clip(false);
+    .justifyContent(FlexAlign.Center);
+  }
+
+  @Builder
+  private ModeSelector() {
+    Row() {
+      LuminousSegmentedControl({
+        items: [
+          new LuminousSelectionItem('official', $r('app.string.settings_server_official')),
+          new LuminousSelectionItem('custom', $r('app.string.settings_server_custom')),
+        ],
+        selectedIndex: this.config.mode === 'custom' ? 1 : 0,
+        controlWidth: this.selectorWidth(),
+        controlHeight: 50,
+        onChange: (index: number) => this.updateModeIndex(index),
+      })
+    }
+    .width('100%')
+    .justifyContent(FlexAlign.Center);
   }
 
   @Builder
   private ServerField(controlId: string, label: ResourceStr, placeholder: ResourceStr, value: string,
     onChange: (value: string) => void) {
-    Column({ space: $r('app.float.space_8') }) {
+    Column({ space: 2 }) {
       Text(label)
         .width('100%')
         .fontSize($r('app.float.font_label'))
@@ -268,7 +305,7 @@ export struct ServerSettingsCard {
         .textOverflow({ overflow: TextOverflow.Ellipsis });
     }
     .width('100%')
-    .constraintSize({ minHeight: 46 })
+    .height(this.statusRowHeight())
     .border({
       width: { bottom: isLast ? 0 : 0.5 },
       color: $r('app.color.divider'),
@@ -278,7 +315,7 @@ export struct ServerSettingsCard {
   @Builder
   private CustomFields() {
     if (this.isWide()) {
-      Column({ space: $r('app.float.space_16') }) {
+      Column({ space: 0 }) {
         Row({ space: $r('app.float.space_16') }) {
           Column() {
             this.ServerField(
@@ -333,7 +370,7 @@ export struct ServerSettingsCard {
       }
       .width('100%');
     } else {
-      Column({ space: $r('app.float.space_16') }) {
+      Column({ space: 0 }) {
         this.ServerField(
           'id-server',
           $r('app.string.settings_id_server'),
@@ -369,100 +406,71 @@ export struct ServerSettingsCard {
 
   @Builder
   private StatusSummary() {
-    Stack() {
-      Column({ space: 0 }) {
-        Row({ space: $r('app.float.space_12') }) {
-          Text($r('app.string.settings_server_effective_api'))
-            .fontSize($r('app.float.font_label'))
-            .fontColor($r('app.color.text_secondary'));
-          Text(this.effectiveApiText())
-            .layoutWeight(1)
-            .fontSize($r('app.float.font_label'))
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'))
-            .textAlign(TextAlign.End)
-            .maxLines(2)
-            .textOverflow({ overflow: TextOverflow.Ellipsis });
-        }
-        .width('100%')
-        .constraintSize({ minHeight: 46 })
-        .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') });
+    Stack({ alignContent: Alignment.Center }) {
+      LuminousSurface({
+        state: LuminousSurfaceState.Inset,
+        surfaceWidth: this.selectorWidth(),
+        surfaceHeight: this.statusSummaryHeight(),
+        cornerRadius: 18,
+      }) {
+        Column({ space: 0 }) {
+          Row({ space: $r('app.float.space_12') }) {
+            Text($r('app.string.settings_server_effective_api'))
+              .fontSize($r('app.float.font_label'))
+              .fontColor($r('app.color.neu_text_secondary'));
+            Text(this.effectiveApiText())
+              .layoutWeight(1)
+              .fontSize($r('app.float.font_label'))
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.neu_text_primary'))
+              .textAlign(TextAlign.End)
+              .maxLines(2)
+              .textOverflow({ overflow: TextOverflow.Ellipsis });
+          }
+          .width('100%')
+          .height(this.statusRowHeight())
+          .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') });
 
-        this.CapabilityRow(
-          $r('app.string.settings_server_remote_capability'),
-          this.remoteStatusText(),
-          this.config.remoteReachable,
-          false,
-        )
-        this.CapabilityRow(
-          $r('app.string.settings_server_account_capability'),
-          this.accountStatusText(),
-          this.config.accountAvailable,
-          true,
-        )
+          this.CapabilityRow(
+            $r('app.string.settings_server_remote_capability'),
+            this.remoteStatusText(),
+            this.config.remoteReachable,
+            false,
+          )
+          this.CapabilityRow(
+            $r('app.string.settings_server_account_capability'),
+            this.accountStatusText(),
+            this.config.accountAvailable,
+            true,
+          )
+        }
+        .width(this.selectorWidth())
+        .height(this.statusSummaryHeight())
+        .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_16') });
       }
-      .width('100%')
-      .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_16') })
-      .borderRadius($r('app.float.radius_18'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.contentReceiver());
     }
     .width('100%')
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.48,
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
-    .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-    .borderRadius($r('app.float.radius_18'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver());
+    .height(this.statusSummaryHeight())
+    .clip(false);
   }
 
   @Builder
   private ActionButton(label: ResourceStr, primary: boolean, enabled: boolean,
     onClick: () => void) {
-    Stack() {
-      FloatingActionSurface({
-        actionEnabled: enabled,
-        touchLight: true,
-        lightPeakIntensity: 0.62,
-        onActivate: onClick,
-      }) {
-        Row() {
-          Text(label)
-            .fontSize($r('app.float.font_body'))
-            .fontWeight(FontWeight.Medium)
-            .fontColor(enabled
-              ? (primary ? $r('app.color.text_inverse') : $r('app.color.brand_primary'))
-              : $r('app.color.disabled_text'));
-        }
-        .width('100%')
-        .height('100%')
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor(enabled
-          ? (primary ? $r('app.color.brand_primary') : $r('app.color.brand_primary_soft'))
-          : $r('app.color.disabled_background'))
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true);
-      }
-    }
-    .width('100%')
-    .height($r('app.float.control_regular'));
+    LuminousButton({
+      label: label,
+      controlWidth: this.actionButtonWidth(),
+      controlSizeMode: LuminousControlSize.Regular,
+      tone: primary ? LuminousTone.Accent : LuminousTone.Neutral,
+      isEnabled: enabled,
+      onAction: onClick,
+    })
   }
 
   @Builder
   private ActionButtons() {
-    if (this.viewportWidth >= 520) {
-      Row({ space: $r('app.float.space_12') }) {
+    if (this.viewportWidth >= 300) {
+      Row({ space: 8 }) {
         Column() {
           this.ActionButton(
             this.validating
@@ -512,7 +520,7 @@ export struct ServerSettingsCard {
   }
 
   build() {
-    Column({ space: $r('app.float.space_20') }) {
+    Column({ space: 8 }) {
       if (this.showHeader) {
         Row({ space: $r('app.float.space_16') }) {
           Column({ space: $r('app.float.space_4') }) {
@@ -538,23 +546,7 @@ export struct ServerSettingsCard {
         .alignItems(VerticalAlign.Center);
       }
 
-      FloatingSegmentedControl({
-        labels: [
-          $r('app.string.settings_server_official'),
-          $r('app.string.settings_server_custom'),
-        ],
-        badges: [],
-        selectedIndex: this.config.mode === 'custom' ? 1 : 0,
-        progress: -1,
-        controlId: 'settings-server-mode',
-        compact: false,
-        onPreviewIndex: (_index: number) => {},
-        onProgressChange: (_progress: number) => {},
-        onDragStateChange: (_dragging: boolean) => {},
-        onChange: (index: number) => this.updateModeIndex(index),
-      })
-      .width('100%')
-      .constraintSize({ maxWidth: 520 });
+      this.ModeSelector()
 
       Text(this.config.mode === 'official'
         ? $r('app.string.settings_server_public_hint')
@@ -562,7 +554,8 @@ export struct ServerSettingsCard {
         .width('100%')
         .fontSize($r('app.float.font_body'))
         .lineHeight(20)
-        .fontColor($r('app.color.text_secondary'));
+        .fontColor($r('app.color.neu_text_secondary'))
+        .margin({ top: -12 });
 
       if (this.config.mode === 'custom') {
         this.CustomFields()

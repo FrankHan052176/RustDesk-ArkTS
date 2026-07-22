@@ -1,5 +1,14 @@
+import {
+  LuminousButton,
+  LuminousControlSize,
+  LuminousSegmentedControl,
+  LuminousSelectionItem,
+  LuminousSurface,
+  LuminousSurfaceState,
+  LuminousTextField,
+  LuminousTone,
+} from 'luminous_neo';
 import { DirectorySnapshot, PeerRecord } from '../RustDeskDirectoryTypes';
-import { FloatingActionSurface, FloatingGlassSurface, FloatingSectionHeading } from './FloatingSurface';
 import { PeerCard } from './PeerCard';
 
 export interface ConnectTabProps {
@@ -38,7 +47,7 @@ export struct ConnectTab {
   @Param directorySnapshot: DirectorySnapshot = new DirectorySnapshot();
   @Param scroller: Scroller = new Scroller();
   @Local viewportWidth: number = 390;
-  @Local viewportHeight: number = 780;
+  @Local connectionMode: number = 0;
   @Event onTargetChange: (value: string) => void = (_value: string) => {};
   @Event onConnectRemote: () => void = () => {};
   @Event onViewCamera: () => void = () => {};
@@ -50,252 +59,312 @@ export struct ConnectTab {
   @Event onViewPeerCamera: (peerId: string) => void = (_peerId: string) => {};
   @Event onOpenPeerTransfer: (peerId: string) => void = (_peerId: string) => {};
 
-  private useSplitLayout(): boolean {
-    return this.wideLayout;
+  private isCompact(): boolean {
+    return this.viewportWidth < 760 || !this.wideLayout;
   }
 
-  private isLowHeightWindow(): boolean {
-    return this.viewportWidth > 0 && this.viewportHeight / this.viewportWidth < 0.8;
-  }
-
-  private contentMaxWidth(): number {
-    return this.useSplitLayout() ? 1200 : 720;
-  }
-
-  private contentBottomPadding(): number {
-    return (this.wideLayout ? 40 : 112) + this.bottomAvoidInset;
-  }
-
-  private sectionSpacing(): Resource {
-    return this.isLowHeightWindow() ? $r('app.float.space_24') : $r('app.float.space_32');
-  }
-
-  private recentLimit(): number {
-    return 1;
-  }
-
-  private recentPreview(): PeerRecord[] {
-    const peers: PeerRecord[] = [];
-    const limit = this.recentLimit();
-    for (let index = 0; index < this.directorySnapshot.recent.length && peers.length < limit; index += 1) {
-      peers.push(this.directorySnapshot.recent[index]);
+  private controlWidth(): number {
+    if (this.isCompact()) {
+      return Math.max(280, Math.min(this.viewportWidth - 40, 520));
     }
-    return peers;
+    return 440;
   }
 
-  private hasActiveWork(): boolean {
-    return this.canDisconnect || this.transferActive;
+  private stageFrameWidth(): number {
+    return this.controlWidth() + 40;
+  }
+
+  private recentFrameWidth(): number {
+    if (this.isCompact()) {
+      return this.stageFrameWidth();
+    }
+    return Math.max(430, Math.min(this.viewportWidth - this.stageFrameWidth() - 150, 620));
+  }
+
+  private recentContentWidth(): number {
+    if (this.isCompact()) {
+      return this.controlWidth();
+    }
+    return Math.max(390, this.recentFrameWidth() - 40);
   }
 
   private targetReady(): boolean {
     return this.target.trim().length > 0;
   }
 
-  private connectButtonText(): string {
-    return this.canDisconnect ? '连接其他设备' : '远程控制';
+  private modeItems(): LuminousSelectionItem[] {
+    return [
+      new LuminousSelectionItem('control', '远程控制', '控制远端设备'),
+      new LuminousSelectionItem('camera', '查看相机', '查看远端摄像头'),
+      new LuminousSelectionItem('files', '文件传输', '浏览并传输文件'),
+    ];
+  }
+
+  private modeSymbol(): Resource {
+    if (this.connectionMode === 1) {
+      return $r('sys.symbol.video');
+    }
+    if (this.connectionMode === 2) {
+      return $r('sys.symbol.folder');
+    }
+    return $r('sys.symbol.display');
+  }
+
+  private modeTitle(): ResourceStr {
+    if (this.connectionMode === 1) {
+      return '查看远端相机';
+    }
+    if (this.connectionMode === 2) {
+      return '打开文件工作区';
+    }
+    return '建立远程控制';
+  }
+
+  private modeDescription(): ResourceStr {
+    if (this.connectionMode === 1) {
+      return '只查看视频，不发送键鼠输入';
+    }
+    if (this.connectionMode === 2) {
+      return '在本机与远端之间浏览和传输文件';
+    }
+    return '连接后使用触摸、键鼠或触控板操作远端';
+  }
+
+  private primaryActionLabel(): ResourceStr {
+    if (this.connectionMode === 1) {
+      return '查看相机';
+    }
+    if (this.connectionMode === 2) {
+      return this.transferActive ? '返回文件传输' : '开始文件传输';
+    }
+    return this.canDisconnect ? '建立新连接' : '开始连接';
+  }
+
+  private activatePrimaryAction(): void {
+    if (this.connectionMode === 1) {
+      this.onViewCamera();
+      return;
+    }
+    if (this.connectionMode === 2) {
+      this.onOpenTransfer();
+      return;
+    }
+    this.onConnectRemote();
+  }
+
+  private recentPreview(): PeerRecord[] {
+    const limit = 2;
+    const result: PeerRecord[] = [];
+    for (let index = 0; index < this.directorySnapshot.recent.length && index < limit; index += 1) {
+      result.push(this.directorySnapshot.recent[index]);
+    }
+    return result;
   }
 
   @Builder
-  private TargetField() {
-    Stack() {
-      FloatingGlassSurface({ compact: true }) {
-        Row({ space: $r('app.float.space_12') }) {
-          Stack({ alignContent: Alignment.Center }) {
-            Text('ID')
-              .fontSize($r('app.float.font_label'))
-              .fontWeight(FontWeight.Bold)
-              .fontColor($r('app.color.brand_primary'));
-          }
-          .width($r('app.float.control_small'))
-          .height($r('app.float.control_small'))
-          .backgroundColor($r('app.color.brand_primary_soft'))
-          .borderRadius($r('app.float.radius_14'))
-          .clip(true);
+  private StageHeader() {
+    Row({ space: 14 }) {
+      SymbolGlyph(this.modeSymbol())
+        .fontSize(32)
+        .fontColor([$r('app.color.neu_accent')]);
 
-          TextInput({ text: this.target, placeholder: '输入远端设备 ID' })
-            .layoutWeight(1)
-            .height('100%')
-            .padding(0)
-            .backgroundColor($r('app.color.transparent'))
-            .fontSize($r('app.float.font_body_large'))
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'))
-            .placeholderColor($r('app.color.text_tertiary'))
-            .caretColor($r('app.color.brand_primary'))
-            .borderWidth(0)
-            .accessibilityText('远端设备 ID')
-            .onChange((value: string) => this.onTargetChange(value));
-        }
-        .width('100%')
-        .height('100%')
-        .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_16') })
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true);
+      Column({ space: 3 }) {
+        Text(this.modeTitle())
+          .width('100%')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.neu_text_primary'));
+        Text(this.modeDescription())
+          .width('100%')
+          .fontSize(12)
+          .lineHeight(18)
+          .fontColor($r('app.color.neu_text_secondary'))
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start);
+    }
+    .width(this.controlWidth())
+    .alignItems(VerticalAlign.Center);
+  }
+
+  @Builder
+  private ConnectionStage() {
+    Column({ space: 2 }) {
+      this.StageHeader();
+
+      LuminousSegmentedControl({
+        items: this.modeItems(),
+        selectedIndex: this.connectionMode,
+        controlWidth: this.controlWidth(),
+        controlHeight: 50,
+        onChange: (index: number): void => {
+          this.connectionMode = index;
+        },
+      })
+
+      LuminousTextField({
+        value: this.target,
+        placeholder: '输入设备 ID',
+        fieldWidth: this.controlWidth(),
+        fieldHeight: 54,
+        onChange: (value: string): void => this.onTargetChange(value),
+      })
+        .margin({ top: -18 })
+
+      Row({ space: 8 }) {
+        Circle()
+          .width(7)
+          .height(7)
+          .fill(this.canDisconnect ? $r('app.color.success') : $r('app.color.neu_text_disabled'));
+        Text(this.canDisconnect
+          ? '当前会话仍在运行，可同时准备下一台设备'
+          : (this.rememberPassword ? '已启用本机会话密码记忆' : '密码会在远端需要时单独请求'))
+          .layoutWeight(1)
+          .fontSize(11)
+          .fontColor($r('app.color.neu_text_secondary'))
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
+      }
+      .width(this.controlWidth())
+      .padding({ left: 4, right: 4 })
+      .margin({ top: -6 })
+      .alignItems(VerticalAlign.Center);
+
+      LuminousButton({
+        label: this.primaryActionLabel(),
+        controlWidth: this.controlWidth(),
+        controlSizeMode: LuminousControlSize.Regular,
+        tone: LuminousTone.Accent,
+        isEnabled: this.targetReady() || (this.connectionMode === 2 && this.transferActive),
+        onAction: (): void => this.activatePrimaryAction(),
+      })
+        .margin({ top: -8 })
+
+      if (this.canDisconnect) {
+        LuminousButton({
+          label: '断开当前会话',
+          controlWidth: Math.min(180, this.controlWidth()),
+          controlSizeMode: LuminousControlSize.Compact,
+          tone: LuminousTone.Danger,
+          onAction: (): void => this.onDisconnect(),
+        })
+          .margin({ top: -22 })
       }
     }
-    .width('100%')
-    .height($r('app.float.control_large'))
-    .borderRadius($r('app.float.radius_14'))
+    .width(this.stageFrameWidth())
+    .alignItems(HorizontalAlign.Center);
+  }
+
+  @Builder
+  private RecentHeader() {
+    Row() {
+      Column({ space: 3 }) {
+        Text('最近设备')
+          .fontSize(18)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.neu_text_primary'));
+        Text('继续上一次远程工作')
+          .fontSize(12)
+          .fontColor($r('app.color.neu_text_secondary'));
+      }
+      .alignItems(HorizontalAlign.Start);
+      Blank();
+      Text(`${this.directorySnapshot.recent.length}`)
+        .fontSize(14)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.neu_accent'));
+    }
+    .width(this.recentContentWidth())
+    .alignItems(VerticalAlign.Center);
+  }
+
+  @Builder
+  private EmptyRecent() {
+    Stack({ alignContent: Alignment.Center }) {
+      LuminousSurface({
+        state: LuminousSurfaceState.Raised,
+        surfaceWidth: this.recentContentWidth(),
+        surfaceHeight: 96,
+        cornerRadius: 24,
+      }) {
+        Row({ space: 14 }) {
+          SymbolGlyph($r('sys.symbol.clock'))
+            .fontSize(26)
+            .fontColor([$r('app.color.neu_accent')]);
+          Column({ space: 4 }) {
+            Text('这里还没有设备')
+              .width('100%')
+              .fontSize(15)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.neu_text_primary'));
+            Text('首次连接完成后，会在这里保留最近使用的设备。')
+              .width('100%')
+              .fontSize(11)
+              .lineHeight(17)
+              .fontColor($r('app.color.neu_text_secondary'))
+              .maxLines(2);
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start);
+        }
+        .width(this.recentContentWidth())
+        .height(96)
+        .padding({ left: 20, right: 20 })
+        .alignItems(VerticalAlign.Center);
+      }
+    }
+    .width(this.recentFrameWidth())
+    .height(128)
     .clip(false);
   }
 
   @Builder
-  private ConnectButton() {
-    Stack() {
-      FloatingActionSurface({
-        actionEnabled: this.targetReady(),
-        touchLight: true,
-        lightPeakIntensity: 0.66,
-        onActivate: () => this.onConnectRemote(),
-      }) {
-        Row() {
-          Text(this.connectButtonText())
-            .fontSize($r('app.float.font_body_large'))
-            .fontWeight(FontWeight.Bold)
-            .fontColor(this.targetReady()
-              ? $r('app.color.white')
-              : $r('app.color.disabled_text'));
-        }
-        .width('100%')
-        .height('100%')
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor(this.targetReady()
-          ? $r('app.color.brand_primary')
-          : $r('app.color.disabled_background'))
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true);
+  private RecentWorkspace() {
+    Column({ space: 16 }) {
+      this.RecentHeader();
+      if (this.recentPreview().length === 0) {
+        this.EmptyRecent();
+      } else {
+        ForEach(this.recentPreview(), (peer: PeerRecord) => {
+          PeerCard({
+            peer: peer,
+            compact: true,
+            cardWidth: this.recentContentWidth(),
+            transferActive: this.activeTransferPeerId === peer.id,
+            onSetFavorite: (peerId: string, favorite: boolean) => this.onSetPeerFavorite(peerId, favorite),
+            onRemoveRecent: (peerId: string) => this.onRemoveRecentPeer(peerId),
+            onConnectRemote: (peerId: string) => this.onConnectPeerRemote(peerId),
+            onViewCamera: (peerId: string) => this.onViewPeerCamera(peerId),
+            onOpenTransfer: (peerId: string) => this.onOpenPeerTransfer(peerId),
+          })
+            .width(this.recentContentWidth());
+        }, (peer: PeerRecord) => `recent-${peer.id}`);
       }
     }
-    .width('100%')
-    .height($r('app.float.control_regular'))
-    .accessibilityText(this.connectButtonText());
+    .width(this.recentFrameWidth())
+    .alignItems(HorizontalAlign.Center);
   }
 
   @Builder
-  private SecondaryAction(
-    icon: string,
-    label: string,
-    onClick: () => void,
-  ) {
-    Stack() {
-      FloatingActionSurface({
-        touchLight: true,
-        lightPeakIntensity: 0.62,
-        onActivate: onClick,
-      }) {
-        Row({ space: $r('app.float.space_6') }) {
-          Text(icon)
-            .fontSize($r('app.float.icon_regular'))
-            .fontColor($r('app.color.text_primary'));
-          Text(label)
-            .fontSize($r('app.float.font_body'))
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis });
-          }
-          .width('100%')
-          .height('100%')
-          .justifyContent(FlexAlign.Center)
-          .borderRadius($r('app.float.radius_14'))
-          .clip(true);
-      }
-    }
-    .layoutWeight(1)
-    .height($r('app.float.control_regular'))
-    .accessibilityText(label);
-  }
-
-  @Builder
-  private QuickConnectSection() {
-    Column({ space: $r('app.float.space_16') }) {
-      this.TargetField();
-      this.ConnectButton();
-
-      Row({ space: $r('app.float.space_12') }) {
-        this.SecondaryAction('◉', '摄像头', () => this.onViewCamera());
-        this.SecondaryAction('⇄', '文件传输', () => this.onOpenTransfer());
+  private Workspace() {
+    if (this.isCompact()) {
+      Column({ space: 12 }) {
+        this.ConnectionStage();
+        this.RecentWorkspace();
       }
       .width('100%')
-      .alignItems(VerticalAlign.Center);
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start);
-  }
-
-  @Builder
-  private RecentSection() {
-    Column({ space: $r('app.float.space_12') }) {
-      FloatingSectionHeading({
-        title: '最近设备',
-        description: '仅展示最后一次连接的设备。',
-      });
-
-      if (this.recentPreview().length === 0) {
-        Row({ space: $r('app.float.space_12') }) {
-          SymbolGlyph($r('sys.symbol.info_circle'))
-            .fontSize($r('app.float.icon_regular'))
-            .fontColor([$r('app.color.text_tertiary')]);
-          Text($r('app.string.device_empty_recent'))
-            .layoutWeight(1)
-            .fontSize($r('app.float.font_body'))
-            .lineHeight(20)
-            .fontColor($r('app.color.text_secondary'));
-        }
-        .width('100%')
-        .height(64)
-        .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_16') })
-        .backgroundColor($r('app.color.surface_secondary'))
-        .borderRadius($r('app.float.radius_14'));
-      } else {
-        Column({ space: $r('app.float.space_12') }) {
-          ForEach(this.recentPreview(), (peer: PeerRecord) => {
-            PeerCard({
-              peer: peer,
-              compact: true,
-              transferActive: this.activeTransferPeerId === peer.id,
-              onSetFavorite: (peerId: string, favorite: boolean) => this.onSetPeerFavorite(peerId, favorite),
-              onRemoveRecent: (peerId: string) => this.onRemoveRecentPeer(peerId),
-              onConnectRemote: (peerId: string) => this.onConnectPeerRemote(peerId),
-              onViewCamera: (peerId: string) => this.onViewPeerCamera(peerId),
-              onOpenTransfer: (peerId: string) => this.onOpenPeerTransfer(peerId),
-            });
-          }, (peer: PeerRecord) => `recent-${peer.id}`);
-        }
-        .width('100%');
+      .alignItems(HorizontalAlign.Center);
+    } else {
+      Row({ space: 44 }) {
+        this.ConnectionStage();
+        this.RecentWorkspace();
       }
+      .width('100%')
+      .justifyContent(FlexAlign.Center)
+      .alignItems(VerticalAlign.Top);
     }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start);
-  }
-
-  @Builder
-  private WideContent() {
-    Row({ space: $r('app.float.space_24') }) {
-      Column() {
-        this.QuickConnectSection();
-      }
-      .layoutWeight(5)
-      .alignItems(HorizontalAlign.Start);
-
-      Column() {
-        this.RecentSection();
-      }
-      .layoutWeight(7)
-      .alignItems(HorizontalAlign.Start);
-    }
-    .width('100%')
-    .alignItems(VerticalAlign.Top);
-  }
-
-  @Builder
-  private CompactContent() {
-    Column({ space: this.sectionSpacing() }) {
-      this.QuickConnectSection();
-      this.RecentSection();
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start);
   }
 
   build() {
@@ -305,40 +374,24 @@ export struct ConnectTab {
           .width('100%')
           .height(this.titleSpacerHeight)
           .flexShrink(0);
-
-        Column() {
-          if (this.useSplitLayout()) {
-            this.WideContent();
-          } else {
-            this.CompactContent();
-          }
-        }
-        .width('100%')
-        .constraintSize({ maxWidth: this.contentMaxWidth() })
-        .padding({
-          left: $r('app.float.page_horizontal'),
-          right: $r('app.float.page_horizontal'),
-          top: 0,
-          bottom: this.contentBottomPadding(),
-        })
-        .translate({ y: -10 });
+        this.Workspace();
       }
       .width('100%')
-      .alignItems(HorizontalAlign.Center)
-      .backgroundColor($r('app.color.transparent'));
+      .padding({
+        top: 18,
+        bottom: (this.wideLayout ? 52 : 132) + this.bottomAvoidInset,
+      })
+      .alignItems(HorizontalAlign.Center);
     }
     .width('100%')
     .height('100%')
     .scrollBar(BarState.Off)
-    .backgroundColor($r('app.color.transparent'))
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+    .backgroundColor($r('app.color.neu_base'))
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       const width = Number(newArea.width);
-      const height = Number(newArea.height);
       if (width > 0) {
         this.viewportWidth = width;
-      }
-      if (height > 0) {
-        this.viewportHeight = height;
       }
     });
   }

@@ -1,11 +1,15 @@
 import {
+  LuminousSearchField,
+  LuminousSegmentedControl,
+  LuminousSelectionItem,
+  LuminousSurface,
+  LuminousSurfaceState,
+} from 'luminous_neo';
+import {
   DirectorySnapshot,
   PeerRecord,
   PeerSource,
 } from '../RustDeskDirectoryTypes';
-import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
-import { FloatingDepthOverlay, FloatingPressDepthShell } from './FloatingDepth';
-import { FloatingSegmentedControl } from './FloatingSegmentedControl';
 import { PeerCard } from './PeerCard';
 
 export interface DeviceDirectoryPanelProps {
@@ -39,12 +43,9 @@ export struct DeviceDirectoryPanel {
   @Local activeSource: PeerSource = 'recent';
   @Local query: string = '';
   @Local viewportWidth: number = 390;
-  @Local selectorProgress: number = 0;
-  @Local selectorDragging: boolean = false;
-  @Local selectorSettling: boolean = false;
   @Local lanRefreshing: boolean = false;
   @Local lanRefreshStatus: RefreshStatus = RefreshStatus.Inactive;
-  @Local pressedControl: string = '';
+  @Local pressedEmptySource: string = '';
   private swiperController: SwiperController = new SwiperController();
   @Event onRefresh: () => void = () => {};
   @Event onScanLan: () => void = () => {};
@@ -67,14 +68,22 @@ export struct DeviceDirectoryPanel {
     return this.viewportWidth < 600;
   }
 
-  private horizontalPadding(): Resource {
+  private horizontalPadding(): number {
     if (this.viewportWidth >= 1440) {
-      return $r('app.float.space_48');
+      return 48;
     }
     if (this.viewportWidth >= 760 || this.wideLayout) {
-      return $r('app.float.space_32');
+      return 32;
     }
-    return $r('app.float.space_20');
+    return 20;
+  }
+
+  private pageFrameWidth(): number {
+    return Math.min(this.viewportWidth, 1200);
+  }
+
+  private controlWidth(): number {
+    return Math.max(280, this.pageFrameWidth() - this.horizontalPadding() * 2);
   }
 
   private bottomPadding(): number {
@@ -103,6 +112,26 @@ export struct DeviceDirectoryPanel {
 
   private compactPeerCard(): boolean {
     return this.viewportWidth < 600 || this.columnCount() > 1;
+  }
+
+  private sourceTitle(source: PeerSource): ResourceStr {
+    if (source === 'addressBook') {
+      return '通讯录设备';
+    }
+    if (source === 'lan') {
+      return '局域网设备';
+    }
+    return '最近使用';
+  }
+
+  private sourceDescription(source: PeerSource): ResourceStr {
+    if (source === 'addressBook') {
+      return '来自已登录账户的设备通讯录';
+    }
+    if (source === 'lan') {
+      return '与本机位于同一网络的可发现设备';
+    }
+    return '按最近连接时间排列';
   }
 
   private sourceIndex(source: PeerSource): number {
@@ -137,6 +166,14 @@ export struct DeviceDirectoryPanel {
 
   private sourceCount(source: PeerSource): number {
     return this.sourcePeers(source).length;
+  }
+
+  private sourceItems(): LuminousSelectionItem[] {
+    return [
+      new LuminousSelectionItem('recent', `最近 ${this.sourceCount('recent')}`, '最近连接的设备'),
+      new LuminousSelectionItem('address-book', `通讯录 ${this.sourceCount('addressBook')}`, '通讯录中的设备'),
+      new LuminousSelectionItem('lan', `局域网 ${this.sourceCount('lan')}`, '局域网发现的设备'),
+    ];
   }
 
   private matchesQuery(peer: PeerRecord, query: string): boolean {
@@ -175,7 +212,7 @@ export struct DeviceDirectoryPanel {
     return visible;
   }
 
-  private emptyText(source: PeerSource): Resource {
+  private emptyText(source: PeerSource): ResourceStr {
     if (this.query.trim().length > 0) {
       return $r('app.string.device_empty_search');
     }
@@ -188,58 +225,49 @@ export struct DeviceDirectoryPanel {
     return $r('app.string.device_empty_recent');
   }
 
-  private emptyGlyph(source: PeerSource): string {
+  private emptyTitle(source: PeerSource): ResourceStr {
     if (this.query.trim().length > 0) {
-      return '⌕';
+      return '没有匹配的设备';
     }
     if (source === 'addressBook') {
-      return '▤';
+      return '通讯录还是空的';
     }
     if (source === 'lan') {
-      return '⌁';
+      return '附近暂未发现设备';
     }
-    return '◷';
+    return '还没有最近设备';
   }
 
-  private pressBlurScale(controlId: string): number {
-    return this.pressedControl === controlId ? 0.18 : 0.48;
+  private emptyActionLabel(source: PeerSource): ResourceStr {
+    if (this.query.trim().length > 0) {
+      return '清除搜索';
+    }
+    if (source === 'lan') {
+      return '扫描局域网';
+    }
+    return '刷新设备';
   }
 
-  private animateControl(controlId: string, active: boolean): void {
-    this.getUIContext().animateTo({
-      duration: active ? 180 : 420,
-      curve: Curve.Friction,
-    }, () => {
-      if (active) {
-        this.pressedControl = controlId;
-      } else if (this.pressedControl === controlId) {
-        this.pressedControl = '';
-      }
-    });
+  private emptySymbol(source: PeerSource): Resource {
+    if (this.query.trim().length > 0) {
+      return $r('sys.symbol.magnifyingglass');
+    }
+    if (source === 'addressBook') {
+      return $r('sys.symbol.person_2');
+    }
+    if (source === 'lan') {
+      return $r('sys.symbol.wifi');
+    }
+    return $r('sys.symbol.clock');
   }
 
-  private clampSelectorProgress(value: number): number {
-    return Math.max(0, Math.min(2, value));
-  }
-
-  private changeSwiperIndex(index: number): void {
+  private changeSource(index: number): void {
+    const target = Math.max(0, Math.min(2, index));
+    this.activeSource = this.sourceFromIndex(target);
     try {
-      this.swiperController.changeIndex(index, true);
+      this.swiperController.changeIndex(target, true);
     } catch (_) {
     }
-  }
-
-  private commitSourceIndex(index: number): void {
-    const target = Math.max(0, Math.min(2, index));
-    const current = this.sourceIndex(this.activeSource);
-    this.activeSource = this.sourceFromIndex(target);
-    this.selectorProgress = target;
-    if (current === target) {
-      this.selectorSettling = false;
-      return;
-    }
-    this.selectorSettling = true;
-    this.changeSwiperIndex(target);
   }
 
   private startLanRefresh(): void {
@@ -250,7 +278,7 @@ export struct DeviceDirectoryPanel {
     this.onScanLan();
   }
 
-  private lanRefreshPrompt(): Resource {
+  private lanRefreshPrompt(): ResourceStr {
     if (this.snapshot.lanScanning || this.lanRefreshing || this.lanRefreshStatus === RefreshStatus.Refresh) {
       return $r('app.string.device_scanning_lan');
     }
@@ -265,221 +293,190 @@ export struct DeviceDirectoryPanel {
       this.query = '';
       return;
     }
+    if (source === 'lan') {
+      this.startLanRefresh();
+      return;
+    }
     this.onRefresh();
   }
 
   @Builder
-  private SourceSelector() {
-    FloatingSegmentedControl({
-      labels: [
-        $r('app.string.device_source_recent'),
-        $r('app.string.device_source_address_book'),
-        $r('app.string.device_source_lan'),
-      ],
-      badges: [
-        `${this.sourceCount('recent')}`,
-        `${this.sourceCount('addressBook')}`,
-        `${this.sourceCount('lan')}`,
-      ],
-      selectedIndex: this.sourceIndex(this.activeSource),
-      progress: this.selectorProgress,
-      controlId: 'device-source',
-      compact: this.isPhoneLayout(),
-      onPreviewIndex: (_index: number) => {},
-      onProgressChange: (progress: number) => this.selectorProgress = this.clampSelectorProgress(progress),
-      onDragStateChange: (dragging: boolean) => this.selectorDragging = dragging,
-      onChange: (index: number) => this.commitSourceIndex(index),
-    })
-    .width('100%')
-    .constraintSize({ maxWidth: 520 });
-  }
+  private DirectoryHeader() {
+    Column({ space: 10 }) {
+      LuminousSearchField({
+        value: this.query,
+        placeholder: $r('app.string.device_search_placeholder'),
+        fieldWidth: this.controlWidth(),
+        fieldHeight: 48,
+        onChange: (value: string): void => {
+          this.query = value;
+        },
+      })
 
-  @Builder
-  private SearchField() {
-    Stack() {
-      FloatingDepthOverlay({
-        radius: $r('app.float.radius_14'),
-      });
-
-      Row({ space: $r('app.float.space_12') }) {
-        SymbolGlyph($r('sys.symbol.magnifyingglass'))
-          .fontSize($r('app.float.icon_regular'))
-          .fontColor([$r('app.color.text_secondary')]);
-
-        TextInput({
-          text: this.query!!,
-          placeholder: $r('app.string.device_search_placeholder'),
-        })
-          .layoutWeight(1)
-          .height('100%')
-          .padding(0)
-          .fontSize($r('app.float.font_body'))
-          .fontColor($r('app.color.text_primary'))
-          .placeholderColor($r('app.color.text_tertiary'))
-          .caretColor($r('app.color.brand_primary'))
-          .borderWidth(0)
-          .backgroundColor($r('app.color.transparent'));
-
-        if (this.query.length > 0) {
-          Button({ type: ButtonType.Normal, stateEffect: false }) {
-            SymbolGlyph($r('sys.symbol.xmark'))
-              .fontSize($r('app.float.icon_small'))
-              .fontColor([$r('app.color.text_primary')]);
-          }
-          .width($r('app.float.control_regular'))
-          .height($r('app.float.control_regular'))
-          .padding(0)
-          .backgroundColor($r('app.color.transparent'))
-          .borderRadius($r('app.float.radius_10'))
-          .accessibilityText('清除搜索')
-          .onTouch((event: TouchEvent) => {
-            if (event.type === TouchType.Down) {
-              this.animateControl('search-clear', true);
-            } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-              this.animateControl('search-clear', false);
-            }
-          })
-          .onClick(() => this.query = '');
-        }
-      }
-      .width('100%')
-      .height('100%')
-      .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_4') })
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true)
-      .visualEffect(RustDeskGlassEffect.contentReceiver());
-
+      LuminousSegmentedControl({
+        items: this.sourceItems(),
+        selectedIndex: this.sourceIndex(this.activeSource),
+        controlWidth: this.controlWidth(),
+        controlHeight: 50,
+        onChange: (index: number): void => this.changeSource(index),
+      })
+        .margin({ top: -32 })
     }
     .width('100%')
-    .height($r('app.float.control_large'))
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.pressBlurScale('search-clear'),
-    })
-    .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-    .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver());
+    .alignItems(HorizontalAlign.Center);
   }
 
   @Builder
   private MessageBanner() {
     if (this.snapshot.message.trim().length > 0) {
-      Row({ space: $r('app.float.space_12') }) {
-        SymbolGlyph($r('sys.symbol.info_circle'))
-          .fontSize($r('app.float.icon_regular'))
-          .fontColor([$r('app.color.info')]);
-        Text(this.snapshot.message)
-          .layoutWeight(1)
-          .fontSize($r('app.float.font_label'))
-          .lineHeight(18)
-          .fontColor($r('app.color.text_secondary'))
-          .maxLines(3)
-          .textOverflow({ overflow: TextOverflow.Ellipsis });
-      }
-      .width('100%')
-      .padding({ top: $r('app.float.space_4'), bottom: $r('app.float.space_4') });
-    }
-  }
-
-  @Builder
-  private EmptyActionButton(source: PeerSource) {
-    Stack() {
-      FloatingPressDepthShell({
-        pressed: this.pressedControl === `empty-${source}`,
-        radius: $r('app.float.radius_14'),
+      LuminousSurface({
+        state: LuminousSurfaceState.Inset,
+        surfaceWidth: this.controlWidth(),
+        surfaceHeight: 60,
+        cornerRadius: 20,
       }) {
-        Button({ type: ButtonType.Normal, stateEffect: false }) {
-          Stack() {
-            FloatingDepthOverlay({
-              pressed: this.pressedControl === `empty-${source}`,
-              radius: $r('app.float.radius_14'),
-            });
-
-            Row({ space: $r('app.float.space_8') }) {
-              Text(this.query.trim().length > 0 ? '×' : (source === 'lan' ? '⌁' : '↻'))
-                .fontSize($r('app.float.icon_regular'))
-                .fontColor($r('app.color.white'));
-              Text(this.query.trim().length > 0
-                ? '清除搜索'
-                : (source === 'lan' ? '扫描局域网' : '刷新设备'))
-                .fontSize($r('app.float.font_label'))
-                .fontWeight(FontWeight.Medium)
-                .fontColor($r('app.color.white'));
-            }
-            .width('100%')
-            .height('100%')
-            .justifyContent(FlexAlign.Center)
-            .visualEffect(RustDeskGlassEffect.interactiveContent(
-              this.pressedControl === `empty-${source}`,
-              $r('app.color.point_light'),
-            ));
-          }
-          .width('100%')
-          .height('100%')
-          .borderRadius($r('app.float.radius_14'))
-          .clip(true);
+        Row({ space: 12 }) {
+          SymbolGlyph($r('sys.symbol.info_circle'))
+            .fontSize(20)
+            .fontColor([$r('app.color.neu_accent')]);
+          Text(this.snapshot.message)
+            .layoutWeight(1)
+            .fontSize(12)
+            .lineHeight(17)
+            .fontColor($r('app.color.neu_text_secondary'))
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
         }
-        .width('100%')
+        .width(this.controlWidth())
         .height('100%')
-        .padding(0)
-        .backgroundColor($r('app.color.brand_primary'))
-        .borderRadius($r('app.float.radius_14'))
-        .clip(true)
-        .enabled(!(source === 'lan' && this.snapshot.lanScanning && this.query.trim().length === 0))
-        .onTouch((event: TouchEvent) => {
-          if (event.type === TouchType.Down) {
-            this.animateControl(`empty-${source}`, true);
-          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-            this.animateControl(`empty-${source}`, false);
-          }
-        })
-        .onClick(() => this.activateEmptyAction(source));
+        .padding({ left: 16, right: 16 })
+        .alignItems(VerticalAlign.Center);
       }
     }
-    .width('100%')
-    .height($r('app.float.control_regular'))
-    .borderRadius($r('app.float.radius_14'))
-    .clip(false);
   }
 
   @Builder
   private EmptyState(source: PeerSource) {
-    Column({ space: $r('app.float.space_16') }) {
-      Text(this.emptyGlyph(source))
-        .fontSize(44)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.brand_primary'));
-      Text(this.emptyText(source))
-        .width('100%')
-        .fontSize($r('app.float.font_body'))
-        .lineHeight(21)
-        .fontColor($r('app.color.text_secondary'))
-        .textAlign(TextAlign.Center);
-      if (source === 'lan' && this.query.trim().length === 0) {
-        Text($r('app.string.device_pull_scan_lan_hint'))
-          .width('100%')
-          .fontSize($r('app.float.font_label'))
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.brand_primary'))
-          .textAlign(TextAlign.Center);
-      } else {
-        this.EmptyActionButton(source);
+    Stack({ alignContent: Alignment.Center }) {
+      LuminousSurface({
+        state: this.pressedEmptySource === source
+          ? LuminousSurfaceState.Inset
+          : LuminousSurfaceState.Raised,
+        surfaceWidth: this.controlWidth(),
+        surfaceHeight: 106,
+        cornerRadius: 24,
+      }) {
+        Row({ space: 14 }) {
+          SymbolGlyph(this.emptySymbol(source))
+            .width(38)
+            .fontSize(30)
+            .fontColor([$r('app.color.neu_accent')]);
+
+          Column({ space: 3 }) {
+            Text(this.emptyTitle(source))
+              .width('100%')
+              .fontSize(15)
+              .fontWeight(FontWeight.Bold)
+              .fontColor($r('app.color.neu_text_primary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis });
+
+            Text(this.emptyText(source))
+              .width('100%')
+              .fontSize(11)
+              .lineHeight(17)
+              .fontColor($r('app.color.neu_text_secondary'))
+              .maxLines(2)
+              .textOverflow({ overflow: TextOverflow.Ellipsis });
+
+            Row({ space: 4 }) {
+              Text(this.emptyActionLabel(source))
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .fontColor($r('app.color.neu_accent'));
+              SymbolGlyph($r('sys.symbol.chevron_right'))
+                .fontSize(11)
+                .fontColor([$r('app.color.neu_accent')]);
+            }
+            .alignItems(VerticalAlign.Center);
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start);
+        }
+        .width(this.controlWidth())
+        .height(106)
+        .padding({ left: 18, right: 18 })
+        .alignItems(VerticalAlign.Center);
       }
+
+      Button({ type: ButtonType.Normal, stateEffect: false }) {
+        Row()
+      }
+      .width(this.controlWidth())
+      .height(106)
+      .padding(0)
+      .backgroundColor(Color.Transparent)
+      .hoverEffect(HoverEffect.None)
+      .borderRadius(24)
+      .enabled(!(source === 'lan' && this.snapshot.lanScanning && this.query.trim().length === 0))
+      .accessibilityText(this.emptyActionLabel(source) as Resource)
+      .onTouch((event: TouchEvent) => {
+        if (event.type === TouchType.Down) {
+          this.pressedEmptySource = source;
+        } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+          this.pressedEmptySource = '';
+        }
+      })
+      .onClick(() => {
+        this.pressedEmptySource = '';
+        this.activateEmptyAction(source);
+      });
+    }
+    .width(this.controlWidth() + 16)
+    .height(122)
+    .clip(false);
+  }
+
+  @Builder
+  private SourceHeader(source: PeerSource) {
+    Row() {
+      Column({ space: 3 }) {
+        Text(this.sourceTitle(source))
+          .fontSize(18)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.neu_text_primary'));
+        Text(this.sourceDescription(source))
+          .fontSize(12)
+          .fontColor($r('app.color.neu_text_secondary'));
+      }
+      .alignItems(HorizontalAlign.Start);
+      Blank();
+      Text(`${this.visiblePeers(source).length}`)
+        .fontSize(14)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.neu_accent'));
     }
     .width('100%')
-    .padding({ top: 0, bottom: $r('app.float.space_24') })
-    .justifyContent(FlexAlign.Start)
-    .alignItems(HorizontalAlign.Center);
+    .padding({ left: 8, right: 8, bottom: 4 })
+    .alignItems(VerticalAlign.Center);
   }
 
   @Builder
   private PeerList(source: PeerSource) {
     if (this.visiblePeers(source).length === 0) {
-      this.EmptyState(source);
+      Row() {
+        Column() {
+          this.SourceHeader(source);
+          this.EmptyState(source);
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Center);
+      }
+      .width('100%')
+      .justifyContent(FlexAlign.Center);
     } else if (this.columnCount() === 1) {
-      Column({ space: $r('app.float.space_12') }) {
+      Column({ space: 18 }) {
+        this.SourceHeader(source);
         ForEach(this.visiblePeers(source), (peer: PeerRecord) => {
           PeerCard({
             peer: peer,
@@ -494,10 +491,13 @@ export struct DeviceDirectoryPanel {
         }, (peer: PeerRecord) => `${peer.source}-${peer.addressBookName}-${peer.id}`);
       }
       .width('100%')
-      .justifyContent(FlexAlign.Start)
       .alignItems(HorizontalAlign.Start);
     } else {
       Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween }) {
+        Row() {
+          this.SourceHeader(source);
+        }
+        .width('100%')
         ForEach(this.visiblePeers(source), (peer: PeerRecord) => {
           PeerCard({
             peer: peer,
@@ -510,7 +510,7 @@ export struct DeviceDirectoryPanel {
             onOpenTransfer: (peerId: string) => this.onOpenTransfer(peerId),
           })
             .width(this.cardWidth())
-            .margin({ bottom: $r('app.float.space_12') });
+            .margin({ bottom: 18 });
         }, (peer: PeerRecord) => `${peer.source}-${peer.addressBookName}-${peer.id}`);
       }
       .width('100%');
@@ -525,14 +525,13 @@ export struct DeviceDirectoryPanel {
           this.PeerList(source);
         }
         .width('100%')
-        .constraintSize({ maxWidth: 1520 })
+        .constraintSize({ maxWidth: 1200 })
         .padding({
           left: this.horizontalPadding(),
           right: this.horizontalPadding(),
-          top: $r('app.float.space_16'),
+          top: 4,
           bottom: this.bottomPadding(),
         })
-        .justifyContent(FlexAlign.Start)
         .alignItems(HorizontalAlign.Start);
       }
       .width('100%')
@@ -548,21 +547,21 @@ export struct DeviceDirectoryPanel {
 
   @Builder
   private LanRefreshIndicator() {
-    Row({ space: $r('app.float.space_8') }) {
+    Row({ space: 8 }) {
       LoadingProgress()
-        .width($r('app.float.icon_small'))
-        .height($r('app.float.icon_small'))
-        .color($r('app.color.brand_primary'))
+        .width(18)
+        .height(18)
+        .color($r('app.color.neu_accent'))
         .visibility(this.snapshot.lanScanning || this.lanRefreshing ? Visibility.Visible : Visibility.Hidden);
       Text(this.lanRefreshPrompt())
-        .fontSize($r('app.float.font_label'))
+        .fontSize(12)
         .fontWeight(FontWeight.Medium)
         .fontColor(this.lanRefreshStatus === RefreshStatus.OverDrag
-          ? $r('app.color.brand_primary')
-          : $r('app.color.text_secondary'));
+          ? $r('app.color.neu_accent')
+          : $r('app.color.neu_text_secondary'));
     }
     .width('100%')
-    .constraintSize({ minHeight: $r('app.float.control_regular') })
+    .constraintSize({ minHeight: 44 })
     .justifyContent(FlexAlign.Center)
     .alignItems(VerticalAlign.Center);
   }
@@ -594,23 +593,13 @@ export struct DeviceDirectoryPanel {
         .height(this.titleSpacerHeight)
         .flexShrink(0);
 
-      Row() {
-        Column({ space: $r('app.float.space_16') }) {
-          this.SearchField();
-          this.SourceSelector();
-          this.MessageBanner();
-        }
-        .width('100%')
-        .constraintSize({ maxWidth: 1520 })
-        .padding({
-          left: this.horizontalPadding(),
-          right: this.horizontalPadding(),
-          top: $r('app.float.space_16'),
-        })
-        .alignItems(HorizontalAlign.Start);
+      Column({ space: 10 }) {
+        this.DirectoryHeader();
+        this.MessageBanner();
       }
       .width('100%')
-      .justifyContent(FlexAlign.Center);
+      .padding({ top: 18, bottom: 0 })
+      .alignItems(HorizontalAlign.Center);
 
       Swiper(this.swiperController) {
         this.SourcePage('recent', this.recentScroller);
@@ -622,24 +611,13 @@ export struct DeviceDirectoryPanel {
       .indicator(false)
       .loop(false)
       .duration(280)
-      .onContentDidScroll((selectedIndex: number, index: number, position: number, _mainAxisLength: number) => {
-        if (!this.selectorDragging && !this.selectorSettling && index === selectedIndex) {
-          this.selectorProgress = this.clampSelectorProgress(index - position);
-        }
-      })
       .onChange((index: number) => {
         this.activeSource = this.sourceFromIndex(index);
-      })
-      .onAnimationEnd((index: number, _extraInfo: SwiperAnimationEvent) => {
-        this.selectorSettling = false;
-        if (!this.selectorDragging) {
-          this.selectorProgress = index;
-        }
       });
     }
     .width('100%')
     .height('100%')
-    .backgroundColor($r('app.color.transparent'))
+    .backgroundColor($r('app.color.neu_base'))
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       const width = Number(newArea.width);
       if (width > 0) {

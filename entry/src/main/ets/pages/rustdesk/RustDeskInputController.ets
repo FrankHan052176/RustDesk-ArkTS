@@ -509,6 +509,9 @@ export class RustDeskInputController {
       return;
     }
     this.applyTouchActions(this.touchGestureState.onMove(primaryTouch.x, primaryTouch.y));
+    if (!this.touchGestureState.isLongPressPending()) {
+      this.cancelLongPressTimer();
+    }
     if (this.touchSecondaryId !== -1) {
       this.handleTwoFingerScroll(event);
       return;

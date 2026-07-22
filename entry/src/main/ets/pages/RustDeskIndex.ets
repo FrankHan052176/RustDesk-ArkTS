@@ -4,22 +4,25 @@ import {
   HdsTabs,
   HdsTabsController,
   IconStyleMode,
-  ScrollEffectType,
   hdsMaterial,
 } from '@kit.UIDesignKit';
 import native from 'rustdesk-ohrs';
 import { common, OpenLinkOptions } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { BusinessError, Callback, deviceInfo } from '@kit.BasicServicesKit';
-import { display, LengthMetrics, window } from '@kit.ArkUI';
+import { display, window } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import {
+  LuminousNeoTokens,
+  LuminousSurface,
+  LuminousSurfaceState,
+} from 'luminous_neo';
 import { ConnectTab } from './rustdesk/components/ConnectTab';
 import { DeviceDirectoryPanel } from './rustdesk/components/DeviceDirectoryPanel';
 import { PasswordDialog } from './rustdesk/components/PasswordDialog';
 import { ConnectionAttemptOverlay } from './rustdesk/components/ConnectionAttemptOverlay';
 import { SettingsTab } from './rustdesk/components/SettingsTab';
-import { AmbientOrbitBackdrop } from './rustdesk/components/AmbientOrbitBackdrop';
 import { SessionToolbar } from './rustdesk/components/SessionToolbar';
 import { ChatDrawer } from './rustdesk/components/ChatDrawer';
 import { DisplaySelectorSheet } from './rustdesk/components/DisplaySelectorSheet';
@@ -55,7 +58,10 @@ import { DownloadRootManager } from './rustdesk/DownloadRootManager';
 import { TransferManager } from './rustdesk/TransferManager';
 import { RemoteFilePath } from './rustdesk/RemoteFilePath';
 import { TransferProgress } from './rustdesk/TransferProgress';
-import { RustDeskGlassEffect } from './rustdesk/RustDeskGlassEffect';
+import {
+  FloatingActionSurface,
+  FloatingGlassSurface,
+} from './rustdesk/components/FloatingSurface';
 import { SessionDisplayController } from './rustdesk/SessionDisplayController';
 import { SessionOverlayPanel, SessionOverlayState } from './rustdesk/SessionOverlayState';
 import { formatSessionToolbarMetrics, SessionToolbarMetrics } from './rustdesk/SessionToolbarMetrics';
@@ -186,8 +192,6 @@ struct RustDeskIndex {
   @Local mainViewportHeight: number = 844;
   @Local windowTopAvoidInset: number = 0;
   @Local windowBottomAvoidInset: number = 0;
-  @Local rootPressedControl: string = '';
-  @Local rootHoveredControl: string = '';
   @Local rootFocusedControl: string = '';
 
   @Local nativeVersion: string = 'loading...';
@@ -2451,35 +2455,6 @@ struct RustDeskIndex {
     return '就绪';
   }
 
-  private rootControlBlurScale(controlId: string, _selection: boolean = false): number {
-    if (this.rootPressedControl === controlId) {
-      return 0.18;
-    }
-    return 0.72;
-  }
-
-  private setRootControlPressed(controlId: string, pressed: boolean): void {
-    this.getUIContext()?.animateTo({
-      duration: pressed ? 160 : 280,
-      curve: Curve.Friction,
-    }, () => {
-      this.rootPressedControl = pressed ? controlId : '';
-    });
-  }
-
-  private setRootControlHovered(controlId: string, hovered: boolean): void {
-    this.getUIContext()?.animateTo({
-      duration: hovered ? 100 : 150,
-      curve: Curve.Friction,
-    }, () => {
-      if (hovered) {
-        this.rootHoveredControl = controlId;
-      } else if (this.rootHoveredControl === controlId) {
-        this.rootHoveredControl = '';
-      }
-    });
-  }
-
   private setRootControlFocused(controlId: string, focused: boolean): void {
     this.getUIContext()?.animateTo({
       duration: 150,
@@ -4452,20 +4427,20 @@ struct RustDeskIndex {
         .backgroundColor($r('app.color.glass_surface'))
         .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
           adaptiveColor: AdaptiveColor.DEFAULT,
-          scale: 0.48,
+          scale: 0.68,
         })
         .linearGradient({
           angle: 142,
           colors: [
-            [$r('app.color.glass_gradient_high'), 0],
-            [$r('app.color.glass_gradient_mid'), 0.48],
-            [$r('app.color.glass_gradient_accent'), 1],
+            [$r('app.color.mica_highlight'), 0],
+            [$r('app.color.transparent'), 0.52],
+            [$r('app.color.transparent'), 1],
           ],
         })
+        .border({ width: 1, color: $r('app.color.mica_border') })
         .borderRadius($r('app.float.radius_24'))
         .clip(false)
         .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-        .visualEffect(RustDeskGlassEffect.featherReceiver())
         .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.95, y: 0.95 })));
       }
       .width('100%')
@@ -4474,30 +4449,14 @@ struct RustDeskIndex {
       .zIndex(30);
     } else {
       Row() {
-        Button({ type: ButtonType.Normal, stateEffect: false }) {
+        Button({ type: ButtonType.Normal, stateEffect: true }) {
           Stack({ alignContent: Alignment.Center }) {
-            if (this.rootHoveredControl === 'mini-toolbar' ||
-              this.rootFocusedControl === 'mini-toolbar') {
-              Row()
-                .width('100%')
-                .height('100%')
-                .backgroundColor(this.rootFocusedControl === 'mini-toolbar'
-                  ? $r('app.color.brand_primary_soft')
-                  : $r('app.color.mica_highlight'))
-                .opacity(this.rootFocusedControl === 'mini-toolbar' ? 0.52 : 0.28);
-            }
-
             Stack()
               .width(36)
               .height(4)
-              .backgroundColor($r('app.color.text_secondary'))
+              .backgroundColor($r('app.color.neu_text_secondary'))
               .borderRadius(2)
-              .opacity(0.62)
-              .visualEffect(RustDeskGlassEffect.interactiveContent(
-                this.rootPressedControl === 'mini-toolbar',
-                $r('app.color.point_light'),
-                0.54,
-              ));
+              .opacity(0.72);
 
             if (this.rootFocusedControl === 'mini-toolbar') {
               Row()
@@ -4520,37 +4479,29 @@ struct RustDeskIndex {
         .backgroundColor($r('app.color.glass_surface'))
         .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
           adaptiveColor: AdaptiveColor.DEFAULT,
-          scale: this.rootControlBlurScale('mini-toolbar'),
+          scale: 0.68,
         })
         .linearGradient({
           angle: 142,
           colors: [
-            [$r('app.color.glass_gradient_high'), 0],
-            [$r('app.color.glass_gradient_mid'), 0.48],
-            [$r('app.color.glass_gradient_accent'), 1],
+            [$r('app.color.mica_highlight'), 0],
+            [$r('app.color.transparent'), 0.58],
+            [$r('app.color.transparent'), 1],
           ],
         })
+        .border({ width: 1, color: $r('app.color.mica_border') })
         .borderRadius({
           bottomLeft: $r('app.float.radius_14'),
           bottomRight: $r('app.float.radius_14'),
         })
         .clip(true)
         .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-        .visualEffect(RustDeskGlassEffect.featherReceiver())
         .hoverEffect(HoverEffect.None)
         .focusOnTouch(true)
         .accessibilityText('展开远控工具栏')
-        .onHover((hovered: boolean) => this.setRootControlHovered('mini-toolbar', hovered))
         .onFocus(() => this.setRootControlFocused('mini-toolbar', true))
         .onBlur(() => this.setRootControlFocused('mini-toolbar', false))
-        .onTouch((event: TouchEvent) => {
-          if (event.type === TouchType.Down) {
-            this.setRootControlPressed('mini-toolbar', true);
-          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-            this.setRootControlPressed('mini-toolbar', false);
-          }
-        })
-        .onClick(() => {
+        .onClick((): void => {
           this.getUIContext()?.animateTo({ duration: 300, curve: Curve.FastOutSlowIn }, () => {
             this.isMiniBarExpanded = true;
           });
@@ -4568,71 +4519,38 @@ struct RustDeskIndex {
   @Builder
   private FoldControlButton(
     label: string,
-    controlId: string,
+    _controlId: string,
     selected: boolean,
     danger: boolean,
-    selection: boolean,
+    _selection: boolean,
     onClick: () => void,
   ) {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Stack() {
-        if (selected || danger) {
-          Row()
-            .width('100%')
-            .height('100%')
-            .backgroundColor(danger ? $r('app.color.error_soft') : $r('app.color.brand_primary_soft'))
-            .opacity(0.76);
-        }
+    Stack() {
+      FloatingActionSurface({
+        compact: true,
+        selected: selected,
+        accessibilityLabel: label,
+        onActivate: onClick,
+      }) {
         Row() {
           Text(label)
             .fontSize($r('app.float.font_body'))
             .fontWeight(FontWeight.Medium)
             .fontColor(danger
-              ? $r('app.color.error')
-              : (selected ? $r('app.color.brand_primary') : $r('app.color.text_primary')));
+              ? $r('app.color.neu_danger')
+              : (selected ? $r('app.color.neu_accent') : $r('app.color.neu_text_primary')));
         }
         .width('100%')
         .height('100%')
         .justifyContent(FlexAlign.Center)
-        .visualEffect(RustDeskGlassEffect.interactiveContent(
-          this.rootPressedControl === controlId,
-          danger ? $r('app.color.error') : $r('app.color.point_light'),
-          0.56,
-        ));
+        .borderRadius($r('app.float.radius_14'))
+        .clip(true);
       }
-      .width('100%')
-      .height('100%')
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true);
     }
     .layoutWeight(1)
     .height($r('app.float.control_regular'))
-    .padding(0)
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.rootControlBlurScale(controlId, selection),
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
     .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-    .visualEffect(RustDeskGlassEffect.featherReceiver())
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.setRootControlPressed(controlId, true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.setRootControlPressed(controlId, false);
-      }
-    })
-    .onClick(() => onClick());
+    .clip(false);
   }
 
   @Builder
@@ -4735,92 +4653,35 @@ struct RustDeskIndex {
   @Builder
   private RootFloatingAction(
     label: string,
-    controlId: string,
+    _controlId: string,
     danger: boolean,
     onClick: () => void,
   ) {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Stack() {
-        if (danger) {
-          Row()
-            .width('100%')
-            .height('100%')
-            .backgroundColor($r('app.color.error_soft'))
-            .opacity(0.72);
-        }
-        if (this.rootHoveredControl === controlId || this.rootFocusedControl === controlId) {
-          Row()
-            .width('100%')
-            .height('100%')
-            .backgroundColor(danger
-              ? $r('app.color.error')
-              : (this.rootFocusedControl === controlId
-                ? $r('app.color.brand_primary_soft')
-                : $r('app.color.mica_highlight')))
-            .opacity(danger ? 0.14 : (this.rootFocusedControl === controlId ? 0.52 : 0.28));
-        }
+    Stack() {
+      FloatingActionSurface({
+        compact: true,
+        accessibilityLabel: label,
+        onActivate: onClick,
+      }) {
         Row() {
           Text(label)
             .fontSize($r('app.float.font_label'))
             .fontWeight(FontWeight.Medium)
-            .fontColor(danger ? $r('app.color.error') : $r('app.color.text_primary'));
+            .fontColor(danger ? $r('app.color.neu_danger') : $r('app.color.neu_text_primary'));
         }
         .width('100%')
         .height('100%')
         .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_16') })
         .justifyContent(FlexAlign.Center)
-        .visualEffect(RustDeskGlassEffect.interactiveContent(
-          this.rootPressedControl === controlId,
-          danger ? $r('app.color.error') : $r('app.color.point_light'),
-          0.56,
-        ));
-        if (this.rootFocusedControl === controlId) {
-          Row()
-            .width('100%')
-            .height('100%')
-            .border({ width: 2, color: $r('app.color.focus_ring') })
-            .borderRadius($r('app.float.radius_14'))
-            .hitTestBehavior(HitTestMode.None);
-        }
+        .backgroundColor($r('app.color.transparent'))
+        .borderRadius($r('app.float.radius_14'))
+        .clip(true);
       }
-      .width('100%')
-      .height('100%')
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true);
     }
     .height($r('app.float.control_small'))
     .constraintSize({ minWidth: 104 })
-    .padding(0)
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: this.rootControlBlurScale(controlId),
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
     .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-    .visualEffect(RustDeskGlassEffect.featherReceiver())
-    .hoverEffect(HoverEffect.None)
-    .focusOnTouch(true)
-    .onHover((hovered: boolean) => this.setRootControlHovered(controlId, hovered))
-    .onFocus(() => this.setRootControlFocused(controlId, true))
-    .onBlur(() => this.setRootControlFocused(controlId, false))
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.setRootControlPressed(controlId, true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.setRootControlPressed(controlId, false);
-      }
-    })
-    .onClick(() => onClick());
+    .clip(false);
   }
 
   @Builder
@@ -4829,7 +4690,7 @@ struct RustDeskIndex {
       Column() {
         TransferDrawer({
           scroller: this.transferScroller,
-          titleSpacerHeight: this.overlayMainTitleSpacerHeight(),
+          titleSpacerHeight: this.mainTitleSpacerHeight(),
           downloadRootPath: this.transferRootPath,
           rootStatus: this.transferRootStatus,
           sessionReady: this.transferSessionReady,
@@ -4893,10 +4754,7 @@ struct RustDeskIndex {
       },
       style: {
         scrollEffectOpts: {
-          enableScrollEffect: true,
-          scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
-          blurEffectiveStartOffset: LengthMetrics.vp(0),
-          blurEffectiveEndOffset: LengthMetrics.vp(20),
+          enableScrollEffect: false,
         },
         systemMaterialEffect: {
           materialType: hdsMaterial.MaterialType.ADAPTIVE,
@@ -4964,6 +4822,22 @@ struct RustDeskIndex {
     return this.mainViewportWidth >= 1440;
   }
 
+  private wideRailWidth(): number {
+    return this.isExtraWideMainLayout() ? 188 : 88;
+  }
+
+  private wideRailItemSurfaceWidth(): number {
+    return this.wideRailWidth() - 28;
+  }
+
+  private wideRailItemSurfaceHeight(): number {
+    return this.isExtraWideMainLayout() ? 48 : 54;
+  }
+
+  private wideRailItemFrameHeight(): number {
+    return this.isExtraWideMainLayout() ? 62 : 68;
+  }
+
   private openMainTab(index: number): void {
     this.currentTabIndex = index;
     if (!this.isWideMainLayout()) {
@@ -5005,12 +4879,12 @@ struct RustDeskIndex {
     return 56;
   }
 
-  private boundMainTitleSpacerHeight(): number {
-    return 0;
+  private deviceTitleSpacerHeight(): number {
+    return this.mainTitleSpacerHeight() + 30;
   }
 
-  private overlayMainTitleSpacerHeight(): number {
-    return 56 + this.windowTopAvoidInset;
+  private boundMainTitleSpacerHeight(): number {
+    return 0;
   }
 
   private mainTabBottomMargin(): number {
@@ -5028,7 +4902,7 @@ struct RustDeskIndex {
       wideLayout: this.isWideMainLayout(),
       directorySnapshot: this.directorySnapshot,
       scroller: this.connectScroller,
-      titleSpacerHeight: this.boundMainTitleSpacerHeight(),
+      titleSpacerHeight: this.mainTitleSpacerHeight(),
       bottomAvoidInset: this.windowBottomAvoidInset,
       onTargetChange: (value: string) => this.updatePeerTarget(value),
       onConnectRemote: () => this.connectRemoteSession(),
@@ -5052,7 +4926,7 @@ struct RustDeskIndex {
       recentScroller: this.deviceRecentScroller,
       addressBookScroller: this.deviceAddressBookScroller,
       lanScroller: this.deviceLanScroller,
-      titleSpacerHeight: this.overlayMainTitleSpacerHeight(),
+      titleSpacerHeight: this.deviceTitleSpacerHeight(),
       bottomAvoidInset: this.windowBottomAvoidInset,
       onRefresh: () => this.refreshDirectorySnapshot(),
       onScanLan: () => this.scanLanPeers(),
@@ -5083,7 +4957,7 @@ struct RustDeskIndex {
       errorText: this.errorText,
       wideLayout: this.isWideMainLayout(),
       scroller: this.settingsScroller,
-      titleSpacerHeight: this.overlayMainTitleSpacerHeight(),
+      titleSpacerHeight: this.boundMainTitleSpacerHeight(),
       bottomAvoidInset: this.windowBottomAvoidInset,
       onServerConfigChange: (config: ServerConfig) => this.serverConfig = config,
       onValidateServerConfig: (config: ServerConfig) => this.testServerConfiguration(config),
@@ -5102,122 +4976,141 @@ struct RustDeskIndex {
 
   @Builder
   private WideNavigationItem(index: number, name: string, icon: Resource) {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      if (this.isExtraWideMainLayout()) {
-        Row({ space: 14 }) {
-          SymbolGlyph(icon)
-            .fontSize(24)
-            .fontColor([this.currentTabIndex === index
-              ? $r('app.color.brand_primary')
-              : $r('app.color.text_secondary')]);
-          Text(name)
-            .fontSize(14)
-            .fontWeight(this.currentTabIndex === index ? FontWeight.Bold : FontWeight.Medium)
-            .fontColor(this.currentTabIndex === index
-              ? $r('app.color.brand_primary')
-              : $r('app.color.text_secondary'));
+    Stack({ alignContent: Alignment.Center }) {
+      LuminousSurface({
+        state: this.currentTabIndex === index
+          ? LuminousSurfaceState.Inset
+          : LuminousSurfaceState.Flat,
+        surfaceWidth: this.wideRailItemSurfaceWidth(),
+        surfaceHeight: this.wideRailItemSurfaceHeight(),
+        cornerRadius: this.isExtraWideMainLayout() ? 16 : 18,
+        raisedShadowDistance: LuminousNeoTokens.raisedDistanceFor(this.wideRailItemSurfaceHeight()),
+        raisedShadowBlur: LuminousNeoTokens.raisedBlurFor(this.wideRailItemSurfaceHeight()),
+        insetShadowDistance: LuminousNeoTokens.insetDistanceFor(this.wideRailItemSurfaceHeight()),
+        insetShadowBlur: LuminousNeoTokens.insetBlurFor(this.wideRailItemSurfaceHeight()),
+      }) {
+        if (this.isExtraWideMainLayout()) {
+          Row({ space: 12 }) {
+            SymbolGlyph(icon)
+              .fontSize(22)
+              .fontColor([this.currentTabIndex === index
+                ? $r('app.color.neu_accent')
+                : $r('app.color.neu_text_secondary')]);
+            Text(name)
+              .fontSize(14)
+              .fontWeight(this.currentTabIndex === index ? FontWeight.Bold : FontWeight.Medium)
+              .fontColor(this.currentTabIndex === index
+                ? $r('app.color.neu_accent')
+                : $r('app.color.neu_text_secondary'));
+          }
+          .width(this.wideRailItemSurfaceWidth())
+          .height(this.wideRailItemSurfaceHeight())
+          .padding({ left: 16, right: 12 })
+          .alignItems(VerticalAlign.Center);
+        } else {
+          Column({ space: 4 }) {
+            SymbolGlyph(icon)
+              .fontSize(22)
+              .fontColor([this.currentTabIndex === index
+                ? $r('app.color.neu_accent')
+                : $r('app.color.neu_text_secondary')]);
+            Text(name)
+              .fontSize(10)
+              .fontWeight(this.currentTabIndex === index ? FontWeight.Bold : FontWeight.Medium)
+              .fontColor(this.currentTabIndex === index
+                ? $r('app.color.neu_accent')
+                : $r('app.color.neu_text_secondary'));
         }
-        .width('100%')
-        .height('100%')
-        .padding({ left: $r('app.float.space_12') })
-        .visualEffect(RustDeskGlassEffect.interactiveContent(
-          this.rootPressedControl === `main-nav-${index}`,
-          $r('app.color.point_light'),
-          0.48,
-        ));
-      } else {
-        Column({ space: 5 }) {
-          SymbolGlyph(icon)
-            .fontSize(23)
-            .fontColor([this.currentTabIndex === index
-              ? $r('app.color.brand_primary')
-              : $r('app.color.text_secondary')]);
-          Text(name)
-            .fontSize(10)
-            .fontWeight(this.currentTabIndex === index ? FontWeight.Bold : FontWeight.Medium)
-            .fontColor(this.currentTabIndex === index
-              ? $r('app.color.brand_primary')
-              : $r('app.color.text_secondary'));
+          .width(this.wideRailItemSurfaceWidth())
+          .height(this.wideRailItemSurfaceHeight())
+          .justifyContent(FlexAlign.Center);
         }
-        .width('100%')
-        .height('100%')
-        .justifyContent(FlexAlign.Center)
-        .visualEffect(RustDeskGlassEffect.interactiveContent(
-          this.rootPressedControl === `main-nav-${index}`,
-          $r('app.color.point_light'),
-          0.48,
-        ));
+      }
+
+      Button({ type: ButtonType.Normal, stateEffect: false }) {
+        Row()
+      }
+      .width(this.wideRailItemSurfaceWidth())
+      .height(this.wideRailItemSurfaceHeight())
+      .padding(0)
+      .backgroundColor(Color.Transparent)
+      .hoverEffect(HoverEffect.None)
+      .borderRadius(this.isExtraWideMainLayout() ? 16 : 18)
+      .accessibilityText(name)
+      .accessibilitySelected(this.currentTabIndex === index)
+      .onClick((): void => this.openMainTab(index));
+    }
+    .width('100%')
+    .height(this.wideRailItemFrameHeight())
+    .clip(false);
+  }
+
+  @Builder
+  private WideRailIdentity() {
+    Stack({ alignContent: Alignment.Center }) {
+      LuminousSurface({
+        state: LuminousSurfaceState.Inset,
+        surfaceWidth: 46,
+        surfaceHeight: 46,
+        cornerRadius: 16,
+        raisedShadowDistance: LuminousNeoTokens.raisedDistanceFor(46),
+        raisedShadowBlur: LuminousNeoTokens.raisedBlurFor(46),
+        insetShadowDistance: LuminousNeoTokens.insetDistanceFor(46),
+        insetShadowBlur: LuminousNeoTokens.insetBlurFor(46),
+      }) {
+        Image($r('app.media.startIcon'))
+          .width(34)
+          .height(34)
+          .borderRadius(11)
+          .objectFit(ImageFit.Contain);
       }
     }
     .width('100%')
-    .height(this.isExtraWideMainLayout() ? 54 : 62)
-    .padding(0)
-    .backgroundColor(this.currentTabIndex === index
-      ? $r('app.color.brand_primary_soft')
-      : $r('app.color.transparent'))
-    .borderRadius($r('app.float.radius_18'))
-    .clip(true)
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.setRootControlPressed(`main-nav-${index}`, true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.setRootControlPressed(`main-nav-${index}`, false);
-      }
-    })
-    .onClick(() => this.openMainTab(index));
+    .height(66)
+    .clip(false)
+
+    if (this.isExtraWideMainLayout()) {
+      Text('RustDesk')
+        .fontSize(15)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.neu_text_primary'));
+    }
   }
 
   @Builder
   private WideNavigationRail() {
-    Column({ space: 10 }) {
-      Column({ space: 8 }) {
-        Image($r('app.media.startIcon'))
-          .width(42)
-          .height(42)
-          .borderRadius(14)
-        if (this.isExtraWideMainLayout()) {
-          Text('RustDesk')
-            .fontSize(15)
-            .fontWeight(FontWeight.Bold)
-            .fontColor($r('app.color.text_primary'));
-        }
-      }
-      .width('100%')
-      .alignItems(HorizontalAlign.Center)
-      .margin({ bottom: 14 });
+    Stack() {
+      FloatingGlassSurface({
+        radius: $r('app.float.radius_24'),
+      }) {
+        Column({ space: 6 }) {
+          Column({ space: 2 }) {
+            this.WideRailIdentity();
+          }
+          .width('100%')
+          .alignItems(HorizontalAlign.Center)
+          .margin({ bottom: 8 });
 
-      this.WideNavigationItem(0, '首页', $r('sys.symbol.house'))
-      this.WideNavigationItem(1, '设备', $r('sys.symbol.person_crop_circle_fill'))
-      this.WideNavigationItem(2, '设置', $r('sys.symbol.gearshape'))
-      Blank()
-      Text('安全连接')
-        .fontSize(10)
-        .fontColor($r('app.color.success'))
-        .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-        .backgroundColor($r('app.color.success_soft'))
-        .borderRadius(10);
+          this.WideNavigationItem(0, '首页', $r('sys.symbol.house'))
+          this.WideNavigationItem(1, '设备', $r('sys.symbol.person_crop_circle_fill'))
+          this.WideNavigationItem(2, '设置', $r('sys.symbol.gearshape'))
+          Blank()
+          Text('安全连接')
+            .fontSize(10)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.success'))
+            .padding({ left: 8, right: 8, top: 4, bottom: 4 });
+        }
+        .width('100%')
+        .height('100%')
+        .padding({ left: 10, right: 10, top: 14, bottom: 16 });
+      }
     }
-    .width(this.isExtraWideMainLayout() ? 188 : 88)
+    .width(this.wideRailWidth())
     .height('calc(100% - 32vp)')
-    .padding({ left: 10, right: 10, top: 20, bottom: 22 })
     .margin({ left: $r('app.float.space_16'), top: $r('app.float.space_16'), bottom: $r('app.float.space_16') })
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.48,
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
     .borderRadius($r('app.float.radius_24'))
-    .clip(true)
-    .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-    .visualEffect(RustDeskGlassEffect.featherReceiver());
+    .clip(false);
   }
 
   @Builder
@@ -5322,12 +5215,7 @@ struct RustDeskIndex {
             this.rootFocusedControl === `pc-${buttonId}`) && destructive
             ? $r('app.color.white')
             : $r('app.color.text_primary'))
-          .textAlign(TextAlign.Center)
-          .visualEffect(RustDeskGlassEffect.interactiveContent(
-            this.rootPressedControl === `pc-${buttonId}`,
-            destructive ? $r('app.color.error') : $r('app.color.point_light'),
-            0.56,
-          ));
+          .textAlign(TextAlign.Center);
         if (this.rootFocusedControl === `pc-${buttonId}`) {
           Row()
             .width('100%')
@@ -5356,20 +5244,6 @@ struct RustDeskIndex {
     })
     .onFocus(() => this.setRootControlFocused(`pc-${buttonId}`, true))
     .onBlur(() => this.setRootControlFocused(`pc-${buttonId}`, false))
-    .onMouse((event: MouseEvent) => {
-      if (event.action === MouseAction.Press && event.button === MouseButton.Left) {
-        this.setRootControlPressed(`pc-${buttonId}`, true);
-      } else if (event.action === MouseAction.Release) {
-        this.setRootControlPressed(`pc-${buttonId}`, false);
-      }
-    })
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.setRootControlPressed(`pc-${buttonId}`, true);
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.setRootControlPressed(`pc-${buttonId}`, false);
-      }
-    })
     .onClick(onClick);
   }
 
@@ -5419,20 +5293,7 @@ struct RustDeskIndex {
     }
     .width('100%')
     .height(42)
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.48,
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
-    .visualEffect(RustDeskGlassEffect.featherReceiver())
+    .backgroundColor($r('app.color.neu_base'))
     .zIndex(1000)
   }
 
@@ -5478,12 +5339,12 @@ struct RustDeskIndex {
       this.currentTabIndex = index;
     })
     .barFloatingStyle({
-      barWidth: { smallWidth: 264, mediumWidth: 360, largeWidth: 480 },
+      barWidth: { smallWidth: 264, mediumWidth: 300, largeWidth: 328 },
       barBottomMargin: this.mainTabBottomMargin(),
       systemMaterialEffect: {
         materialType: hdsMaterial.MaterialType.ADAPTIVE,
-        materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
-      }
+        materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
+      },
     })
     .width('100%')
     .height('100%')
@@ -5513,10 +5374,7 @@ struct RustDeskIndex {
       },
       style: {
         scrollEffectOpts: {
-          enableScrollEffect: true,
-          scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
-          blurEffectiveStartOffset: LengthMetrics.vp(0),
-          blurEffectiveEndOffset: LengthMetrics.vp(20),
+          enableScrollEffect: false,
         },
         systemMaterialEffect: {
           materialType: hdsMaterial.MaterialType.ADAPTIVE,
@@ -5527,7 +5385,7 @@ struct RustDeskIndex {
     .bindToScrollable(this.activeMainScrollers())
     .width('100%')
     .height('100%')
-    .backgroundColor($r('app.color.transparent'));
+    .backgroundColor($r('app.color.neu_base'));
   }
 
   @Builder
@@ -5553,23 +5411,8 @@ struct RustDeskIndex {
     }
   }
 
-  private shouldRenderAmbientOrbit(): boolean {
-    return this.pageVisible &&
-      !this.showPreviewModal &&
-      !this.showTransferWorkspace &&
-      !this.passwordDialogVisible;
-  }
-
   build() {
     Stack() {
-      if (this.shouldRenderAmbientOrbit()) {
-        AmbientOrbitBackdrop({
-          viewportWidth: this.mainViewportWidth,
-          viewportHeight: this.mainViewportHeight,
-        })
-          .zIndex(0);
-      }
-
       Column() {
         if (this.isPcDevice()) {
           this.PcTitleBar();
@@ -5585,7 +5428,7 @@ struct RustDeskIndex {
       .zIndex(1)
 
       ConnectionAttemptOverlay({
-        visible: this.connectionUiPhase !== 'idle' && !this.showPreviewModal,
+        visible: this.connectionUiPhase !== 'idle' && !this.showPreviewModal && !this.passwordDialogVisible,
         phase: this.connectionUiPhase,
         target: this.connectionUiTarget,
         message: this.connectionUiMessage,
@@ -5609,7 +5452,7 @@ struct RustDeskIndex {
     }
     .width('100%')
     .height('100%')
-    .background($r('app.color.background'))
+    .background($r('app.color.neu_base'))
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       const width = Number(newArea.width);
       const height = Number(newArea.height);

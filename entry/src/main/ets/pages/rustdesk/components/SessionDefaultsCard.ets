@@ -1,6 +1,9 @@
-import { RustDeskGlassEffect } from '../RustDeskGlassEffect';
+import {
+  LuminousSegmentedControl,
+  LuminousSelectionItem,
+  LuminousSwitch,
+} from 'luminous_neo';
 import { SessionDefaults } from '../RustDeskDirectoryTypes';
-import { FloatingSegmentedControl } from './FloatingSegmentedControl';
 
 export interface SessionDefaultsCardProps {
   showHeader: boolean;
@@ -127,223 +130,208 @@ export struct SessionDefaultsCard {
     }
   }
 
+  private toggleRowWidth(): number {
+    if (this.isWide()) {
+      return Math.max(280, (this.viewportWidth - 72) / 2);
+    }
+    return Math.max(280, this.viewportWidth - 48);
+  }
+
+  private selectorWidth(maximum: number): number {
+    const available = this.isWide()
+      ? (this.viewportWidth - 84) / 2
+      : this.viewportWidth - 48;
+    return Math.max(260, Math.min(available, maximum));
+  }
+
+  private fullSelectorWidth(maximum: number): number {
+    return Math.max(280, Math.min(this.viewportWidth - 48, maximum));
+  }
+
   @Builder
   private ToggleRow(label: ResourceStr, enabled: boolean, onChange: (enabled: boolean) => void) {
-    Row({ space: $r('app.float.space_12') }) {
-      Text(label)
-        .layoutWeight(1)
-        .fontSize($r('app.float.font_body'))
-        .fontColor($r('app.color.text_primary'))
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis });
-
-      Toggle({ type: ToggleType.Switch, isOn: enabled })
-        .selectedColor($r('app.color.brand_primary'))
-        .switchPointColor($r('app.color.white'))
-        .onChange(onChange);
+    Stack({ alignContent: Alignment.Center }) {
+      LuminousSwitch({
+        label: label,
+        description: '',
+        isOn: enabled,
+        rowWidth: this.toggleRowWidth(),
+        onChange: onChange,
+      })
     }
-    .width('100%')
-    .height($r('app.float.control_regular'))
-    .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_8') });
+    .width(this.toggleRowWidth())
+    .height(52)
+    .clip(false);
   }
 
   @Builder
   private PointerModeSelector() {
-    Column({ space: $r('app.float.space_8') }) {
+    Column({ space: 2 }) {
       Text($r('app.string.settings_pointer_mode'))
         .width('100%')
         .fontSize($r('app.float.font_label'))
         .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_secondary'));
+        .fontColor($r('app.color.neu_text_secondary'));
 
-      FloatingSegmentedControl({
-        labels: [
-          $r('app.string.settings_pointer_mouse'),
-          $r('app.string.settings_pointer_touchpad'),
+      LuminousSegmentedControl({
+        items: [
+          new LuminousSelectionItem('mouse', $r('app.string.settings_pointer_mouse')),
+          new LuminousSelectionItem('touchpad', $r('app.string.settings_pointer_touchpad')),
         ],
-        badges: [],
         selectedIndex: this.defaults.relativeMouseMode ? 1 : 0,
-        progress: -1,
-        controlId: 'settings-pointer-mode',
-        compact: false,
-        onPreviewIndex: (_index: number) => {},
-        onProgressChange: (_progress: number) => {},
-        onDragStateChange: (_dragging: boolean) => {},
+        controlWidth: this.selectorWidth(520),
+        controlHeight: 50,
         onChange: (index: number) => this.updatePointerMode(index === 1),
       })
-      .width('100%')
-      .constraintSize({ maxWidth: 520 });
+        .margin({ top: -10 })
     }
     .width('100%');
   }
 
   @Builder
   private QualitySelector() {
-    Column({ space: $r('app.float.space_8') }) {
+    Column({ space: 2 }) {
       Text($r('app.string.settings_quality_default'))
         .width('100%')
         .fontSize($r('app.float.font_label'))
         .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_secondary'));
+        .fontColor($r('app.color.neu_text_secondary'));
 
-      FloatingSegmentedControl({
-        labels: [
-          $r('app.string.settings_quality_speed'),
-          $r('app.string.settings_quality_balanced'),
-          $r('app.string.settings_quality_best'),
+      LuminousSegmentedControl({
+        items: [
+          new LuminousSelectionItem('speed', $r('app.string.settings_quality_speed')),
+          new LuminousSelectionItem('balanced', $r('app.string.settings_quality_balanced')),
+          new LuminousSelectionItem('best', $r('app.string.settings_quality_best')),
         ],
-        badges: [],
         selectedIndex: this.qualityIndex(),
-        progress: -1,
-        controlId: 'settings-quality',
-        compact: true,
-        onPreviewIndex: (_index: number) => {},
-        onProgressChange: (_progress: number) => {},
-        onDragStateChange: (_dragging: boolean) => {},
+        controlWidth: this.selectorWidth(620),
+        controlHeight: 50,
         onChange: (index: number) => this.updateQualityIndex(index),
       })
-      .width('100%')
-      .constraintSize({ maxWidth: 620 });
+        .margin({ top: -10 })
     }
     .width('100%');
   }
 
   @Builder
   private CodecSelector() {
-    Column({ space: $r('app.float.space_8') }) {
+    Column({ space: 2 }) {
       Text($r('app.string.settings_codec_preference'))
         .width('100%')
         .fontSize($r('app.float.font_label'))
         .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_secondary'));
+        .fontColor($r('app.color.neu_text_secondary'));
 
-      FloatingSegmentedControl({
-        labels: [
-          $r('app.string.settings_codec_auto'),
-          'H.264',
-          'H.265',
-          'VP9',
-          'AV1',
+      LuminousSegmentedControl({
+        items: [
+          new LuminousSelectionItem('auto', $r('app.string.settings_codec_auto')),
+          new LuminousSelectionItem('h264', 'H.264'),
+          new LuminousSelectionItem('h265', 'H.265'),
+          new LuminousSelectionItem('vp9', 'VP9'),
+          new LuminousSelectionItem('av1', 'AV1'),
         ],
-        badges: [],
         selectedIndex: this.codecIndex(),
-        progress: -1,
-        controlId: 'settings-codec',
-        compact: true,
-        onPreviewIndex: (_index: number) => {},
-        onProgressChange: (_progress: number) => {},
-        onDragStateChange: (_dragging: boolean) => {},
+        controlWidth: this.fullSelectorWidth(720),
+        controlHeight: 50,
         onChange: (index: number) => this.updateCodecIndex(index),
       })
-      .width('100%')
-      .constraintSize({ maxWidth: 720 });
+        .margin({ top: -10 })
 
       Text($r('app.string.settings_codec_hint'))
         .width('100%')
         .fontSize($r('app.float.font_caption'))
         .lineHeight(17)
-        .fontColor($r('app.color.text_secondary'));
+        .fontColor($r('app.color.neu_text_secondary'))
+        .margin({ top: -10 });
     }
     .width('100%');
   }
 
   @Builder
   private ToggleGrid() {
-    Column() {
-      if (this.isWide()) {
-        Column({ space: $r('app.float.space_4') }) {
-          Row({ space: $r('app.float.space_4') }) {
-            Column() {
+    Column({ space: 2 }) {
+          Text('会话能力')
+            .width('100%')
+            .fontSize($r('app.float.font_label'))
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.neu_text_secondary'));
+          if (this.isWide()) {
+            Column({ space: 0 }) {
+              Row({ space: $r('app.float.space_8') }) {
+                Column() {
+                  this.ToggleRow(
+                    '播放远端音频',
+                    this.defaults.audioEnabled,
+                    (enabled: boolean) => this.updateAudio(enabled),
+                  )
+                }
+                .layoutWeight(1);
+
+                Column() {
+                  this.ToggleRow(
+                    '同步剪贴板',
+                    this.defaults.clipboardEnabled,
+                    (enabled: boolean) => this.updateClipboard(enabled),
+                  )
+                }
+                .layoutWeight(1);
+              }
+              .width('100%');
+
+              Row({ space: $r('app.float.space_8') }) {
+                Column() {
+                  this.ToggleRow(
+                    '变换手势',
+                    this.defaults.gesturesEnabled,
+                    (enabled: boolean) => this.updateGestures(enabled),
+                  )
+                }
+                .layoutWeight(1);
+
+                Column() {
+                  this.ToggleRow(
+                    '默认展开工具栏',
+                    this.defaults.toolbarExpanded,
+                    (enabled: boolean) => this.updateToolbar(enabled),
+                  )
+                }
+                .layoutWeight(1);
+              }
+              .width('100%');
+            }
+            .width('100%');
+          } else {
+            Column({ space: 0 }) {
               this.ToggleRow(
-                $r('app.string.settings_remote_audio'),
+                '播放远端音频',
                 this.defaults.audioEnabled,
                 (enabled: boolean) => this.updateAudio(enabled),
               )
-            }
-            .layoutWeight(1);
-
-            Column() {
               this.ToggleRow(
-                $r('app.string.settings_clipboard_sync'),
+                '同步剪贴板',
                 this.defaults.clipboardEnabled,
                 (enabled: boolean) => this.updateClipboard(enabled),
               )
-            }
-            .layoutWeight(1);
-          }
-          .width('100%');
-
-          Row({ space: $r('app.float.space_4') }) {
-            Column() {
               this.ToggleRow(
-                $r('app.string.settings_transform_gestures'),
+                '变换手势',
                 this.defaults.gesturesEnabled,
                 (enabled: boolean) => this.updateGestures(enabled),
               )
-            }
-            .layoutWeight(1);
-
-            Column() {
               this.ToggleRow(
-                $r('app.string.settings_toolbar_expanded'),
+                '默认展开工具栏',
                 this.defaults.toolbarExpanded,
                 (enabled: boolean) => this.updateToolbar(enabled),
               )
             }
-            .layoutWeight(1);
+            .width('100%');
           }
-          .width('100%');
-        }
-        .width('100%');
-      } else {
-        Column({ space: $r('app.float.space_4') }) {
-          this.ToggleRow(
-            $r('app.string.settings_remote_audio'),
-            this.defaults.audioEnabled,
-            (enabled: boolean) => this.updateAudio(enabled),
-          )
-          this.ToggleRow(
-            $r('app.string.settings_clipboard_sync'),
-            this.defaults.clipboardEnabled,
-            (enabled: boolean) => this.updateClipboard(enabled),
-          )
-          this.ToggleRow(
-            $r('app.string.settings_transform_gestures'),
-            this.defaults.gesturesEnabled,
-            (enabled: boolean) => this.updateGestures(enabled),
-          )
-          this.ToggleRow(
-            $r('app.string.settings_toolbar_expanded'),
-            this.defaults.toolbarExpanded,
-            (enabled: boolean) => this.updateToolbar(enabled),
-          )
-        }
-        .width('100%');
-      }
     }
     .width('100%')
-    .padding($r('app.float.space_4'))
-    .backgroundColor($r('app.color.glass_surface'))
-    .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.48,
-    })
-    .linearGradient({
-      angle: 142,
-      colors: [
-        [$r('app.color.glass_gradient_high'), 0],
-        [$r('app.color.glass_gradient_mid'), 0.48],
-        [$r('app.color.glass_gradient_accent'), 1],
-      ],
-    })
-    .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-    .borderRadius($r('app.float.radius_18'))
-    .clip(true)
-    .visualEffect(RustDeskGlassEffect.featherReceiver());
+    .alignItems(HorizontalAlign.Start);
   }
 
   build() {
-    Column({ space: $r('app.float.space_24') }) {
+    Column({ space: 8 }) {
       if (this.showHeader) {
         Column({ space: $r('app.float.space_4') }) {
           Text($r('app.string.settings_defaults_title'))
@@ -375,7 +363,7 @@ export struct SessionDefaultsCard {
         .width('100%')
         .alignItems(VerticalAlign.Top);
       } else {
-        Column({ space: $r('app.float.space_20') }) {
+        Column({ space: 2 }) {
           this.PointerModeSelector()
           this.QualitySelector()
         }
