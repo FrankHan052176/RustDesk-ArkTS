@@ -50,7 +50,7 @@ export default class EntryAbility extends UIAbility {
           try {
             mainWindow.setWindowDecorVisible(false);
           } catch (decorError) {
-            hilog.error(DOMAIN, TAG, 'Failed to hide window decor: %{public}s', String(decorError));
+            hilog.error(DOMAIN, TAG, 'Failed to hide system window decor: %{public}s', String(decorError));
           }
           mainWindow.setTitleAndDockHoverShown(false, false)
             .catch((hoverError: BusinessError) => {
@@ -59,7 +59,7 @@ export default class EntryAbility extends UIAbility {
             });
         }
         mainWindow.setWindowLayoutFullScreen(true).then(() => {
-          hilog.info(DOMAIN, TAG, 'Succeeded in setting the initial window layout to immersive mode.');
+          hilog.info(DOMAIN, TAG, 'Succeeded in setting the initial window layout mode.');
         }).catch((err: BusinessError) => {
           hilog.error(DOMAIN, TAG,
             'Failed to set the initial window layout to immersive mode. Cause:' + JSON.stringify(err));

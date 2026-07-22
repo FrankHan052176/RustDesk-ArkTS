@@ -9,6 +9,7 @@ import {
   LuminousTone,
 } from 'luminous_neo';
 import { DirectorySnapshot, PeerRecord } from '../RustDeskDirectoryTypes';
+import { RustDeskLayoutTokens } from '../RustDeskLayoutTokens';
 import { PeerCard } from './PeerCard';
 
 export interface ConnectTabProps {
@@ -59,8 +60,20 @@ export struct ConnectTab {
   @Event onViewPeerCamera: (peerId: string) => void = (_peerId: string) => {};
   @Event onOpenPeerTransfer: (peerId: string) => void = (_peerId: string) => {};
 
+  private useTwoColumnWorkspace(): boolean {
+    return this.wideLayout && this.viewportWidth >= RustDeskLayoutTokens.HOME_TWO_COLUMN_MIN_WIDTH;
+  }
+
   private isCompact(): boolean {
-    return this.viewportWidth < 760 || !this.wideLayout;
+    return !this.useTwoColumnWorkspace();
+  }
+
+  private useWideContentAnchor(): boolean {
+    return RustDeskLayoutTokens.useWideContentAnchor(this.viewportWidth, this.wideLayout);
+  }
+
+  private wideWorkspaceLeftInset(): number {
+    return RustDeskLayoutTokens.WIDE_CONTENT_EDGE - (this.stageFrameWidth() - this.controlWidth()) / 2;
   }
 
   private controlWidth(): number {
@@ -355,14 +368,16 @@ export struct ConnectTab {
         this.RecentWorkspace();
       }
       .width('100%')
-      .alignItems(HorizontalAlign.Center);
+      .padding({ left: this.useWideContentAnchor() ? this.wideWorkspaceLeftInset() : 0 })
+      .alignItems(this.useWideContentAnchor() ? HorizontalAlign.Start : HorizontalAlign.Center);
     } else {
       Row({ space: 44 }) {
         this.ConnectionStage();
         this.RecentWorkspace();
       }
       .width('100%')
-      .justifyContent(FlexAlign.Center)
+      .padding({ left: this.useWideContentAnchor() ? this.wideWorkspaceLeftInset() : 0 })
+      .justifyContent(this.useWideContentAnchor() ? FlexAlign.Start : FlexAlign.Center)
       .alignItems(VerticalAlign.Top);
     }
   }
@@ -378,9 +393,10 @@ export struct ConnectTab {
       }
       .width('100%')
       .padding({
-        top: 18,
+        top: RustDeskLayoutTokens.PAGE_CONTENT_TOP_PADDING,
         bottom: (this.wideLayout ? 52 : 132) + this.bottomAvoidInset,
       })
+      .constraintSize({ minHeight: '100%' })
       .alignItems(HorizontalAlign.Center);
     }
     .width('100%')

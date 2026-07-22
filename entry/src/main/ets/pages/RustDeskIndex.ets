@@ -31,6 +31,7 @@ import { SessionPanelFrame } from './rustdesk/components/SessionPanelFrame';
 import { TransferDrawer } from './rustdesk/components/TransferDrawer';
 import { ChatStore } from './rustdesk/ChatStore';
 import { RustDeskPreferences } from './rustdesk/RustDeskPreferences';
+import { RustDeskLayoutTokens } from './rustdesk/RustDeskLayoutTokens';
 import { RustDeskMainBridge } from './rustdesk/RustDeskMainBridge';
 import {
   AccountActionResult,
@@ -317,12 +318,7 @@ struct RustDeskIndex {
     this.refreshFoldHoverMode();
   };
   private pcWindow?: window.Window;
-  private pcWindowControlsExpected: boolean = false;
-  private pcWindowStatusChangeRegistered: boolean = false;
-  private onPcWindowStatusChange: Callback<window.WindowStatusType> = (status: window.WindowStatusType) => {
-    this.pcWindowMaximized = status === window.WindowStatusType.FULL_SCREEN ||
-      status === window.WindowStatusType.MAXIMIZE;
-  };
+  private pcWindowDragExpected: boolean = false;
   @Local remoteCursorVisible: boolean = false;
   @Local remoteCursorLeft: number = 0;
   @Local remoteCursorTop: number = 0;
@@ -349,8 +345,6 @@ struct RustDeskIndex {
   @Local selectedTransferRemoteName: string = '';
   @Local transferItems: TransferItem[] = [];
   @Local transferSessionReady: boolean = false;
-  @Local pcWindowMaximized: boolean = false;
-  @Local pcTitleHoveredButton: string = '';
   @Local remoteAudioState: RemoteAudioState = {
     available: false,
     muted: false,
@@ -379,7 +373,7 @@ struct RustDeskIndex {
     this.initializeRuntime();
     this.registerWindowAvoidAreaListener();
     this.applySessionFullscreen(false, true);
-    this.registerPcWindowControls();
+    this.registerPcWindowDrag();
     this.publishDataTransferBinding();
   }
 
@@ -408,7 +402,7 @@ struct RustDeskIndex {
     this.closeTransferSession();
     this.closeRemoteAudio();
     this.publishDataTransferUnbind();
-    this.unregisterPcWindowControls();
+    this.unregisterPcWindowDrag();
     this.applySessionFullscreen(false);
   }
 
@@ -2318,105 +2312,32 @@ struct RustDeskIndex {
     return deviceInfo.deviceType === '2in1';
   }
 
-  private hasActiveKeepAliveSession(): boolean {
-    return this.activeSessionId.length > 0 || this.transferManager.isReady();
-  }
-
-  private registerPcWindowControls(): void {
+  private registerPcWindowDrag(): void {
     if (!this.isPcDevice()) {
       return;
     }
-    this.pcWindowControlsExpected = true;
+    this.pcWindowDragExpected = true;
     const hostContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
     window.getLastWindow(hostContext)
       .then((currentWindow: window.Window) => {
-        if (!this.pcWindowControlsExpected) {
-          return;
-        }
-        this.pcWindow = currentWindow;
-        this.refreshPcWindowStatus(currentWindow);
-        if (!this.pcWindowStatusChangeRegistered) {
-          currentWindow.on('windowStatusChange', this.onPcWindowStatusChange);
-          this.pcWindowStatusChangeRegistered = true;
+        if (this.pcWindowDragExpected) {
+          this.pcWindow = currentWindow;
         }
       })
       .catch((error: BusinessError) => {
-        hilog.error(DOMAIN, TAG, 'register PC window controls failed: %{public}s', JSON.stringify(error) ?? '');
+        hilog.error(DOMAIN, TAG, 'register PC window drag failed: %{public}s', JSON.stringify(error) ?? '');
       });
   }
 
-  private unregisterPcWindowControls(): void {
-    this.pcWindowControlsExpected = false;
-    if (this.pcWindowStatusChangeRegistered && this.pcWindow) {
-      try {
-        this.pcWindow.off('windowStatusChange', this.onPcWindowStatusChange);
-      } catch (error) {
-        hilog.error(DOMAIN, TAG, 'unregister PC window controls failed: %{public}s', String(error));
-      }
-    }
-    this.pcWindowStatusChangeRegistered = false;
+  private unregisterPcWindowDrag(): void {
+    this.pcWindowDragExpected = false;
     this.pcWindow = undefined;
   }
 
-  private refreshPcWindowStatus(currentWindow?: window.Window): void {
-    const targetWindow = currentWindow ?? this.pcWindow;
-    if (!targetWindow) {
-      return;
-    }
-    try {
-      const status = targetWindow.getWindowStatus();
-      this.pcWindowMaximized = status === window.WindowStatusType.FULL_SCREEN ||
-        status === window.WindowStatusType.MAXIMIZE;
-    } catch (error) {
-      hilog.error(DOMAIN, TAG, 'get PC window status failed: %{public}s', String(error));
-    }
-  }
-
-  private minimizePcWindow(): void {
-    const currentWindow = this.pcWindow;
-    if (!currentWindow) {
-      return;
-    }
-    currentWindow.minimize()
-      .catch((error: BusinessError) => {
-        hilog.error(DOMAIN, TAG, 'minimize PC window failed: %{public}s', JSON.stringify(error) ?? '');
-      });
-  }
-
-  private togglePcWindowMaximize(): void {
-    const currentWindow = this.pcWindow;
-    if (!currentWindow) {
-      return;
-    }
-    try {
-      const operation = this.pcWindowMaximized ? currentWindow.recover() :
-        currentWindow.maximize(window.MaximizePresentation.ENTER_IMMERSIVE);
-      operation.then(() => this.refreshPcWindowStatus(currentWindow))
-        .catch((error: BusinessError) => {
-          hilog.error(DOMAIN, TAG, 'toggle PC window maximize failed: %{public}s', JSON.stringify(error) ?? '');
-        });
-    } catch (error) {
-      hilog.error(DOMAIN, TAG, 'toggle PC window maximize failed: %{public}s', String(error));
-    }
-  }
-
-  private closePcWindow(): void {
-    if (this.hasActiveKeepAliveSession()) {
-      this.minimizePcWindow();
-      return;
-    }
-    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    context.terminateSelf()
-      .catch((error: BusinessError) => {
-        hilog.error(DOMAIN, TAG, 'terminate ability failed: %{public}s', JSON.stringify(error) ?? '');
-      });
-  }
-
   private startMovingPcWindow(event: TouchEvent): void {
-    if (event.type !== TouchType.Down) {
-      return;
+    if (event.type === TouchType.Down) {
+      this.beginMovingPcWindow();
     }
-    this.beginMovingPcWindow();
   }
 
   private startMovingPcWindowByMouse(event: MouseEvent): void {
@@ -2428,10 +2349,20 @@ struct RustDeskIndex {
   }
 
   private beginMovingPcWindow(): void {
-    if (this.pcWindowMaximized || !this.pcWindow) {
+    const currentWindow = this.pcWindow;
+    if (!currentWindow) {
       return;
     }
-    this.pcWindow.startMoving()
+    try {
+      const status = currentWindow.getWindowStatus();
+      if (status === window.WindowStatusType.FULL_SCREEN || status === window.WindowStatusType.MAXIMIZE) {
+        return;
+      }
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'get PC window status before moving failed: %{public}s', String(error));
+      return;
+    }
+    currentWindow.startMoving()
       .catch((error: BusinessError) => {
         hilog.error(DOMAIN, TAG, 'start moving PC window failed: %{public}s', JSON.stringify(error) ?? '');
       });
@@ -4818,24 +4749,25 @@ struct RustDeskIndex {
     return this.mainViewportWidth >= 840;
   }
 
-  private isExtraWideMainLayout(): boolean {
-    return this.mainViewportWidth >= 1440;
+  private wideRailWidth(): number {
+    return 88;
   }
 
-  private wideRailWidth(): number {
-    return this.isExtraWideMainLayout() ? 188 : 88;
+  private wideRailFrameWidth(): number {
+    return this.wideRailWidth() + LuminousNeoTokens.shadowPaddingFor(LuminousNeoTokens.BASE_SURFACE_SIZE) * 2;
   }
 
   private wideRailItemSurfaceWidth(): number {
-    return this.wideRailWidth() - 28;
+    // LuminousSurface 会在实体两侧预留完整阴影框；36vp 与当前页签高度的阴影安全区匹配。
+    return this.wideRailWidth() - 36;
   }
 
   private wideRailItemSurfaceHeight(): number {
-    return this.isExtraWideMainLayout() ? 48 : 54;
+    return 54;
   }
 
   private wideRailItemFrameHeight(): number {
-    return this.isExtraWideMainLayout() ? 62 : 68;
+    return 68;
   }
 
   private openMainTab(index: number): void {
@@ -4876,15 +4808,15 @@ struct RustDeskIndex {
   }
 
   private mainTitleSpacerHeight(): number {
-    return 56;
+    return RustDeskLayoutTokens.PAGE_TITLE_SPACER;
   }
 
   private deviceTitleSpacerHeight(): number {
-    return this.mainTitleSpacerHeight() + 30;
+    return RustDeskLayoutTokens.PAGE_TITLE_SPACER;
   }
 
   private boundMainTitleSpacerHeight(): number {
-    return 0;
+    return RustDeskLayoutTokens.PAGE_TITLE_SPACER;
   }
 
   private mainTabBottomMargin(): number {
@@ -4983,48 +4915,28 @@ struct RustDeskIndex {
           : LuminousSurfaceState.Flat,
         surfaceWidth: this.wideRailItemSurfaceWidth(),
         surfaceHeight: this.wideRailItemSurfaceHeight(),
-        cornerRadius: this.isExtraWideMainLayout() ? 16 : 18,
+        cornerRadius: 18,
         raisedShadowDistance: LuminousNeoTokens.raisedDistanceFor(this.wideRailItemSurfaceHeight()),
         raisedShadowBlur: LuminousNeoTokens.raisedBlurFor(this.wideRailItemSurfaceHeight()),
         insetShadowDistance: LuminousNeoTokens.insetDistanceFor(this.wideRailItemSurfaceHeight()),
         insetShadowBlur: LuminousNeoTokens.insetBlurFor(this.wideRailItemSurfaceHeight()),
       }) {
-        if (this.isExtraWideMainLayout()) {
-          Row({ space: 12 }) {
-            SymbolGlyph(icon)
-              .fontSize(22)
-              .fontColor([this.currentTabIndex === index
-                ? $r('app.color.neu_accent')
-                : $r('app.color.neu_text_secondary')]);
-            Text(name)
-              .fontSize(14)
-              .fontWeight(this.currentTabIndex === index ? FontWeight.Bold : FontWeight.Medium)
-              .fontColor(this.currentTabIndex === index
-                ? $r('app.color.neu_accent')
-                : $r('app.color.neu_text_secondary'));
-          }
-          .width(this.wideRailItemSurfaceWidth())
-          .height(this.wideRailItemSurfaceHeight())
-          .padding({ left: 16, right: 12 })
-          .alignItems(VerticalAlign.Center);
-        } else {
-          Column({ space: 4 }) {
-            SymbolGlyph(icon)
-              .fontSize(22)
-              .fontColor([this.currentTabIndex === index
-                ? $r('app.color.neu_accent')
-                : $r('app.color.neu_text_secondary')]);
-            Text(name)
-              .fontSize(10)
-              .fontWeight(this.currentTabIndex === index ? FontWeight.Bold : FontWeight.Medium)
-              .fontColor(this.currentTabIndex === index
-                ? $r('app.color.neu_accent')
-                : $r('app.color.neu_text_secondary'));
+        Column({ space: 4 }) {
+          SymbolGlyph(icon)
+            .fontSize(22)
+            .fontColor([this.currentTabIndex === index
+              ? $r('app.color.neu_accent')
+              : $r('app.color.neu_text_secondary')]);
+          Text(name)
+            .fontSize(10)
+            .fontWeight(this.currentTabIndex === index ? FontWeight.Bold : FontWeight.Medium)
+            .fontColor(this.currentTabIndex === index
+              ? $r('app.color.neu_accent')
+              : $r('app.color.neu_text_secondary'));
         }
-          .width(this.wideRailItemSurfaceWidth())
-          .height(this.wideRailItemSurfaceHeight())
-          .justifyContent(FlexAlign.Center);
-        }
+        .width(this.wideRailItemSurfaceWidth())
+        .height(this.wideRailItemSurfaceHeight())
+        .justifyContent(FlexAlign.Center);
       }
 
       Button({ type: ButtonType.Normal, stateEffect: false }) {
@@ -5035,7 +4947,7 @@ struct RustDeskIndex {
       .padding(0)
       .backgroundColor(Color.Transparent)
       .hoverEffect(HoverEffect.None)
-      .borderRadius(this.isExtraWideMainLayout() ? 16 : 18)
+      .borderRadius(18)
       .accessibilityText(name)
       .accessibilitySelected(this.currentTabIndex === index)
       .onClick((): void => this.openMainTab(index));
@@ -5069,12 +4981,6 @@ struct RustDeskIndex {
     .height(66)
     .clip(false)
 
-    if (this.isExtraWideMainLayout()) {
-      Text('RustDesk')
-        .fontSize(15)
-        .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.neu_text_primary'));
-    }
   }
 
   @Builder
@@ -5082,6 +4988,7 @@ struct RustDeskIndex {
     Stack() {
       FloatingGlassSurface({
         radius: $r('app.float.radius_24'),
+        surfaceWidth: this.wideRailWidth(),
       }) {
         Column({ space: 6 }) {
           Column({ space: 2 }) {
@@ -5107,8 +5014,8 @@ struct RustDeskIndex {
       }
     }
     .width(this.wideRailWidth())
-    .height('calc(100% - 32vp)')
-    .margin({ left: $r('app.float.space_16'), top: $r('app.float.space_16'), bottom: $r('app.float.space_16') })
+    // 栏体的 96vp 阴影标定需要 33vp 安全区，避免被窗口边缘和右侧主内容覆盖。
+    .height('calc(100% - 66vp)')
     .borderRadius($r('app.float.radius_24'))
     .clip(false);
   }
@@ -5203,51 +5110,6 @@ struct RustDeskIndex {
   }
 
   @Builder
-  private PcTitleButton(label: string, buttonId: string, destructive: boolean, onClick: () => void) {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Stack() {
-        Text(label)
-          .width('100%')
-          .height('100%')
-          .fontSize(buttonId === 'minimize' ? 18 : 17)
-          .fontWeight(FontWeight.Medium)
-          .fontColor((this.pcTitleHoveredButton === buttonId ||
-            this.rootFocusedControl === `pc-${buttonId}`) && destructive
-            ? $r('app.color.white')
-            : $r('app.color.text_primary'))
-          .textAlign(TextAlign.Center);
-        if (this.rootFocusedControl === `pc-${buttonId}`) {
-          Row()
-            .width('100%')
-            .height('100%')
-            .border({ width: 2, color: $r('app.color.focus_ring') })
-            .hitTestBehavior(HitTestMode.None);
-        }
-      }
-      .width('100%')
-      .height('100%');
-    }
-    .width(46)
-    .height(42)
-    .padding(0)
-    .backgroundColor(this.pcTitleHoveredButton === buttonId ||
-      this.rootFocusedControl === `pc-${buttonId}`
-      ? (destructive ? $r('app.color.error') : $r('app.color.mica_control'))
-      : $r('app.color.transparent'))
-    .borderRadius(0)
-    .hoverEffect(HoverEffect.None)
-    .accessibilityText(buttonId === 'minimize'
-      ? '最小化窗口'
-      : (buttonId === 'maximize' ? (this.pcWindowMaximized ? '还原窗口' : '最大化窗口') : '关闭窗口'))
-    .onHover((hovered: boolean) => {
-      this.pcTitleHoveredButton = hovered ? buttonId : '';
-    })
-    .onFocus(() => this.setRootControlFocused(`pc-${buttonId}`, true))
-    .onBlur(() => this.setRootControlFocused(`pc-${buttonId}`, false))
-    .onClick(onClick);
-  }
-
-  @Builder
   private PcTitleBar() {
     Row() {
       Row({ space: 9 }) {
@@ -5283,13 +5145,10 @@ struct RustDeskIndex {
       .onTouch((event: TouchEvent) => this.startMovingPcWindow(event))
       .onMouse((event: MouseEvent) => this.startMovingPcWindowByMouse(event))
 
-      Row() {
-        this.PcTitleButton('—', 'minimize', false, () => this.minimizePcWindow())
-        this.PcTitleButton(this.pcWindowMaximized ? '❐' : '□', 'maximize', false,
-          () => this.togglePcWindowMaximize())
-        this.PcTitleButton('×', 'close', true, () => this.closePcWindow())
-      }
-      .height('100%')
+      Row()
+        .width(138)
+        .height('100%')
+        .hitTestBehavior(HitTestMode.None)
     }
     .width('100%')
     .height(42)
@@ -5385,7 +5244,7 @@ struct RustDeskIndex {
     .bindToScrollable(this.activeMainScrollers())
     .width('100%')
     .height('100%')
-    .backgroundColor($r('app.color.neu_base'));
+    .backgroundColor($r('app.color.transparent'));
   }
 
   @Builder
@@ -5396,12 +5255,20 @@ struct RustDeskIndex {
       this.previewModalBuilder();
     } else if (this.isWideMainLayout()) {
       Row() {
-        this.WideNavigationRail();
+        Stack({ alignContent: Alignment.Center }) {
+          this.WideNavigationRail();
+        }
+        .width(this.wideRailFrameWidth())
+        .height('100%')
+        .clip(false)
+        .zIndex(10);
+
         Stack() {
           this.MainNavigationPane();
         }
         .layoutWeight(1)
-        .height('100%');
+        .height('100%')
+        .zIndex(1);
       }
       .width('100%')
       .height('100%')
@@ -5452,7 +5319,7 @@ struct RustDeskIndex {
     }
     .width('100%')
     .height('100%')
-    .background($r('app.color.neu_base'))
+    .backgroundColor($r('app.color.neu_base'))
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       const width = Number(newArea.width);
       const height = Number(newArea.height);

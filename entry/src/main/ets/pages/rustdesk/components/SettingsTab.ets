@@ -13,6 +13,7 @@ import {
 } from 'luminous_neo';
 import { AccountLoginProvider, AccountState, ServerConfig, SessionDefaults } from '../RustDeskDirectoryTypes';
 import { DecoderCapability } from '../RustDeskTypes';
+import { RustDeskLayoutTokens } from '../RustDeskLayoutTokens';
 import { AccountSettingsCard } from './AccountSettingsCard';
 import { ServerSettingsCard } from './ServerSettingsCard';
 import { SessionDefaultsCard } from './SessionDefaultsCard';
@@ -96,6 +97,14 @@ export struct SettingsTab {
 
   private hasError(): boolean {
     return this.errorText.trim().length > 0;
+  }
+
+  private useWideContentAnchor(): boolean {
+    return RustDeskLayoutTokens.useWideContentAnchor(this.viewportWidth, this.wideLayout);
+  }
+
+  private wideHubLeftInset(): number {
+    return RustDeskLayoutTokens.WIDE_CONTENT_EDGE - 12;
   }
 
   private bridgeReady(): boolean {
@@ -850,22 +859,21 @@ export struct SettingsTab {
           Column() {
             this.SettingsHub()
           }
-          .width('100%')
-          .constraintSize({ maxWidth: 860 })
+          .width(this.hubFrameWidth())
           .alignItems(HorizontalAlign.Center);
         }
         .width('100%')
-        .justifyContent(FlexAlign.Center)
+        .justifyContent(this.useWideContentAnchor() ? FlexAlign.Start : FlexAlign.Center)
         .alignItems(VerticalAlign.Top)
         .padding({
-          left: this.horizontalPadding(),
-          right: this.horizontalPadding(),
-          top: this.viewportWidth < 600 ? $r('app.float.space_12') : $r('app.float.space_16'),
+          left: this.useWideContentAnchor() ? this.wideHubLeftInset() : this.horizontalPadding(),
+          right: this.useWideContentAnchor() ? 0 : this.horizontalPadding(),
+          top: RustDeskLayoutTokens.PAGE_CONTENT_TOP_PADDING,
           bottom: this.hubBottomPadding(),
-        })
-        .margin({ top: -48 });
+        });
       }
       .width('100%')
+      .constraintSize({ minHeight: '100%' })
       .backgroundColor($r('app.color.neu_base'));
     }
     .width('100%')

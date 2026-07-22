@@ -1,4 +1,5 @@
 import {
+  LuminousNeoTokens,
   LuminousSearchField,
   LuminousSegmentedControl,
   LuminousSelectionItem,
@@ -10,6 +11,7 @@ import {
   PeerRecord,
   PeerSource,
 } from '../RustDeskDirectoryTypes';
+import { RustDeskLayoutTokens } from '../RustDeskLayoutTokens';
 import { PeerCard } from './PeerCard';
 
 export interface DeviceDirectoryPanelProps {
@@ -66,6 +68,10 @@ export struct DeviceDirectoryPanel {
 
   private isPhoneLayout(): boolean {
     return this.viewportWidth < 600;
+  }
+
+  private useWideContentAnchor(): boolean {
+    return RustDeskLayoutTokens.useWideContentAnchor(this.viewportWidth, this.wideLayout);
   }
 
   private horizontalPadding(): number {
@@ -320,9 +326,12 @@ export struct DeviceDirectoryPanel {
         controlHeight: 50,
         onChange: (index: number): void => this.changeSource(index),
       })
-        .margin({ top: -32 })
+        .margin({
+          left: -LuminousNeoTokens.shadowPaddingFor(50),
+          top: -32,
+        })
     }
-    .width('100%')
+    .width(this.controlWidth())
     .alignItems(HorizontalAlign.Center);
   }
 
@@ -524,11 +533,8 @@ export struct DeviceDirectoryPanel {
         Column() {
           this.PeerList(source);
         }
-        .width('100%')
-        .constraintSize({ maxWidth: 1200 })
+        .width(this.controlWidth())
         .padding({
-          left: this.horizontalPadding(),
-          right: this.horizontalPadding(),
           top: 4,
           bottom: this.bottomPadding(),
         })
@@ -536,7 +542,8 @@ export struct DeviceDirectoryPanel {
       }
       .width('100%')
       .constraintSize({ minHeight: '100%' })
-      .justifyContent(FlexAlign.Center)
+      .padding({ left: this.useWideContentAnchor() ? RustDeskLayoutTokens.WIDE_CONTENT_EDGE : 0 })
+      .justifyContent(this.useWideContentAnchor() ? FlexAlign.Start : FlexAlign.Center)
       .alignItems(VerticalAlign.Top);
     }
     .width('100%')
@@ -593,13 +600,22 @@ export struct DeviceDirectoryPanel {
         .height(this.titleSpacerHeight)
         .flexShrink(0);
 
-      Column({ space: 10 }) {
-        this.DirectoryHeader();
-        this.MessageBanner();
+      Row() {
+        Column({ space: 10 }) {
+          this.DirectoryHeader();
+          this.MessageBanner();
+        }
+        .width(this.controlWidth())
+        .alignItems(HorizontalAlign.Center);
       }
       .width('100%')
-      .padding({ top: 18, bottom: 0 })
-      .alignItems(HorizontalAlign.Center);
+      .padding({
+        left: this.useWideContentAnchor() ? RustDeskLayoutTokens.WIDE_CONTENT_EDGE : 0,
+        top: RustDeskLayoutTokens.PAGE_CONTENT_TOP_PADDING,
+        bottom: 0,
+      })
+      .justifyContent(this.useWideContentAnchor() ? FlexAlign.Start : FlexAlign.Center)
+      .alignItems(VerticalAlign.Top);
 
       Swiper(this.swiperController) {
         this.SourcePage('recent', this.recentScroller);
