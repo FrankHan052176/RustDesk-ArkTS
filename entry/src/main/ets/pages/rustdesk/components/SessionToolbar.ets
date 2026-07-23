@@ -32,6 +32,7 @@ export interface SessionToolbarProps {
 @ComponentV2
 export struct SessionToolbar {
   @Param relativeMouseMode: boolean = false;
+  @Local displayedRelativeMouseMode: boolean = false;
   @Param metrics: SessionToolbarMetrics = {
     fps: '--',
     frames: '--',
@@ -50,6 +51,7 @@ export struct SessionToolbar {
   @Param wideLayout: boolean = false;
   @Param transformSummary: string = '100%';
   @Param transformMode: boolean = false;
+  @Local displayedTransformMode: boolean = false;
   @Param canResetTransform: boolean = false;
   @Param panelContentHeight: number = 360;
   @Event onTogglePointerMode: () => void = () => {};
@@ -63,6 +65,21 @@ export struct SessionToolbar {
   @Event onMinimize: () => void = () => {};
 
   @BuilderParam content: () => void = this.Empty;
+
+  aboutToAppear(): void {
+    this.displayedRelativeMouseMode = this.relativeMouseMode;
+    this.displayedTransformMode = this.transformMode;
+  }
+
+  @Monitor('relativeMouseMode')
+  private onRelativeMouseModeChanged(_monitor: IMonitor): void {
+    this.displayedRelativeMouseMode = this.relativeMouseMode;
+  }
+
+  @Monitor('transformMode')
+  private onTransformModeChanged(_monitor: IMonitor): void {
+    this.displayedTransformMode = this.transformMode;
+  }
 
   @Builder
   private Empty() {}
@@ -111,10 +128,13 @@ export struct SessionToolbar {
   private PointerModeAction() {
     this.ToolbarAction(
       'pointer',
-      this.relativeMouseMode ? '触摸板' : '模拟鼠标',
-      this.relativeMouseMode,
+      this.displayedRelativeMouseMode ? '触摸板' : '模拟鼠标',
+      this.displayedRelativeMouseMode,
       '',
-      () => this.onTogglePointerMode(),
+      () => {
+        this.displayedRelativeMouseMode = !this.displayedRelativeMouseMode;
+        this.onTogglePointerMode();
+      },
     );
   }
 
@@ -230,12 +250,30 @@ export struct SessionToolbar {
         .fontColor($r('app.color.neu_text_secondary'))
         .maxLines(1);
 
-      this.CompactAction('transform', this.transformMode ? '完成' : '调整画面', this.transformMode, true, true,
-        () => this.onToggleTransform())
+      this.CompactAction(
+        'transform',
+        this.displayedTransformMode ? '完成' : '调整画面',
+        this.displayedTransformMode,
+        true,
+        true,
+        () => {
+          this.displayedTransformMode = !this.displayedTransformMode;
+          this.onToggleTransform();
+        },
+      )
 
       if (this.canResetTransform) {
         this.CompactAction('reset-transform', '还原', false, false, true, () => this.onResetTransform())
       }
+    }
+    .alignItems(VerticalAlign.Center);
+  }
+
+  @Builder
+  private ToolbarUtilityActions() {
+    Row({ space: $r('app.float.space_6') }) {
+      this.TransformControls()
+      this.CompactAction('collapse', '收起', false, false, true, () => this.onMinimize())
     }
     .alignItems(VerticalAlign.Center);
   }
@@ -314,17 +352,18 @@ export struct SessionToolbar {
             .fontSize($r('app.float.font_caption'))
             .fontColor($r('app.color.neu_text_secondary'))
             .maxLines(1);
-          this.TransformControls();
         }
         Blank()
-        this.CompactAction('collapse', '收起', false, false, true, () => this.onMinimize())
+        if (this.wideLayout) {
+          this.ToolbarUtilityActions()
+        }
       }
       .width('100%')
       .alignItems(VerticalAlign.Center);
 
       if (!this.wideLayout) {
         Row() {
-          this.TransformControls();
+          this.ToolbarUtilityActions();
         }
         .width('100%')
         .justifyContent(FlexAlign.End);

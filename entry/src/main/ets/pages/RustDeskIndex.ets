@@ -106,11 +106,16 @@ const REMOTE_CURSOR_OPTION_REAPPLY_MS = 1000;
 const RENDER_STALL_THRESHOLD_MS = 3500;
 const RENDER_STALL_RECOVERY_COOLDOWN_MS = 5000;
 const WAITING_FOR_IMAGE_TEXT = 'Connected, waiting for image...';
-const PREVIEW_ROOT_FOCUS_ID = 'rustdesk-preview-root-layer';
 const PREVIEW_INPUT_FOCUS_ID = 'rustdesk-preview-input-layer';
 const SESSION_OVERLAY_TRANSITION_CHAT = 'rustdesk-session-overlay-chat';
 const SESSION_OVERLAY_TRANSITION_DISPLAY = 'rustdesk-session-overlay-display';
 const SESSION_OVERLAY_TRANSITION_QUALITY = 'rustdesk-session-overlay-quality';
+const MAIN_PAGE_TRANSITION_DURATION_MS = 280;
+const MAIN_PAGE_TRANSITION_DISTANCE_VP = 20;
+const ROTATION_TRANSITION_OUT_DURATION_MS = 100;
+const ROTATION_TRANSITION_IN_DURATION_MS = 200;
+const ROTATION_TRANSITION_MID_OPACITY = 0.86;
+const ROTATION_TRANSITION_MID_SCALE = 0.985;
 const TRANSFER_POLL_INTERVAL_MS = 250;
 const REMOTE_AUDIO_POLL_INTERVAL_MS = 1000;
 const CONNECTION_TIMEOUT_MS = 45000;
@@ -189,11 +194,16 @@ struct RustDeskIndex {
   private accountOidcOpenedUrl: string = '';
 
   @Local currentTabIndex: number = 0;
+  @Local mainTabTransitionDirection: number = 1;
   @Local mainViewportWidth: number = 390;
   @Local mainViewportHeight: number = 844;
+  @Local rotationTransitionOpacity: number = 1;
+  @Local rotationTransitionScale: number = 1;
   @Local windowTopAvoidInset: number = 0;
   @Local windowBottomAvoidInset: number = 0;
   @Local rootFocusedControl: string = '';
+  private viewportOrientationInitialized: boolean = false;
+  private lastViewportPortrait: boolean = true;
 
   @Local nativeVersion: string = 'loading...';
   @Local health: string = 'waiting...';
@@ -523,6 +533,8 @@ struct RustDeskIndex {
     defaults.audioEnabled = source.audioEnabled;
     defaults.clipboardEnabled = source.clipboardEnabled;
     defaults.qualityPreset = source.qualityPreset;
+    defaults.customQuality = source.customQuality;
+    defaults.customFps = source.customFps;
     defaults.preferredCodec = source.preferredCodec;
     defaults.gesturesEnabled = source.gesturesEnabled;
     defaults.toolbarExpanded = source.toolbarExpanded;
@@ -557,6 +569,9 @@ struct RustDeskIndex {
     }
     if (preset === 'speed' || preset === 'low') {
       return 'low';
+    }
+    if (preset === 'custom') {
+      return 'custom';
     }
     return 'balanced';
   }
@@ -1653,8 +1668,8 @@ struct RustDeskIndex {
     this.overlayState.close();
     this.activeOverlayPanel = 'home';
     this.selectedQualityPreset = this.qualityPresetFor(this.activeSessionDefaults);
-    this.customQualityDraft = 50;
-    this.customFpsDraft = 30;
+    this.customQualityDraft = this.activeSessionDefaults.customQuality;
+    this.customFpsDraft = this.activeSessionDefaults.customFps;
     this.remoteAudioState = this.unavailableRemoteAudioState();
     this.remoteAudioDefaultApplied = false;
     this.isMiniBarExpanded = this.activeSessionDefaults.toolbarExpanded;
@@ -1689,6 +1704,7 @@ struct RustDeskIndex {
     if (!this.overlayState.close()) {
       return;
     }
+    this.syncInputInterceptor();
     this.getUIContext()?.animateTo({ duration: 300, curve: Curve.FastOutSlowIn }, () => {
       this.activeOverlayPanel = 'home';
     });
@@ -1746,8 +1762,8 @@ struct RustDeskIndex {
       this.isRemoteControlSessionActive() &&
       this.showPreviewModal &&
       !this.showTransferWorkspace &&
-      this.activeOverlayPanel === 'home' &&
-      this.previewKeyboardCaptureFocused;
+      !this.passwordDialogVisible &&
+      this.overlayState.getActivePanel() === 'home';
   }
 
   private syncInputInterceptor(): void {
@@ -2553,7 +2569,7 @@ struct RustDeskIndex {
         await currentWindow.setPreferredOrientation(
           active
             ? window.Orientation.LANDSCAPE
-            : (this.isPcDevice() ? window.Orientation.AUTO_ROTATION : window.Orientation.PORTRAIT),
+            : window.Orientation.FOLLOW_DESKTOP,
         );
         if (active) {
           await currentWindow.setWindowLayoutFullScreen(true);
@@ -2726,7 +2742,6 @@ struct RustDeskIndex {
     setTimeout(() => {
       this.applyDisplayConfiguration();
       this.reprojectVirtualCursorOverlay();
-      this.requestPreviewInputFocus();
     }, 80);
   }
 
@@ -2741,6 +2756,7 @@ struct RustDeskIndex {
       return;
     }
     this.showPreviewModal = true;
+    this.syncInputInterceptor();
     this.registerFoldHoverListeners();
     this.previewSurfaceVisible = false;
     this.previewSurfaceId = '';
@@ -2750,12 +2766,10 @@ struct RustDeskIndex {
     this.previewSurfaceGeneration += 1;
     this.previewSurfaceVisible = true;
     this.setSessionKeyboardEntered(true);
-    this.requestPreviewInputFocus();
     await this.waitForPreviewSurfaceBinding(connectionGeneration);
     if (connectionGeneration !== undefined && connectionGeneration !== this.connectionGeneration) {
       return;
     }
-    this.requestPreviewInputFocus();
   }
 
   private async waitForPreviewSurfaceBinding(connectionGeneration?: number): Promise<void> {
@@ -3233,9 +3247,11 @@ struct RustDeskIndex {
   }
 
   private requestPreviewInputFocus(): void {
+    if (!this.showPreviewModal) {
+      return;
+    }
     try {
       this.getUIContext().getFocusController().requestFocus(PREVIEW_INPUT_FOCUS_ID);
-      this.getUIContext().getFocusController().requestFocus(PREVIEW_ROOT_FOCUS_ID);
       this.logKeyboardFocusRequest('requested');
     } catch (_error) {
       this.logKeyboardFocusRequest('request_failed');
@@ -3703,8 +3719,8 @@ struct RustDeskIndex {
       if (this.sessionDisplayController.applyQuality(
         this.activeSessionId,
         quality,
-        this.customQualityDraft,
-        this.customFpsDraft,
+        this.activeSessionDefaults.customQuality,
+        this.activeSessionDefaults.customFps,
       )) {
         this.selectedQualityPreset = this.sessionDisplayController.getImageQuality();
       }
@@ -4216,16 +4232,24 @@ struct RustDeskIndex {
             .zIndex(1);
         }
 
-        Column() {
+        Button({ type: ButtonType.Normal, stateEffect: false }) {
+          Row()
         }
         .id(PREVIEW_INPUT_FOCUS_ID)
         .width('100%')
         .height('100%')
+        .padding(0)
         .backgroundColor($r('app.color.transparent'))
+        .hoverEffect(HoverEffect.None)
         .hitTestBehavior(HitTestMode.Block)
         .focusable(true)
         .defaultFocus(true)
         .focusOnTouch(true)
+        .onVisibleAreaChange([1.0], (_isExpanding: boolean, currentRatio: number): void => {
+          if (currentRatio >= 0.999 && this.showPreviewModal) {
+            this.requestPreviewInputFocus();
+          }
+        })
         .onFocus(() => {
           this.handlePreviewKeyboardFocus();
           this.logRelativeDebug('keyboard_focus', `focused id=${PREVIEW_INPUT_FOCUS_ID}`);
@@ -4771,10 +4795,69 @@ struct RustDeskIndex {
   }
 
   private openMainTab(index: number): void {
-    this.currentTabIndex = index;
+    if (index === this.currentTabIndex) {
+      return;
+    }
+    this.mainTabTransitionDirection = index > this.currentTabIndex ? 1 : -1;
     if (!this.isWideMainLayout()) {
       this.hdsTabsController.changeIndex(index);
+      return;
     }
+    this.getUIContext().animateTo({
+      duration: MAIN_PAGE_TRANSITION_DURATION_MS,
+      curve: Curve.FastOutSlowIn,
+    }, (): void => {
+      this.currentTabIndex = index;
+    });
+  }
+
+  private playRotationTransition(): void {
+    this.getUIContext().keyframeAnimateTo({
+      iterations: 1,
+      onFinish: (): void => {
+        this.rotationTransitionOpacity = 1;
+        this.rotationTransitionScale = 1;
+      },
+    }, [{
+      duration: ROTATION_TRANSITION_OUT_DURATION_MS,
+      curve: Curve.FastOutLinearIn,
+      event: (): void => {
+        this.rotationTransitionOpacity = ROTATION_TRANSITION_MID_OPACITY;
+        this.rotationTransitionScale = ROTATION_TRANSITION_MID_SCALE;
+      },
+    }, {
+      duration: ROTATION_TRANSITION_IN_DURATION_MS,
+      curve: Curve.LinearOutSlowIn,
+      event: (): void => {
+        this.rotationTransitionOpacity = 1;
+        this.rotationTransitionScale = 1;
+      },
+    }]);
+  }
+
+  private updateMainViewport(newArea: Area): void {
+    const width = Number(newArea.width);
+    const height = Number(newArea.height);
+    if (width > 0) {
+      this.mainViewportWidth = width;
+    }
+    if (height > 0) {
+      this.mainViewportHeight = height;
+    }
+    if (width <= 0 || height <= 0) {
+      return;
+    }
+    const nextPortrait = height >= width;
+    if (!this.viewportOrientationInitialized) {
+      this.viewportOrientationInitialized = true;
+      this.lastViewportPortrait = nextPortrait;
+      return;
+    }
+    if (nextPortrait === this.lastViewportPortrait) {
+      return;
+    }
+    this.lastViewportPortrait = nextPortrait;
+    this.playRotationTransition();
   }
 
   private mainNavigationTitle(): ResourceStr {
@@ -5070,21 +5153,9 @@ struct RustDeskIndex {
       }
 
     }
-    .id(PREVIEW_ROOT_FOCUS_ID)
     .width('100%')
     .height('100%')
-    .focusable(true)
-    .defaultFocus(true)
-    .focusOnTouch(true)
-    .onFocus(() => {
-      this.handlePreviewKeyboardFocus();
-      this.logRelativeDebug('keyboard_focus', `focused id=${PREVIEW_ROOT_FOCUS_ID}`);
-    })
-    .onBlur(() => {
-      this.handlePreviewKeyboardBlur();
-      this.logRelativeDebug('keyboard_focus', `blurred id=${PREVIEW_ROOT_FOCUS_ID}`);
-    })
-    .onKeyEvent((event: KeyEvent) => this.handlePreviewRootKeyEvent(event));
+    .backgroundColor($r('app.color.black'));
   }
 
   @Builder
@@ -5160,11 +5231,47 @@ struct RustDeskIndex {
   private SelectedMainPage() {
     Stack() {
       if (this.currentTabIndex === 0) {
-        this.ConnectPageContent();
+        Stack() {
+          this.ConnectPageContent();
+        }
+        .width('100%')
+        .height('100%')
+        .transition(TransitionEffect.asymmetric(
+          TransitionEffect.OPACITY.combine(TransitionEffect.translate({
+            x: this.mainTabTransitionDirection * MAIN_PAGE_TRANSITION_DISTANCE_VP,
+          })),
+          TransitionEffect.OPACITY.combine(TransitionEffect.translate({
+            x: -this.mainTabTransitionDirection * MAIN_PAGE_TRANSITION_DISTANCE_VP,
+          })),
+        ));
       } else if (this.currentTabIndex === 1) {
-        this.DevicesPageContent();
+        Stack() {
+          this.DevicesPageContent();
+        }
+        .width('100%')
+        .height('100%')
+        .transition(TransitionEffect.asymmetric(
+          TransitionEffect.OPACITY.combine(TransitionEffect.translate({
+            x: this.mainTabTransitionDirection * MAIN_PAGE_TRANSITION_DISTANCE_VP,
+          })),
+          TransitionEffect.OPACITY.combine(TransitionEffect.translate({
+            x: -this.mainTabTransitionDirection * MAIN_PAGE_TRANSITION_DISTANCE_VP,
+          })),
+        ));
       } else {
-        this.SettingsPageContent();
+        Stack() {
+          this.SettingsPageContent();
+        }
+        .width('100%')
+        .height('100%')
+        .transition(TransitionEffect.asymmetric(
+          TransitionEffect.OPACITY.combine(TransitionEffect.translate({
+            x: this.mainTabTransitionDirection * MAIN_PAGE_TRANSITION_DISTANCE_VP,
+          })),
+          TransitionEffect.OPACITY.combine(TransitionEffect.translate({
+            x: -this.mainTabTransitionDirection * MAIN_PAGE_TRANSITION_DISTANCE_VP,
+          })),
+        ));
       }
     }
     .width('100%')
@@ -5200,6 +5307,10 @@ struct RustDeskIndex {
     .barFloatingStyle({
       barWidth: { smallWidth: 264, mediumWidth: 300, largeWidth: 328 },
       barBottomMargin: this.mainTabBottomMargin(),
+      gradientMask: {
+        maskColor: Color.Transparent,
+        maskHeight: 0,
+      },
       systemMaterialEffect: {
         materialType: hdsMaterial.MaterialType.ADAPTIVE,
         materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
@@ -5289,6 +5400,8 @@ struct RustDeskIndex {
         }
         .width('100%')
         .layoutWeight(1)
+        .opacity(this.rotationTransitionOpacity)
+        .scale({ x: this.rotationTransitionScale, y: this.rotationTransitionScale })
       }
       .width('100%')
       .height('100%')
@@ -5321,14 +5434,7 @@ struct RustDeskIndex {
     .height('100%')
     .backgroundColor($r('app.color.neu_base'))
     .onAreaChange((_oldArea: Area, newArea: Area) => {
-      const width = Number(newArea.width);
-      const height = Number(newArea.height);
-      if (width > 0) {
-        this.mainViewportWidth = width;
-      }
-      if (height > 0) {
-        this.mainViewportHeight = height;
-      }
+      this.updateMainViewport(newArea);
     })
   }
 }

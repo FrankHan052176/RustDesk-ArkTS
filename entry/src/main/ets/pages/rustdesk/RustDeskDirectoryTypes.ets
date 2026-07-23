@@ -41,6 +41,8 @@ export class SessionDefaults {
   audioEnabled: boolean = true;
   clipboardEnabled: boolean = true;
   qualityPreset: string = 'balanced';
+  customQuality: number = 50;
+  customFps: number = 30;
   preferredCodec: string = 'h264';
   gesturesEnabled: boolean = true;
   toolbarExpanded: boolean = false;

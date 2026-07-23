@@ -297,6 +297,18 @@
       "value": "最佳"
     },
     {
+      "name": "settings_quality_custom",
+      "value": "自定义"
+    },
+    {
+      "name": "settings_custom_quality",
+      "value": "自定义画质"
+    },
+    {
+      "name": "settings_custom_fps",
+      "value": "自定义 FPS"
+    },
+    {
       "name": "settings_diagnostics_title",
       "value": "诊断信息"
     },

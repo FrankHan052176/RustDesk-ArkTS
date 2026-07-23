@@ -27,7 +27,7 @@
         "icon": "$media:resk",
         "startWindowIcon": "$media:startIcon",
         "startWindowBackground": "$color:start_window_background",
-        "orientation": "auto_rotation",
+        "orientation": "follow_desktop",
         "preferMultiWindowOrientation": "landscape_auto",
         "backgroundModes": [
           "dataTransfer"

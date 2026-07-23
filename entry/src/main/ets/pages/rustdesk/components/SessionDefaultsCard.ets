@@ -1,6 +1,7 @@
 import {
   LuminousSegmentedControl,
   LuminousSelectionItem,
+  LuminousSlider,
   LuminousSwitch,
 } from 'luminous_neo';
 import { SessionDefaults } from '../RustDeskDirectoryTypes';
@@ -16,7 +17,27 @@ export struct SessionDefaultsCard {
   @Param showHeader: boolean = true;
   @Param defaults: SessionDefaults = new SessionDefaults();
   @Local viewportWidth: number = 390;
+  @Local displayedAudioEnabled: boolean = true;
+  @Local displayedClipboardEnabled: boolean = true;
+  @Local displayedGesturesEnabled: boolean = true;
+  @Local displayedToolbarExpanded: boolean = false;
   @Event onDefaultsChange: (defaults: SessionDefaults) => void = (_defaults: SessionDefaults) => {};
+
+  aboutToAppear(): void {
+    this.syncDisplayedToggleStates();
+  }
+
+  @Monitor('defaults')
+  private onDefaultsChanged(_monitor: IMonitor): void {
+    this.syncDisplayedToggleStates();
+  }
+
+  private syncDisplayedToggleStates(): void {
+    this.displayedAudioEnabled = this.defaults.audioEnabled;
+    this.displayedClipboardEnabled = this.defaults.clipboardEnabled;
+    this.displayedGesturesEnabled = this.defaults.gesturesEnabled;
+    this.displayedToolbarExpanded = this.defaults.toolbarExpanded;
+  }
 
   private isWide(): boolean {
     return this.viewportWidth >= 720;
@@ -28,6 +49,8 @@ export struct SessionDefaultsCard {
     next.audioEnabled = this.defaults.audioEnabled;
     next.clipboardEnabled = this.defaults.clipboardEnabled;
     next.qualityPreset = this.defaults.qualityPreset;
+    next.customQuality = this.defaults.customQuality;
+    next.customFps = this.defaults.customFps;
     next.preferredCodec = this.defaults.preferredCodec;
     next.gesturesEnabled = this.defaults.gesturesEnabled;
     next.toolbarExpanded = this.defaults.toolbarExpanded;
@@ -45,24 +68,28 @@ export struct SessionDefaultsCard {
   }
 
   private updateAudio(enabled: boolean): void {
+    this.displayedAudioEnabled = enabled;
     const next = this.copyDefaults();
     next.audioEnabled = enabled;
     this.emit(next);
   }
 
   private updateClipboard(enabled: boolean): void {
+    this.displayedClipboardEnabled = enabled;
     const next = this.copyDefaults();
     next.clipboardEnabled = enabled;
     this.emit(next);
   }
 
   private updateGestures(enabled: boolean): void {
+    this.displayedGesturesEnabled = enabled;
     const next = this.copyDefaults();
     next.gesturesEnabled = enabled;
     this.emit(next);
   }
 
   private updateToolbar(enabled: boolean): void {
+    this.displayedToolbarExpanded = enabled;
     const next = this.copyDefaults();
     next.toolbarExpanded = enabled;
     this.emit(next);
@@ -80,12 +107,43 @@ export struct SessionDefaultsCard {
     this.emit(next);
   }
 
+  private updateCustomQuality(value: number): void {
+    const next = this.copyDefaults();
+    next.qualityPreset = 'custom';
+    next.customQuality = this.clampCustomQuality(value);
+    this.emit(next);
+  }
+
+  private updateCustomFps(value: number): void {
+    const next = this.copyDefaults();
+    next.qualityPreset = 'custom';
+    next.customFps = this.clampCustomFps(value);
+    this.emit(next);
+  }
+
+  private clampCustomQuality(value: number): number {
+    if (!Number.isFinite(value)) {
+      return 50;
+    }
+    return Math.min(2000, Math.max(10, Math.round(value)));
+  }
+
+  private clampCustomFps(value: number): number {
+    if (!Number.isFinite(value)) {
+      return 30;
+    }
+    return Math.min(120, Math.max(5, Math.round(value)));
+  }
+
   private qualityIndex(): number {
     if (this.defaults.qualityPreset === 'low') {
       return 0;
     }
     if (this.defaults.qualityPreset === 'best') {
       return 2;
+    }
+    if (this.defaults.qualityPreset === 'custom') {
+      return 3;
     }
     return 1;
   }
@@ -95,6 +153,8 @@ export struct SessionDefaultsCard {
       this.updateQuality('low');
     } else if (index === 2) {
       this.updateQuality('best');
+    } else if (index === 3) {
+      this.updateQuality('custom');
     } else {
       this.updateQuality('balanced');
     }
@@ -148,17 +208,21 @@ export struct SessionDefaultsCard {
     return Math.max(280, Math.min(this.viewportWidth - 48, maximum));
   }
 
+  private customSliderWidth(): number {
+    return Math.max(220, Math.min(this.viewportWidth - 72, 620));
+  }
+
   @Builder
   private ToggleRow(label: ResourceStr, enabled: boolean, onChange: (enabled: boolean) => void) {
-    Stack({ alignContent: Alignment.Center }) {
-      LuminousSwitch({
-        label: label,
-        description: '',
-        isOn: enabled,
-        rowWidth: this.toggleRowWidth(),
-        onChange: onChange,
-      })
-    }
+    LuminousSwitch({
+      label: label,
+      description: '',
+      isOn: enabled,
+      rowWidth: this.toggleRowWidth(),
+      onChange: (nextEnabled: boolean): void => {
+        onChange(nextEnabled);
+      },
+    })
     .width(this.toggleRowWidth())
     .height(52)
     .clip(false);
@@ -202,6 +266,7 @@ export struct SessionDefaultsCard {
           new LuminousSelectionItem('speed', $r('app.string.settings_quality_speed')),
           new LuminousSelectionItem('balanced', $r('app.string.settings_quality_balanced')),
           new LuminousSelectionItem('best', $r('app.string.settings_quality_best')),
+          new LuminousSelectionItem('custom', $r('app.string.settings_quality_custom')),
         ],
         selectedIndex: this.qualityIndex(),
         controlWidth: this.selectorWidth(620),
@@ -209,6 +274,61 @@ export struct SessionDefaultsCard {
         onChange: (index: number) => this.updateQualityIndex(index),
       })
         .margin({ top: -10 })
+
+      if (this.defaults.qualityPreset === 'custom') {
+        Column({ space: 8 }) {
+          Row() {
+            Text($r('app.string.settings_custom_quality'))
+              .layoutWeight(1)
+              .fontSize($r('app.float.font_label'))
+              .fontColor($r('app.color.neu_text_secondary'));
+            Text(`${this.clampCustomQuality(this.defaults.customQuality)}`)
+              .fontSize($r('app.float.font_label'))
+              .fontWeight(FontWeight.Bold)
+              .fontColor($r('app.color.neu_accent'));
+          }
+          .width(this.customSliderWidth());
+
+          LuminousSlider({
+            label: $r('app.string.settings_custom_quality'),
+            value: this.clampCustomQuality(this.defaults.customQuality),
+            minimum: 10,
+            maximum: 2000,
+            step: 10,
+            sliderWidth: this.customSliderWidth() - 40,
+            onChange: (value: number, _mode: SliderChangeMode): void => {
+              this.updateCustomQuality(value);
+            },
+          })
+
+          Row() {
+            Text($r('app.string.settings_custom_fps'))
+              .layoutWeight(1)
+              .fontSize($r('app.float.font_label'))
+              .fontColor($r('app.color.neu_text_secondary'));
+            Text(`${this.clampCustomFps(this.defaults.customFps)}`)
+              .fontSize($r('app.float.font_label'))
+              .fontWeight(FontWeight.Bold)
+              .fontColor($r('app.color.neu_accent'));
+          }
+          .width(this.customSliderWidth());
+
+          LuminousSlider({
+            label: $r('app.string.settings_custom_fps'),
+            value: this.clampCustomFps(this.defaults.customFps),
+            minimum: 5,
+            maximum: 120,
+            step: 1,
+            sliderWidth: this.customSliderWidth() - 40,
+            onChange: (value: number, _mode: SliderChangeMode): void => {
+              this.updateCustomFps(value);
+            },
+          })
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Center)
+        .margin({ top: 2, bottom: 6 });
+      }
     }
     .width('100%');
   }
@@ -261,7 +381,7 @@ export struct SessionDefaultsCard {
                 Column() {
                   this.ToggleRow(
                     '播放远端音频',
-                    this.defaults.audioEnabled,
+                    this.displayedAudioEnabled,
                     (enabled: boolean) => this.updateAudio(enabled),
                   )
                 }
@@ -270,7 +390,7 @@ export struct SessionDefaultsCard {
                 Column() {
                   this.ToggleRow(
                     '同步剪贴板',
-                    this.defaults.clipboardEnabled,
+                    this.displayedClipboardEnabled,
                     (enabled: boolean) => this.updateClipboard(enabled),
                   )
                 }
@@ -282,7 +402,7 @@ export struct SessionDefaultsCard {
                 Column() {
                   this.ToggleRow(
                     '变换手势',
-                    this.defaults.gesturesEnabled,
+                    this.displayedGesturesEnabled,
                     (enabled: boolean) => this.updateGestures(enabled),
                   )
                 }
@@ -291,7 +411,7 @@ export struct SessionDefaultsCard {
                 Column() {
                   this.ToggleRow(
                     '默认展开工具栏',
-                    this.defaults.toolbarExpanded,
+                    this.displayedToolbarExpanded,
                     (enabled: boolean) => this.updateToolbar(enabled),
                   )
                 }
@@ -304,22 +424,22 @@ export struct SessionDefaultsCard {
             Column({ space: 0 }) {
               this.ToggleRow(
                 '播放远端音频',
-                this.defaults.audioEnabled,
+                this.displayedAudioEnabled,
                 (enabled: boolean) => this.updateAudio(enabled),
               )
               this.ToggleRow(
                 '同步剪贴板',
-                this.defaults.clipboardEnabled,
+                this.displayedClipboardEnabled,
                 (enabled: boolean) => this.updateClipboard(enabled),
               )
               this.ToggleRow(
                 '变换手势',
-                this.defaults.gesturesEnabled,
+                this.displayedGesturesEnabled,
                 (enabled: boolean) => this.updateGestures(enabled),
               )
               this.ToggleRow(
                 '默认展开工具栏',
-                this.defaults.toolbarExpanded,
+                this.displayedToolbarExpanded,
                 (enabled: boolean) => this.updateToolbar(enabled),
               )
             }

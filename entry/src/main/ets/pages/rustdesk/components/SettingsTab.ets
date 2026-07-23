@@ -190,6 +190,8 @@ export struct SettingsTab {
     defaults.audioEnabled = source.audioEnabled;
     defaults.clipboardEnabled = source.clipboardEnabled;
     defaults.qualityPreset = source.qualityPreset;
+    defaults.customQuality = source.customQuality;
+    defaults.customFps = source.customFps;
     defaults.preferredCodec = source.preferredCodec;
     defaults.gesturesEnabled = source.gesturesEnabled;
     defaults.toolbarExpanded = source.toolbarExpanded;
@@ -363,7 +365,7 @@ export struct SettingsTab {
       .hoverEffect(HoverEffect.None)
       .borderRadius(22)
       .accessibilityText(title as Resource)
-      .onTouch((event: TouchEvent) => {
+      .onTouch((event: TouchEvent): void => {
         if (event.type === TouchType.Down) {
           this.pressedSection = section;
         } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
@@ -377,6 +379,11 @@ export struct SettingsTab {
     }
     .width(this.tileFrameWidth())
     .height(this.tileFrameHeight())
+    .scale({
+      x: this.pressedSection === section ? 0.98 : 1,
+      y: this.pressedSection === section ? 0.98 : 1,
+    })
+    .animation({ duration: 120, curve: Curve.FastOutSlowIn })
     .clip(false);
   }
 

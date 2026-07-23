@@ -409,8 +409,6 @@ export struct TransferDrawer {
     .layoutWeight(fillAvailable ? 1 : 0)
     .width('100%')
     .padding({
-      left: $r('app.float.space_16'),
-      right: $r('app.float.space_16'),
       top: $r('app.float.space_8'),
       bottom: $r('app.float.space_8'),
     });
@@ -506,8 +504,6 @@ export struct TransferDrawer {
     .layoutWeight(fillAvailable ? 1 : 0)
     .width('100%')
     .padding({
-      left: $r('app.float.space_16'),
-      right: $r('app.float.space_16'),
       top: $r('app.float.space_8'),
       bottom: $r('app.float.space_8'),
     });

@@ -47,7 +47,7 @@ export struct FloatingDepthOverlay {
   build(): void {
     Stack({ alignContent: Alignment.TopStart }) {
       if (this.surfaceWidth > 0 && this.surfaceHeight > 0) {
-        Stack() {
+        Stack({ alignContent: Alignment.TopStart }) {
           LuminousSurface({
             state: this.surfaceState(),
             surfaceWidth: this.surfaceWidth,
@@ -61,6 +61,9 @@ export struct FloatingDepthOverlay {
             Stack()
           }
         }
+        .width(this.surfaceWidth + this.shadowPadding() * 2)
+        .height(this.surfaceHeight + this.shadowPadding() * 2)
+        .clip(false)
         .position({ x: -this.shadowPadding(), y: -this.shadowPadding() });
       }
     }

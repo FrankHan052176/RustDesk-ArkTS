@@ -14,6 +14,8 @@ const DEFAULT_RELATIVE_MOUSE_KEY = 'default_relative_mouse';
 const DEFAULT_AUDIO_ENABLED_KEY = 'default_audio_enabled';
 const DEFAULT_CLIPBOARD_ENABLED_KEY = 'default_clipboard_enabled';
 const DEFAULT_QUALITY_PRESET_KEY = 'default_quality_preset';
+const DEFAULT_CUSTOM_QUALITY_KEY = 'default_custom_quality';
+const DEFAULT_CUSTOM_FPS_KEY = 'default_custom_fps';
 const DEFAULT_PREFERRED_CODEC_KEY = 'default_preferred_codec';
 const DEFAULT_GESTURES_ENABLED_KEY = 'default_gestures_enabled';
 const DEFAULT_TOOLBAR_EXPANDED_KEY = 'default_toolbar_expanded';
@@ -106,6 +108,8 @@ export class RustDeskPreferences {
       ) as boolean;
       const qualityPreset = (store.getSync(DEFAULT_QUALITY_PRESET_KEY, defaults.qualityPreset) as string).trim();
       defaults.qualityPreset = qualityPreset.length > 0 ? qualityPreset : defaults.qualityPreset;
+      defaults.customQuality = store.getSync(DEFAULT_CUSTOM_QUALITY_KEY, defaults.customQuality) as number;
+      defaults.customFps = store.getSync(DEFAULT_CUSTOM_FPS_KEY, defaults.customFps) as number;
       const preferredCodec = (store.getSync(DEFAULT_PREFERRED_CODEC_KEY, defaults.preferredCodec) as string).trim();
       defaults.preferredCodec = preferredCodec.length > 0 ? preferredCodec : defaults.preferredCodec;
       defaults.gesturesEnabled = store.getSync(
@@ -132,6 +136,8 @@ export class RustDeskPreferences {
       store.putSync(DEFAULT_AUDIO_ENABLED_KEY, defaults.audioEnabled);
       store.putSync(DEFAULT_CLIPBOARD_ENABLED_KEY, defaults.clipboardEnabled);
       store.putSync(DEFAULT_QUALITY_PRESET_KEY, defaults.qualityPreset.trim());
+      store.putSync(DEFAULT_CUSTOM_QUALITY_KEY, defaults.customQuality);
+      store.putSync(DEFAULT_CUSTOM_FPS_KEY, defaults.customFps);
       store.putSync(DEFAULT_PREFERRED_CODEC_KEY, defaults.preferredCodec.trim());
       store.putSync(DEFAULT_GESTURES_ENABLED_KEY, defaults.gesturesEnabled);
       store.putSync(DEFAULT_TOOLBAR_EXPANDED_KEY, defaults.toolbarExpanded);
