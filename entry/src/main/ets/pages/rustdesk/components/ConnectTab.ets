@@ -4,7 +4,6 @@ import {
   LuminousSegmentedControl,
   LuminousSelectionItem,
   LuminousSurface,
-  LuminousSurfaceState,
   LuminousTextField,
   LuminousTone,
 } from 'luminous_neo';
@@ -212,6 +211,7 @@ export struct ConnectTab {
         selectedIndex: this.connectionMode,
         controlWidth: this.controlWidth(),
         controlHeight: 50,
+        motionEnabled: true,
         onChange: (index: number): void => {
           this.connectionMode = index;
         },
@@ -222,6 +222,7 @@ export struct ConnectTab {
         placeholder: '输入设备 ID',
         fieldWidth: this.controlWidth(),
         fieldHeight: 54,
+        motionEnabled: true,
         onChange: (value: string): void => this.onTargetChange(value),
       })
         .margin({ top: -18 })
@@ -251,6 +252,7 @@ export struct ConnectTab {
         controlSizeMode: LuminousControlSize.Regular,
         tone: LuminousTone.Accent,
         isEnabled: this.targetReady() || (this.connectionMode === 2 && this.transferActive),
+        motionEnabled: true,
         onAction: (): void => this.activatePrimaryAction(),
       })
         .margin({ top: -8 })
@@ -261,6 +263,7 @@ export struct ConnectTab {
           controlWidth: Math.min(180, this.controlWidth()),
           controlSizeMode: LuminousControlSize.Compact,
           tone: LuminousTone.Danger,
+          motionEnabled: true,
           onAction: (): void => this.onDisconnect(),
         })
           .margin({ top: -22 })
@@ -297,10 +300,11 @@ export struct ConnectTab {
   private EmptyRecent() {
     Stack({ alignContent: Alignment.Center }) {
       LuminousSurface({
-        state: LuminousSurfaceState.Raised,
+        depth: 1,
         surfaceWidth: this.recentContentWidth(),
         surfaceHeight: 96,
         cornerRadius: 24,
+        motionEnabled: true,
       }) {
         Row({ space: 14 }) {
           SymbolGlyph($r('sys.symbol.clock'))

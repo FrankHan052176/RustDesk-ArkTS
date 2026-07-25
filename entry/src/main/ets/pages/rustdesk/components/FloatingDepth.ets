@@ -1,7 +1,6 @@
 import {
   LuminousNeoTokens,
   LuminousSurface,
-  LuminousSurfaceState,
 } from 'luminous_neo';
 
 /**
@@ -29,8 +28,8 @@ export struct FloatingDepthOverlay {
     return LuminousNeoTokens.shadowPaddingFor(this.shortEdge());
   }
 
-  private surfaceState(): LuminousSurfaceState {
-    return this.inset || this.pressed ? LuminousSurfaceState.Inset : LuminousSurfaceState.Raised;
+  private surfaceDepth(): number {
+    return this.inset || this.pressed ? -1 : 1;
   }
 
   private updateSurfaceSize(newArea: Area): void {
@@ -49,14 +48,11 @@ export struct FloatingDepthOverlay {
       if (this.surfaceWidth > 0 && this.surfaceHeight > 0) {
         Stack({ alignContent: Alignment.TopStart }) {
           LuminousSurface({
-            state: this.surfaceState(),
+            depth: this.surfaceDepth(),
             surfaceWidth: this.surfaceWidth,
             surfaceHeight: this.surfaceHeight,
             cornerRadius: this.cornerRadius(),
-            raisedShadowDistance: LuminousNeoTokens.raisedDistanceFor(this.shortEdge()),
-            raisedShadowBlur: LuminousNeoTokens.raisedBlurFor(this.shortEdge()),
-            insetShadowDistance: LuminousNeoTokens.insetDistanceFor(this.shortEdge()),
-            insetShadowBlur: LuminousNeoTokens.insetBlurFor(this.shortEdge()),
+            motionEnabled: true,
           }) {
             Stack()
           }

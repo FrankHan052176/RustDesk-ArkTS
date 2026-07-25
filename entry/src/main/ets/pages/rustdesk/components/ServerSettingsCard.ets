@@ -4,7 +4,6 @@ import {
   LuminousSegmentedControl,
   LuminousSelectionItem,
   LuminousSurface,
-  LuminousSurfaceState,
   LuminousTextField,
   LuminousTone,
 } from 'luminous_neo';
@@ -239,6 +238,7 @@ export struct ServerSettingsCard {
         placeholder: placeholder,
         fieldWidth: this.inputWidth(),
         fieldHeight: 48,
+        motionEnabled: true,
         onChange: onChange,
       })
         .margin({ top: -10 })
@@ -258,6 +258,7 @@ export struct ServerSettingsCard {
         selectedIndex: this.config.mode === 'custom' ? 1 : 0,
         controlWidth: this.selectorWidth(),
         controlHeight: 50,
+        motionEnabled: true,
         onChange: (index: number) => this.updateModeIndex(index),
       })
     }
@@ -408,10 +409,11 @@ export struct ServerSettingsCard {
   private StatusSummary() {
     Stack({ alignContent: Alignment.Center }) {
       LuminousSurface({
-        state: LuminousSurfaceState.Inset,
+        depth: -1,
         surfaceWidth: this.selectorWidth(),
         surfaceHeight: this.statusSummaryHeight(),
         cornerRadius: 18,
+        motionEnabled: true,
       }) {
         Column({ space: 0 }) {
           Row({ space: $r('app.float.space_12') }) {
@@ -463,6 +465,7 @@ export struct ServerSettingsCard {
       controlSizeMode: LuminousControlSize.Regular,
       tone: primary ? LuminousTone.Accent : LuminousTone.Neutral,
       isEnabled: enabled,
+      motionEnabled: true,
       onAction: onClick,
     })
   }

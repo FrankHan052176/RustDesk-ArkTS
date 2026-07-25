@@ -81,6 +81,7 @@ export struct PreviewModal {
             controlWidth: 112,
             controlSizeMode: LuminousControlSize.Compact,
             tone: LuminousTone.Danger,
+            motionEnabled: true,
             onAction: (): void => this.onDisconnect(),
           })
             .margin({ top: -12 })

@@ -74,6 +74,7 @@ export struct StatusPage {
         controlWidth: 220,
         controlSizeMode: LuminousControlSize.Regular,
         tone: LuminousTone.Accent,
+        motionEnabled: true,
         onAction: (): void => this.onBack(),
       })
     }

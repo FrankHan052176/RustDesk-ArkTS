@@ -92,6 +92,7 @@ export struct FloatingSegmentedControl {
         selectedIndex: this.selectedIndex,
         controlWidth: this.controlWidth(),
         controlHeight: this.controlHeight(),
+        motionEnabled: true,
         onChange: (index: number): void => {
           this.commitIndex(index);
         },

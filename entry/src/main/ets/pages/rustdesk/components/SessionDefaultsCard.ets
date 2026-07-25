@@ -213,15 +213,59 @@ export struct SessionDefaultsCard {
   }
 
   @Builder
-  private ToggleRow(label: ResourceStr, enabled: boolean, onChange: (enabled: boolean) => void) {
+  private AudioToggleRow() {
     LuminousSwitch({
-      label: label,
+      label: '播放远端音频',
       description: '',
-      isOn: enabled,
+      isOn: this.displayedAudioEnabled,
       rowWidth: this.toggleRowWidth(),
-      onChange: (nextEnabled: boolean): void => {
-        onChange(nextEnabled);
-      },
+      motionEnabled: true,
+      onChange: (enabled: boolean): void => this.updateAudio(enabled),
+    })
+    .width(this.toggleRowWidth())
+    .height(52)
+    .clip(false);
+  }
+
+  @Builder
+  private ClipboardToggleRow() {
+    LuminousSwitch({
+      label: '同步剪贴板',
+      description: '',
+      isOn: this.displayedClipboardEnabled,
+      rowWidth: this.toggleRowWidth(),
+      motionEnabled: true,
+      onChange: (enabled: boolean): void => this.updateClipboard(enabled),
+    })
+    .width(this.toggleRowWidth())
+    .height(52)
+    .clip(false);
+  }
+
+  @Builder
+  private GesturesToggleRow() {
+    LuminousSwitch({
+      label: '变换手势',
+      description: '',
+      isOn: this.displayedGesturesEnabled,
+      rowWidth: this.toggleRowWidth(),
+      motionEnabled: true,
+      onChange: (enabled: boolean): void => this.updateGestures(enabled),
+    })
+    .width(this.toggleRowWidth())
+    .height(52)
+    .clip(false);
+  }
+
+  @Builder
+  private ToolbarToggleRow() {
+    LuminousSwitch({
+      label: '默认展开工具栏',
+      description: '',
+      isOn: this.displayedToolbarExpanded,
+      rowWidth: this.toggleRowWidth(),
+      motionEnabled: true,
+      onChange: (enabled: boolean): void => this.updateToolbar(enabled),
     })
     .width(this.toggleRowWidth())
     .height(52)
@@ -245,6 +289,7 @@ export struct SessionDefaultsCard {
         selectedIndex: this.defaults.relativeMouseMode ? 1 : 0,
         controlWidth: this.selectorWidth(520),
         controlHeight: 50,
+        motionEnabled: true,
         onChange: (index: number) => this.updatePointerMode(index === 1),
       })
         .margin({ top: -10 })
@@ -271,6 +316,7 @@ export struct SessionDefaultsCard {
         selectedIndex: this.qualityIndex(),
         controlWidth: this.selectorWidth(620),
         controlHeight: 50,
+        motionEnabled: true,
         onChange: (index: number) => this.updateQualityIndex(index),
       })
         .margin({ top: -10 })
@@ -296,6 +342,7 @@ export struct SessionDefaultsCard {
             maximum: 2000,
             step: 10,
             sliderWidth: this.customSliderWidth() - 40,
+            motionEnabled: true,
             onChange: (value: number, _mode: SliderChangeMode): void => {
               this.updateCustomQuality(value);
             },
@@ -320,6 +367,7 @@ export struct SessionDefaultsCard {
             maximum: 120,
             step: 1,
             sliderWidth: this.customSliderWidth() - 40,
+            motionEnabled: true,
             onChange: (value: number, _mode: SliderChangeMode): void => {
               this.updateCustomFps(value);
             },
@@ -353,6 +401,7 @@ export struct SessionDefaultsCard {
         selectedIndex: this.codecIndex(),
         controlWidth: this.fullSelectorWidth(720),
         controlHeight: 50,
+        motionEnabled: true,
         onChange: (index: number) => this.updateCodecIndex(index),
       })
         .margin({ top: -10 })
@@ -379,20 +428,12 @@ export struct SessionDefaultsCard {
             Column({ space: 0 }) {
               Row({ space: $r('app.float.space_8') }) {
                 Column() {
-                  this.ToggleRow(
-                    '播放远端音频',
-                    this.displayedAudioEnabled,
-                    (enabled: boolean) => this.updateAudio(enabled),
-                  )
+                  this.AudioToggleRow()
                 }
                 .layoutWeight(1);
 
                 Column() {
-                  this.ToggleRow(
-                    '同步剪贴板',
-                    this.displayedClipboardEnabled,
-                    (enabled: boolean) => this.updateClipboard(enabled),
-                  )
+                  this.ClipboardToggleRow()
                 }
                 .layoutWeight(1);
               }
@@ -400,20 +441,12 @@ export struct SessionDefaultsCard {
 
               Row({ space: $r('app.float.space_8') }) {
                 Column() {
-                  this.ToggleRow(
-                    '变换手势',
-                    this.displayedGesturesEnabled,
-                    (enabled: boolean) => this.updateGestures(enabled),
-                  )
+                  this.GesturesToggleRow()
                 }
                 .layoutWeight(1);
 
                 Column() {
-                  this.ToggleRow(
-                    '默认展开工具栏',
-                    this.displayedToolbarExpanded,
-                    (enabled: boolean) => this.updateToolbar(enabled),
-                  )
+                  this.ToolbarToggleRow()
                 }
                 .layoutWeight(1);
               }
@@ -422,26 +455,10 @@ export struct SessionDefaultsCard {
             .width('100%');
           } else {
             Column({ space: 0 }) {
-              this.ToggleRow(
-                '播放远端音频',
-                this.displayedAudioEnabled,
-                (enabled: boolean) => this.updateAudio(enabled),
-              )
-              this.ToggleRow(
-                '同步剪贴板',
-                this.displayedClipboardEnabled,
-                (enabled: boolean) => this.updateClipboard(enabled),
-              )
-              this.ToggleRow(
-                '变换手势',
-                this.displayedGesturesEnabled,
-                (enabled: boolean) => this.updateGestures(enabled),
-              )
-              this.ToggleRow(
-                '默认展开工具栏',
-                this.displayedToolbarExpanded,
-                (enabled: boolean) => this.updateToolbar(enabled),
-              )
+              this.AudioToggleRow()
+              this.ClipboardToggleRow()
+              this.GesturesToggleRow()
+              this.ToolbarToggleRow()
             }
             .width('100%');
           }

@@ -126,16 +126,42 @@ export struct SessionToolbar {
 
   @Builder
   private PointerModeAction() {
-    this.ToolbarAction(
-      'pointer',
-      this.displayedRelativeMouseMode ? '触摸板' : '模拟鼠标',
-      this.displayedRelativeMouseMode,
-      '',
-      () => {
-        this.displayedRelativeMouseMode = !this.displayedRelativeMouseMode;
-        this.onTogglePointerMode();
-      },
-    );
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Text(this.displayedRelativeMouseMode ? '触摸板' : '模拟鼠标')
+        .fontSize($r('app.float.font_label'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.displayedRelativeMouseMode
+          ? $r('app.color.white')
+          : $r('app.color.neu_text_primary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis });
+    }
+    .layoutWeight(1)
+    .height(this.actionHeight())
+    .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_8') })
+    .backgroundColor(this.displayedRelativeMouseMode
+      ? $r('app.color.brand_primary')
+      : $r('app.color.mica_control'))
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
+      adaptiveColor: AdaptiveColor.DEFAULT,
+      scale: 0.56,
+    })
+    .border({
+      width: 1,
+      color: this.displayedRelativeMouseMode
+        ? $r('app.color.brand_primary')
+        : $r('app.color.mica_border'),
+    })
+    .borderRadius($r('app.float.radius_14'))
+    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+    .hoverEffect(HoverEffect.None)
+    .accessibilityText(this.displayedRelativeMouseMode ? '触摸板' : '模拟鼠标')
+    .accessibilitySelected(this.displayedRelativeMouseMode)
+    .transition(TransitionEffect.OPACITY)
+    .onClick((): void => {
+      this.displayedRelativeMouseMode = !this.displayedRelativeMouseMode;
+      this.onTogglePointerMode();
+    });
   }
 
   @Builder
@@ -250,23 +276,50 @@ export struct SessionToolbar {
         .fontColor($r('app.color.neu_text_secondary'))
         .maxLines(1);
 
-      this.CompactAction(
-        'transform',
-        this.displayedTransformMode ? '完成' : '调整画面',
-        this.displayedTransformMode,
-        true,
-        true,
-        () => {
-          this.displayedTransformMode = !this.displayedTransformMode;
-          this.onToggleTransform();
-        },
-      )
+      this.TransformModeAction()
 
       if (this.canResetTransform) {
         this.CompactAction('reset-transform', '还原', false, false, true, () => this.onResetTransform())
       }
     }
     .alignItems(VerticalAlign.Center);
+  }
+
+  @Builder
+  private TransformModeAction() {
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Text(this.displayedTransformMode ? '完成' : '调整画面')
+        .fontSize($r('app.float.font_caption'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.displayedTransformMode
+          ? $r('app.color.white')
+          : $r('app.color.neu_text_primary'));
+    }
+    .width(92)
+    .height($r('app.float.control_compact'))
+    .padding({ left: $r('app.float.space_6'), right: $r('app.float.space_6') })
+    .backgroundColor(this.displayedTransformMode
+      ? $r('app.color.brand_primary')
+      : $r('app.color.mica_control'))
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
+      adaptiveColor: AdaptiveColor.DEFAULT,
+      scale: 0.56,
+    })
+    .border({
+      width: 1,
+      color: this.displayedTransformMode
+        ? $r('app.color.brand_primary')
+        : $r('app.color.mica_border'),
+    })
+    .borderRadius($r('app.float.radius_10'))
+    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+    .hoverEffect(HoverEffect.None)
+    .accessibilityText(this.displayedTransformMode ? '完成画面调整' : '调整画面')
+    .accessibilitySelected(this.displayedTransformMode)
+    .onClick((): void => {
+      this.displayedTransformMode = !this.displayedTransformMode;
+      this.onToggleTransform();
+    });
   }
 
   @Builder

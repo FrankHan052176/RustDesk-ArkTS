@@ -4,7 +4,6 @@ import {
   LuminousSegmentedControl,
   LuminousSelectionItem,
   LuminousSurface,
-  LuminousSurfaceState,
 } from 'luminous_neo';
 import {
   DirectorySnapshot,
@@ -314,6 +313,7 @@ export struct DeviceDirectoryPanel {
         placeholder: $r('app.string.device_search_placeholder'),
         fieldWidth: this.controlWidth(),
         fieldHeight: 48,
+        motionEnabled: true,
         onChange: (value: string): void => {
           this.query = value;
         },
@@ -324,6 +324,7 @@ export struct DeviceDirectoryPanel {
         selectedIndex: this.sourceIndex(this.activeSource),
         controlWidth: this.controlWidth(),
         controlHeight: 50,
+        motionEnabled: true,
         onChange: (index: number): void => this.changeSource(index),
       })
         .margin({
@@ -339,10 +340,11 @@ export struct DeviceDirectoryPanel {
   private MessageBanner() {
     if (this.snapshot.message.trim().length > 0) {
       LuminousSurface({
-        state: LuminousSurfaceState.Inset,
+        depth: -1,
         surfaceWidth: this.controlWidth(),
         surfaceHeight: 60,
         cornerRadius: 20,
+        motionEnabled: true,
       }) {
         Row({ space: 12 }) {
           SymbolGlyph($r('sys.symbol.info_circle'))
@@ -368,12 +370,11 @@ export struct DeviceDirectoryPanel {
   private EmptyState(source: PeerSource) {
     Stack({ alignContent: Alignment.Center }) {
       LuminousSurface({
-        state: this.pressedEmptySource === source
-          ? LuminousSurfaceState.Inset
-          : LuminousSurfaceState.Raised,
+        depth: this.pressedEmptySource === source ? -1 : 1,
         surfaceWidth: this.controlWidth(),
         surfaceHeight: 106,
         cornerRadius: 24,
+        motionEnabled: true,
       }) {
         Row({ space: 14 }) {
           SymbolGlyph(this.emptySymbol(source))

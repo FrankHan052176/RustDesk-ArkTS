@@ -16,7 +16,6 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
   LuminousNeoTokens,
   LuminousSurface,
-  LuminousSurfaceState,
 } from 'luminous_neo';
 import { ConnectTab } from './rustdesk/components/ConnectTab';
 import { DeviceDirectoryPanel } from './rustdesk/components/DeviceDirectoryPanel';
@@ -121,6 +120,8 @@ const REMOTE_AUDIO_POLL_INTERVAL_MS = 1000;
 const CONNECTION_TIMEOUT_MS = 45000;
 const PREVIEW_MIN_USER_SCALE = 0.5;
 const PREVIEW_MAX_USER_SCALE = 4.0;
+const PREVIEW_SURFACE_WAIT_ATTEMPTS = 100;
+const PREVIEW_SURFACE_WAIT_INTERVAL_MS = 50;
 
 type PrimarySessionKind = 'remote_control' | 'view_camera';
 type PasswordSessionKind = 'primary' | 'file_transfer';
@@ -283,6 +284,9 @@ struct RustDeskIndex {
   private lastRenderRecoveryAt: number = 0;
   private renderStallRecoveryAttempts: number = 0;
   private previewSurfaceId: string = '';
+  private previewSurfaceSetupInFlight: boolean = false;
+  private previewSurfaceSetupGeneration: number = -1;
+  private pendingPreviewPeerInfo?: NativeEvent;
   private previewGestureStartScale: number = 1;
   private previewGestureStartOffsetX: number = 0;
   private previewGestureStartOffsetY: number = 0;
@@ -329,6 +333,8 @@ struct RustDeskIndex {
   };
   private pcWindow?: window.Window;
   private pcWindowDragExpected: boolean = false;
+  private pcSessionWindowStatusBeforeImmersive: window.WindowStatusType = window.WindowStatusType.UNDEFINED;
+  private pcSessionImmersiveApplied: boolean = false;
   @Local remoteCursorVisible: boolean = false;
   @Local remoteCursorLeft: number = 0;
   @Local remoteCursorTop: number = 0;
@@ -378,8 +384,9 @@ struct RustDeskIndex {
   aboutToAppear(): void {
     this.pageVisible = true;
     this.previewController.onCreated = (surfaceId: string) => this.handlePreviewSurfaceCreated(surfaceId);
-    this.previewController.onChanged = (_surfaceId: string, rect: SurfaceRect) => this.handlePreviewSurfaceChanged(rect);
-    this.previewController.onDestroyed = () => this.handlePreviewSurfaceDestroyed();
+    this.previewController.onChanged = (surfaceId: string, rect: SurfaceRect) =>
+      this.handlePreviewSurfaceChanged(surfaceId, rect);
+    this.previewController.onDestroyed = (surfaceId: string) => this.handlePreviewSurfaceDestroyed(surfaceId);
     this.initializeRuntime();
     this.registerWindowAvoidAreaListener();
     this.applySessionFullscreen(false, true);
@@ -1633,6 +1640,9 @@ struct RustDeskIndex {
     this.supportedResolutions = [];
     this.previewSurfaceVisible = false;
     this.previewSurfaceGeneration = 0;
+    this.previewSurfaceSetupInFlight = false;
+    this.previewSurfaceSetupGeneration = -1;
+    this.pendingPreviewPeerInfo = undefined;
     this.releasePreviewFramePixelMap();
     this.renderFpsText = 'FPS --';
     this.toolbarRenderStats = {
@@ -2559,6 +2569,80 @@ struct RustDeskIndex {
     this.remoteCursorVisible = false;
   }
 
+  private async applyLandscapeMultiWindow(currentWindow: window.Window, active: boolean): Promise<void> {
+    try {
+      if (active) {
+        await currentWindow.enableLandscapeMultiWindow();
+      } else {
+        await currentWindow.disableLandscapeMultiWindow();
+      }
+      hilog.info(
+        DOMAIN,
+        TAG,
+        'Landscape multi-window %{public}s for remote session',
+        active ? 'enabled' : 'disabled',
+      );
+    } catch (error) {
+      hilog.warn(
+        DOMAIN,
+        TAG,
+        'Failed to %{public}s landscape multi-window: %{public}s',
+        active ? 'enable' : 'disable',
+        String(error),
+      );
+    }
+  }
+
+  private async applyPcSessionImmersive(currentWindow: window.Window, active: boolean): Promise<void> {
+    if (!this.isPcDevice()) {
+      return;
+    }
+    if (active) {
+      let previousStatus = window.WindowStatusType.UNDEFINED;
+      try {
+        previousStatus = currentWindow.getWindowStatus();
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'Failed to read PC window status: %{public}s', String(error));
+      }
+      this.pcSessionWindowStatusBeforeImmersive = previousStatus;
+      if (previousStatus === window.WindowStatusType.FULL_SCREEN) {
+        try {
+          await currentWindow.setTitleAndDockHoverShown(false, false);
+        } catch (error) {
+          hilog.warn(DOMAIN, TAG, 'Failed to disable title and dock hover: %{public}s', String(error));
+        }
+        return;
+      }
+      try {
+        await currentWindow.maximize(
+          window.MaximizePresentation.ENTER_IMMERSIVE_DISABLE_TITLE_AND_DOCK_HOVER,
+        );
+        this.pcSessionImmersiveApplied = true;
+      } catch (error) {
+        this.pcSessionWindowStatusBeforeImmersive = window.WindowStatusType.UNDEFINED;
+        this.pcSessionImmersiveApplied = false;
+        hilog.warn(DOMAIN, TAG, 'Failed to enter PC session immersive mode: %{public}s', String(error));
+      }
+      return;
+    }
+    if (!this.pcSessionImmersiveApplied) {
+      return;
+    }
+    const previousStatus = this.pcSessionWindowStatusBeforeImmersive;
+    try {
+      if (previousStatus === window.WindowStatusType.MAXIMIZE) {
+        await currentWindow.maximize(window.MaximizePresentation.EXIT_IMMERSIVE);
+      } else if (previousStatus !== window.WindowStatusType.FULL_SCREEN) {
+        await currentWindow.recover();
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'Failed to restore PC window after session: %{public}s', String(error));
+    } finally {
+      this.pcSessionWindowStatusBeforeImmersive = window.WindowStatusType.UNDEFINED;
+      this.pcSessionImmersiveApplied = false;
+    }
+  }
+
   private applySessionFullscreen(active: boolean, force: boolean = false): Promise<void> {
     if (!force && this.sessionFullscreenApplied === active) {
       return Promise.resolve();
@@ -2566,12 +2650,14 @@ struct RustDeskIndex {
     const hostContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
     return window.getLastWindow(hostContext)
       .then(async (currentWindow: window.Window) => {
+        await this.applyLandscapeMultiWindow(currentWindow, active);
         await currentWindow.setPreferredOrientation(
           active
             ? window.Orientation.LANDSCAPE
             : window.Orientation.FOLLOW_DESKTOP,
         );
         if (active) {
+          await this.applyPcSessionImmersive(currentWindow, true);
           await currentWindow.setWindowLayoutFullScreen(true);
           await currentWindow.setSpecificSystemBarEnabled('status', false, true);
           await currentWindow.setSpecificSystemBarEnabled('navigationIndicator', false, true);
@@ -2579,6 +2665,7 @@ struct RustDeskIndex {
           await currentWindow.setSpecificSystemBarEnabled('status', true, true);
           await currentWindow.setSpecificSystemBarEnabled('navigationIndicator', true, true);
           await currentWindow.setWindowLayoutFullScreen(true);
+          await this.applyPcSessionImmersive(currentWindow, false);
         }
         this.refreshWindowAvoidAreas(currentWindow);
         this.sessionFullscreenApplied = active;
@@ -2773,30 +2860,63 @@ struct RustDeskIndex {
   }
 
   private async waitForPreviewSurfaceBinding(connectionGeneration?: number): Promise<void> {
-    for (let index = 0; index < 20; index++) {
+    for (let index = 0; index < PREVIEW_SURFACE_WAIT_ATTEMPTS; index++) {
       if (connectionGeneration !== undefined && connectionGeneration !== this.connectionGeneration) {
         return;
       }
+      this.recoverPreviewSurfaceIdFromController();
       if (this.previewSurfaceId.length > 0 && this.syncSurfaceBinding()) {
         return;
       }
-      await new Promise<void>((resolve) => setTimeout(() => resolve(), 50));
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), PREVIEW_SURFACE_WAIT_INTERVAL_MS));
     }
-    throw new Error('Preview surface was not created before session start');
+    if (this.previewSurfaceId.length === 0) {
+      throw new Error('Preview surface was not created before session start');
+    }
+    throw new Error('Preview surface was created but could not be bound before session start');
   }
 
   private enterPreviewMode(event: NativeEvent): void {
-    if (!this.showPreviewModal || !this.previewSurfaceVisible || this.previewSurfaceId.length === 0) {
-      void this.preparePreviewSurface(this.connectionGeneration)
-        .then(() => this.configureDisplayFromPeerInfo(event))
-        .catch((error: Error) => {
-          const message = `Preview surface setup failed: ${String(error)}`;
-          hilog.error(DOMAIN, TAG, 'preparePreviewSurface failed: %{public}s', message);
-          this.failConnectionAttempt(message);
-        });
+    if (this.showPreviewModal && this.previewSurfaceVisible && this.previewSurfaceId.length > 0) {
+      this.configureDisplayFromPeerInfo(event);
       return;
     }
-    this.configureDisplayFromPeerInfo(event);
+    this.pendingPreviewPeerInfo = event;
+    if (this.previewSurfaceSetupInFlight &&
+      this.previewSurfaceSetupGeneration === this.connectionGeneration) {
+      return;
+    }
+    const setupGeneration = this.connectionGeneration;
+    this.previewSurfaceSetupInFlight = true;
+    this.previewSurfaceSetupGeneration = setupGeneration;
+    void this.preparePreviewSurfaceForPendingEvent(setupGeneration);
+  }
+
+  private async preparePreviewSurfaceForPendingEvent(setupGeneration: number): Promise<void> {
+    try {
+      await this.preparePreviewSurface(setupGeneration);
+      if (setupGeneration !== this.connectionGeneration || !this.activeSessionId) {
+        return;
+      }
+      const peerInfo = this.pendingPreviewPeerInfo;
+      this.pendingPreviewPeerInfo = undefined;
+      if (peerInfo) {
+        this.configureDisplayFromPeerInfo(peerInfo);
+      }
+    } catch (error) {
+      if (setupGeneration !== this.connectionGeneration) {
+        return;
+      }
+      this.pendingPreviewPeerInfo = undefined;
+      const message = `Preview surface setup failed: ${String(error)}`;
+      hilog.error(DOMAIN, TAG, 'preparePreviewSurface failed: %{public}s', message);
+      this.failConnectionAttempt(message);
+    } finally {
+      if (this.previewSurfaceSetupGeneration === setupGeneration) {
+        this.previewSurfaceSetupInFlight = false;
+        this.previewSurfaceSetupGeneration = -1;
+      }
+    }
   }
 
   private async waitForPreviewWindowReady(expectLandscape: boolean): Promise<void> {
@@ -3622,14 +3742,35 @@ struct RustDeskIndex {
 
   private handlePreviewSurfaceCreated(surfaceId: string): void {
     setTimeout(() => {
+      if (!this.activeSessionId || !this.showPreviewModal || !this.previewSurfaceVisible) {
+        return;
+      }
       this.previewSurfaceId = surfaceId;
       this.frameStatus = `Surface created ${surfaceId}`;
       this.syncSurfaceBinding();
     }, 0);
   }
 
-  private handlePreviewSurfaceChanged(rect: SurfaceRect): void {
+  private recoverPreviewSurfaceIdFromController(): void {
+    if (this.previewSurfaceId.length > 0 || !this.showPreviewModal || !this.previewSurfaceVisible) {
+      return;
+    }
+    try {
+      const surfaceId = this.previewController.getXComponentSurfaceId();
+      if (surfaceId.length > 0) {
+        this.previewSurfaceId = surfaceId;
+        this.frameStatus = `Surface recovered ${surfaceId}`;
+      }
+    } catch (_error) {
+      // Surface 尚未创建完成，等待正式生命周期回调。
+    }
+  }
+
+  private handlePreviewSurfaceChanged(surfaceId: string, rect: SurfaceRect): void {
     setTimeout(() => {
+      if (surfaceId !== this.previewSurfaceId) {
+        return;
+      }
       this.frameWidth = rect.surfaceWidth;
       this.frameHeight = rect.surfaceHeight;
       this.viewportModel.setSurfaceSize(rect.surfaceWidth, rect.surfaceHeight);
@@ -3639,8 +3780,11 @@ struct RustDeskIndex {
     }, 0);
   }
 
-  private handlePreviewSurfaceDestroyed(): void {
+  private handlePreviewSurfaceDestroyed(surfaceId: string): void {
     setTimeout(() => {
+      if (surfaceId !== this.previewSurfaceId) {
+        return;
+      }
       this.inputController?.releasePressedButtons();
       this.clearSurfaceBinding();
       this.previewSurfaceId = '';
@@ -4993,16 +5137,11 @@ struct RustDeskIndex {
   private WideNavigationItem(index: number, name: string, icon: Resource) {
     Stack({ alignContent: Alignment.Center }) {
       LuminousSurface({
-        state: this.currentTabIndex === index
-          ? LuminousSurfaceState.Inset
-          : LuminousSurfaceState.Flat,
+        depth: this.currentTabIndex === index ? -1 : 0,
         surfaceWidth: this.wideRailItemSurfaceWidth(),
         surfaceHeight: this.wideRailItemSurfaceHeight(),
         cornerRadius: 18,
-        raisedShadowDistance: LuminousNeoTokens.raisedDistanceFor(this.wideRailItemSurfaceHeight()),
-        raisedShadowBlur: LuminousNeoTokens.raisedBlurFor(this.wideRailItemSurfaceHeight()),
-        insetShadowDistance: LuminousNeoTokens.insetDistanceFor(this.wideRailItemSurfaceHeight()),
-        insetShadowBlur: LuminousNeoTokens.insetBlurFor(this.wideRailItemSurfaceHeight()),
+        motionEnabled: true,
       }) {
         Column({ space: 4 }) {
           SymbolGlyph(icon)
@@ -5044,14 +5183,11 @@ struct RustDeskIndex {
   private WideRailIdentity() {
     Stack({ alignContent: Alignment.Center }) {
       LuminousSurface({
-        state: LuminousSurfaceState.Inset,
+        depth: -1,
         surfaceWidth: 46,
         surfaceHeight: 46,
         cornerRadius: 16,
-        raisedShadowDistance: LuminousNeoTokens.raisedDistanceFor(46),
-        raisedShadowBlur: LuminousNeoTokens.raisedBlurFor(46),
-        insetShadowDistance: LuminousNeoTokens.insetDistanceFor(46),
-        insetShadowBlur: LuminousNeoTokens.insetBlurFor(46),
+        motionEnabled: true,
       }) {
         Image($r('app.media.startIcon'))
           .width(34)
@@ -5200,8 +5336,8 @@ struct RustDeskIndex {
           .backgroundColor($r('app.color.mica_control'))
           .borderRadius(6)
       }
-      .height('100%')
-      .padding({ left: 14 })
+        .height('100%')
+        .padding({ left: 14 })
 
       Row() {
         Text(this.pcTitleStatusText())
@@ -5210,11 +5346,11 @@ struct RustDeskIndex {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
       }
-      .height('100%')
-      .layoutWeight(1)
-      .justifyContent(FlexAlign.Center)
-      .onTouch((event: TouchEvent) => this.startMovingPcWindow(event))
-      .onMouse((event: MouseEvent) => this.startMovingPcWindowByMouse(event))
+        .height('100%')
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+        .onTouch((event: TouchEvent) => this.startMovingPcWindow(event))
+        .onMouse((event: MouseEvent) => this.startMovingPcWindowByMouse(event))
 
       Row()
         .width(138)
@@ -5392,7 +5528,7 @@ struct RustDeskIndex {
   build() {
     Stack() {
       Column() {
-        if (this.isPcDevice()) {
+        if (this.isPcDevice() && !this.showPreviewModal) {
           this.PcTitleBar();
         }
         Stack() {

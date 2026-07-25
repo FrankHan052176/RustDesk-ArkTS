@@ -1,7 +1,6 @@
 import {
   LuminousNeoTokens,
   LuminousSurface,
-  LuminousSurfaceState,
 } from 'luminous_neo';
 
 /**
@@ -42,42 +41,16 @@ export struct FloatingGlassSurface {
     return this.surfaceHeight > 0 ? this.surfaceHeight : this.measuredSurfaceHeight;
   }
 
-  private raisedDistance(): number {
-    if (this.subtleDepth) {
-      return LuminousNeoTokens.movingRaisedDistanceFor(this.shortEdge());
-    }
-    return LuminousNeoTokens.raisedDistanceFor(this.shortEdge());
-  }
-
-  private raisedBlur(): number {
-    if (this.subtleDepth) {
-      return LuminousNeoTokens.movingRaisedBlurFor(this.shortEdge());
-    }
-    return LuminousNeoTokens.raisedBlurFor(this.shortEdge());
-  }
-
-  private insetDistance(): number {
-    let distance: number = LuminousNeoTokens.insetDistanceFor(this.shortEdge());
-    return this.subtleDepth ? distance / 2 : distance;
-  }
-
-  private insetBlur(): number {
-    let blur: number = LuminousNeoTokens.insetBlurFor(this.shortEdge());
-    return this.subtleDepth ? blur / 2 : blur;
-  }
-
   private shadowPadding(): number {
-    return Math.max(
-      this.raisedDistance() + this.raisedBlur(),
-      this.insetDistance() + this.insetBlur(),
-    );
+    return LuminousNeoTokens.shadowPaddingFor(this.shortEdge());
   }
 
-  private surfaceState(): LuminousSurfaceState {
+  private surfaceDepth(): number {
     if (!this.showDepth) {
-      return LuminousSurfaceState.Flat;
+      return 0;
     }
-    return this.inset ? LuminousSurfaceState.Inset : LuminousSurfaceState.Raised;
+    let depth: number = this.subtleDepth ? LuminousNeoTokens.SUBTLE_RAISED_DEPTH : 1;
+    return this.inset ? -depth : depth;
   }
 
   private hasSurfaceSize(): boolean {
@@ -109,14 +82,11 @@ export struct FloatingGlassSurface {
         Stack({ alignContent: Alignment.TopStart }) {
           Stack({ alignContent: Alignment.TopStart }) {
             LuminousSurface({
-              state: this.surfaceState(),
+              depth: this.surfaceDepth(),
               surfaceWidth: this.resolvedSurfaceWidth(),
               surfaceHeight: this.resolvedSurfaceHeight(),
               cornerRadius: this.cornerRadius(),
-              raisedShadowDistance: this.raisedDistance(),
-              raisedShadowBlur: this.raisedBlur(),
-              insetShadowDistance: this.insetDistance(),
-              insetShadowBlur: this.insetBlur(),
+              motionEnabled: true,
               contentAlignment: Alignment.TopStart,
             }) {
               this.content();
@@ -183,34 +153,12 @@ export struct FloatingActionSurface {
   }
 
   private shadowPadding(): number {
-    return Math.max(
-      this.raisedDistance() + this.raisedBlur(),
-      this.insetDistance() + this.insetBlur(),
-    );
+    return LuminousNeoTokens.shadowPaddingFor(this.shortEdge());
   }
 
-  private raisedDistance(): number {
-    if (this.subtleDepth) {
-      return LuminousNeoTokens.movingRaisedDistanceFor(this.shortEdge());
-    }
-    return LuminousNeoTokens.raisedDistanceFor(this.shortEdge());
-  }
-
-  private raisedBlur(): number {
-    if (this.subtleDepth) {
-      return LuminousNeoTokens.movingRaisedBlurFor(this.shortEdge());
-    }
-    return LuminousNeoTokens.raisedBlurFor(this.shortEdge());
-  }
-
-  private insetDistance(): number {
-    let distance: number = LuminousNeoTokens.insetDistanceFor(this.shortEdge());
-    return this.subtleDepth ? distance / 2 : distance;
-  }
-
-  private insetBlur(): number {
-    let blur: number = LuminousNeoTokens.insetBlurFor(this.shortEdge());
-    return this.subtleDepth ? blur / 2 : blur;
+  private surfaceDepth(): number {
+    let depth: number = this.subtleDepth ? LuminousNeoTokens.SUBTLE_RAISED_DEPTH : 1;
+    return (this.selected || this.pressed) && this.actionEnabled ? -depth : depth;
   }
 
   private handleTouch(event: TouchEvent): void {
@@ -244,16 +192,11 @@ export struct FloatingActionSurface {
       if (this.surfaceWidth > 0 && this.surfaceHeight > 0) {
         Stack({ alignContent: Alignment.TopStart }) {
           LuminousSurface({
-            state: (this.selected || this.pressed) && this.actionEnabled
-              ? LuminousSurfaceState.Inset
-              : LuminousSurfaceState.Raised,
+            depth: this.surfaceDepth(),
             surfaceWidth: this.surfaceWidth,
             surfaceHeight: this.surfaceHeight,
             cornerRadius: this.cornerRadius(),
-            raisedShadowDistance: this.raisedDistance(),
-            raisedShadowBlur: this.raisedBlur(),
-            insetShadowDistance: this.insetDistance(),
-            insetShadowBlur: this.insetBlur(),
+            motionEnabled: true,
           }) {
             Stack() {
               this.content();

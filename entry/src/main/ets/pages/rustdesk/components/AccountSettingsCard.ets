@@ -3,7 +3,6 @@ import {
   LuminousButton,
   LuminousControlSize,
   LuminousSurface,
-  LuminousSurfaceState,
   LuminousTextField,
   LuminousTone,
 } from 'luminous_neo';
@@ -318,6 +317,7 @@ export struct AccountSettingsCard {
       inputType: inputType,
       maxLength: maxLength,
       isEnabled: enabled,
+      motionEnabled: true,
       onChange: onChange,
     })
       .margin({ top: -10 })
@@ -415,6 +415,7 @@ export struct AccountSettingsCard {
         ? LuminousTone.Accent
         : (tone === 'danger' ? LuminousTone.Danger : LuminousTone.Neutral),
       isEnabled: enabled,
+      motionEnabled: true,
       onAction: onClick,
     })
   }
@@ -429,6 +430,7 @@ export struct AccountSettingsCard {
       controlSizeMode: LuminousControlSize.Regular,
       tone: LuminousTone.Accent,
       isEnabled: this.canLogin(),
+      motionEnabled: true,
       onAction: () => this.requestLogin(),
     })
       .margin({ top: -16 })
@@ -442,6 +444,7 @@ export struct AccountSettingsCard {
       controlSizeMode: LuminousControlSize.Compact,
       tone: LuminousTone.Neutral,
       isEnabled: !this.isBusy(),
+      motionEnabled: true,
       onAction: () => this.requestOidc(provider.name),
     })
   }
@@ -503,10 +506,11 @@ export struct AccountSettingsCard {
   private LoginStatus() {
     Stack({ alignContent: Alignment.Center }) {
       LuminousSurface({
-        state: LuminousSurfaceState.Inset,
+        depth: -1,
         surfaceWidth: this.fieldSurfaceWidth(),
         surfaceHeight: 58,
         cornerRadius: 21,
+        motionEnabled: true,
       }) {
         Row({ space: 10 }) {
           Circle()

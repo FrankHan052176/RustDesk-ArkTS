@@ -8,7 +8,6 @@ import {
   LuminousButton,
   LuminousControlSize,
   LuminousSurface,
-  LuminousSurfaceState,
   LuminousTone,
 } from 'luminous_neo';
 import { AccountLoginProvider, AccountState, ServerConfig, SessionDefaults } from '../RustDeskDirectoryTypes';
@@ -311,12 +310,11 @@ export struct SettingsTab {
   ) {
     Stack({ alignContent: Alignment.Center }) {
       LuminousSurface({
-        state: this.pressedSection === section
-          ? LuminousSurfaceState.Inset
-          : LuminousSurfaceState.Raised,
+        depth: this.pressedSection === section ? -1 : 1,
         surfaceWidth: this.tileSurfaceWidth(),
         surfaceHeight: 72,
         cornerRadius: 22,
+        motionEnabled: true,
       }) {
         Row({ space: 12 }) {
           SymbolGlyph(icon)
@@ -501,14 +499,11 @@ export struct SettingsTab {
   private StatusTag(text: string, color: ResourceColor, _background: ResourceColor) {
     Stack({ alignContent: Alignment.Center }) {
       LuminousSurface({
-        state: LuminousSurfaceState.Inset,
+        depth: -1,
         surfaceWidth: 62,
         surfaceHeight: 28,
         cornerRadius: 10,
-        raisedShadowDistance: 2,
-        raisedShadowBlur: 4,
-        insetShadowDistance: 2,
-        insetShadowBlur: 4,
+        motionEnabled: true,
       }) {
         Text(text)
           .fontSize(10)
@@ -526,10 +521,11 @@ export struct SettingsTab {
   private DiagnosticIdentityUnit() {
     Stack({ alignContent: Alignment.Center }) {
       LuminousSurface({
-        state: LuminousSurfaceState.Raised,
+        depth: 1,
         surfaceWidth: this.diagnosticPanelWidth(),
         surfaceHeight: 78,
         cornerRadius: 22,
+        motionEnabled: true,
       }) {
         Row({ space: 12 }) {
           Image($r('app.media.startIcon'))
@@ -581,10 +577,11 @@ export struct SettingsTab {
 
       Stack({ alignContent: Alignment.Center }) {
         LuminousSurface({
-          state: LuminousSurfaceState.Raised,
+          depth: 1,
           surfaceWidth: this.diagnosticPanelWidth(),
           surfaceHeight: 104,
           cornerRadius: 20,
+          motionEnabled: true,
         }) {
           Column({ space: 0 }) {
             this.InfoRow('健康状态', this.health || 'waiting...', true)
@@ -614,10 +611,11 @@ export struct SettingsTab {
 
       Stack({ alignContent: Alignment.Center }) {
         LuminousSurface({
-          state: LuminousSurfaceState.Raised,
+          depth: 1,
           surfaceWidth: this.diagnosticPanelWidth(),
           surfaceHeight: 160,
           cornerRadius: 20,
+          motionEnabled: true,
         }) {
           Column({ space: 0 }) {
             this.InfoRow('构建标识', this.buildMarker, true)
@@ -689,10 +687,11 @@ export struct SettingsTab {
 
       Stack({ alignContent: Alignment.Center }) {
         LuminousSurface({
-          state: LuminousSurfaceState.Raised,
+          depth: 1,
           surfaceWidth: this.diagnosticPanelWidth(),
           surfaceHeight: this.diagnosticDecoderHeight(),
           cornerRadius: 20,
+          motionEnabled: true,
         }) {
           Column({ space: 0 }) {
             if (this.decoderCapabilities.length === 0) {
@@ -773,6 +772,7 @@ export struct SettingsTab {
       controlWidth: this.diagnosticPanelWidth(),
       controlSizeMode: LuminousControlSize.Compact,
       tone: LuminousTone.Accent,
+      motionEnabled: true,
       onAction: () => this.onRefresh(),
     })
   }

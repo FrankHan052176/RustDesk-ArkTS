@@ -70,6 +70,7 @@ export struct PasswordDialog {
               fieldWidth: this.fieldWidth(),
               fieldHeight: 52,
               inputType: InputType.Password,
+              motionEnabled: true,
               onChange: (value: string): void => {
                 this.onPasswordChange(value);
               },
@@ -84,6 +85,7 @@ export struct PasswordDialog {
             description: '仅保存在本机安全配置中',
             isOn: this.rememberPassword,
             rowWidth: this.panelWidth() - 48,
+            motionEnabled: true,
             onChange: (value: boolean): void => {
               this.onRememberChange(value);
             },
@@ -95,6 +97,7 @@ export struct PasswordDialog {
               controlWidth: this.buttonWidth(),
               controlSizeMode: LuminousControlSize.Compact,
               tone: LuminousTone.Neutral,
+              motionEnabled: true,
               onAction: (): void => {
                 this.onCancel();
               },
@@ -105,6 +108,7 @@ export struct PasswordDialog {
               controlWidth: this.buttonWidth(),
               controlSizeMode: LuminousControlSize.Compact,
               tone: LuminousTone.Accent,
+              motionEnabled: true,
               onAction: (): void => {
                 this.onSubmit();
               },

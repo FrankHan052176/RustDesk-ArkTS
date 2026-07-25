@@ -79,6 +79,7 @@ export struct RemoteMediaPanel {
               isOn: this.state.available && !this.state.muted,
               rowWidth: Math.max(260, this.viewportWidth - 32),
               isEnabled: this.state.available,
+              motionEnabled: true,
               onChange: (_enabled: boolean): void => {
                 this.onToggleMuted();
               },
