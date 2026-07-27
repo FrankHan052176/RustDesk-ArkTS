@@ -43,7 +43,7 @@ export class SessionDefaults {
   qualityPreset: string = 'balanced';
   customQuality: number = 50;
   customFps: number = 30;
-  preferredCodec: string = 'h264';
+  preferredCodec: string = 'auto';
   gesturesEnabled: boolean = true;
   toolbarExpanded: boolean = false;
 }

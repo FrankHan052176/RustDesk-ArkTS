@@ -17,6 +17,8 @@ const DEFAULT_QUALITY_PRESET_KEY = 'default_quality_preset';
 const DEFAULT_CUSTOM_QUALITY_KEY = 'default_custom_quality';
 const DEFAULT_CUSTOM_FPS_KEY = 'default_custom_fps';
 const DEFAULT_PREFERRED_CODEC_KEY = 'default_preferred_codec';
+const DEFAULT_CODEC_PRIORITY_VERSION_KEY = 'default_codec_priority_version';
+const DEFAULT_CODEC_PRIORITY_VERSION = 1;
 const DEFAULT_GESTURES_ENABLED_KEY = 'default_gestures_enabled';
 const DEFAULT_TOOLBAR_EXPANDED_KEY = 'default_toolbar_expanded';
 
@@ -112,6 +114,18 @@ export class RustDeskPreferences {
       defaults.customFps = store.getSync(DEFAULT_CUSTOM_FPS_KEY, defaults.customFps) as number;
       const preferredCodec = (store.getSync(DEFAULT_PREFERRED_CODEC_KEY, defaults.preferredCodec) as string).trim();
       defaults.preferredCodec = preferredCodec.length > 0 ? preferredCodec : defaults.preferredCodec;
+      const codecPriorityVersion = store.getSync(DEFAULT_CODEC_PRIORITY_VERSION_KEY, 0) as number;
+      if (codecPriorityVersion < DEFAULT_CODEC_PRIORITY_VERSION) {
+        // H.264 used to be the implicit default. Move that legacy value to the
+        // capability-driven priority chain; users can still explicitly select
+        // H.264 again after the one-time migration.
+        if (defaults.preferredCodec === 'h264') {
+          defaults.preferredCodec = 'auto';
+          store.putSync(DEFAULT_PREFERRED_CODEC_KEY, defaults.preferredCodec);
+        }
+        store.putSync(DEFAULT_CODEC_PRIORITY_VERSION_KEY, DEFAULT_CODEC_PRIORITY_VERSION);
+        store.flushSync();
+      }
       defaults.gesturesEnabled = store.getSync(
         DEFAULT_GESTURES_ENABLED_KEY,
         defaults.gesturesEnabled,

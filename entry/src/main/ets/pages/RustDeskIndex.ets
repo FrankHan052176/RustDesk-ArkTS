@@ -100,7 +100,6 @@ const REMOTE_CURSOR_LOG_SAMPLE_EVERY = 10;
 const REMOTE_CURSOR_MIN_VISIBLE_SIZE = 12;
 const FALLBACK_CURSOR_BASE_WIDTH = 18;
 const FALLBACK_CURSOR_BASE_HEIGHT = 24;
-const PREFERRED_CODEC_REAPPLY_MS = 5000;
 const REMOTE_CURSOR_OPTION_REAPPLY_MS = 1000;
 const RENDER_STALL_THRESHOLD_MS = 3500;
 const RENDER_STALL_RECOVERY_COOLDOWN_MS = 5000;
@@ -305,9 +304,8 @@ struct RustDeskIndex {
     targetBitrate: '--',
     chroma: '--',
   };
-  private preferredCodec: string = 'h264';
+  private preferredCodec: string = 'auto';
   private codecPreferenceApplied: boolean = false;
-  private lastCodecPreferenceAppliedAt: number = 0;
   @Local passwordDialogVisible: boolean = false;
   private passwordSessionKind: PasswordSessionKind = 'primary';
   private sessionFullscreenApplied: boolean = false;
@@ -551,7 +549,7 @@ struct RustDeskIndex {
   private resolvePreferredCodec(requested: string, capabilities: DecoderCapability[]): string {
     const normalized = requested.trim().toLowerCase();
     if (normalized === 'auto') {
-      return 'auto';
+      return this.selectPreferredCodec(capabilities);
     }
     const supported = ['h264', 'h265', 'vp8', 'vp9', 'av1'];
     if (!supported.includes(normalized)) {
@@ -1373,6 +1371,11 @@ struct RustDeskIndex {
       this.failConnectionAttempt(this.errorText || '无法创建连接会话');
       return;
     }
+    // Set the codec preference before the first LoginRequest is created.  The
+    // peer chooses its encoder from that request; waiting for peer_info means
+    // the default (often VP9) may already be active and can leave the first
+    // frames black while the later preference update takes effect.
+    this.applyCodecPreference();
     const sessionStarted = await this.startSession();
     if (connectionGeneration !== this.connectionGeneration || !sessionStarted) {
       if (connectionGeneration === this.connectionGeneration) {
@@ -1660,7 +1663,6 @@ struct RustDeskIndex {
       chroma: '--',
     };
     this.codecPreferenceApplied = false;
-    this.lastCodecPreferenceAppliedAt = 0;
     this.lastRenderTotalFrames = 0;
     this.renderStallFirstDetectedAt = 0;
     this.lastRenderRecoveryAt = 0;
@@ -3536,52 +3538,21 @@ struct RustDeskIndex {
   }
 
   private selectPreferredCodec(capabilities: DecoderCapability[]): string {
-    const h264 = capabilities.find((item: DecoderCapability) => item.codec === 'H264');
-    if (h264 && (h264.mimeAvailable || h264.recommendedAvailable || h264.hardwareAvailable || h264.softwareAvailable)) {
-      return 'h264';
-    }
-    const h265 = capabilities.find((item: DecoderCapability) => item.codec === 'H265');
-    if (h265 && (h265.mimeAvailable || h265.recommendedAvailable || h265.hardwareAvailable || h265.softwareAvailable)) {
-      return 'h265';
+    const preferredOrder: string[] = ['H265', 'H264', 'AV1', 'VP9', 'VP8'];
+    for (let orderIndex = 0; orderIndex < preferredOrder.length; orderIndex += 1) {
+      const preferred = preferredOrder[orderIndex];
+      for (let capabilityIndex = 0; capabilityIndex < capabilities.length; capabilityIndex += 1) {
+        const capability = capabilities[capabilityIndex];
+        if (capability.codec !== preferred) {
+          continue;
+        }
+        if (capability.mimeAvailable || capability.recommendedAvailable || capability.hardwareAvailable ||
+          capability.softwareAvailable) {
+          return preferred.toLowerCase();
+        }
+      }
     }
     return 'auto';
-  }
-
-  private reconcilePreferredCodecForSession(): void {
-    if (!this.activeSessionId) {
-      return;
-    }
-    try {
-      const raw = native.sessionAlternativeCodecs(this.activeSessionId);
-      if (!raw || raw.length === 0) {
-        return;
-      }
-      const alternatives = JSON.parse(raw) as Record<string, boolean>;
-      if (this.preferredCodec === 'auto') {
-        return;
-      }
-      const orderedChoices = ['h265', 'h264', 'vp8', 'av1'];
-      const supportedChoices = orderedChoices.filter((codec: string) => alternatives[codec] === true);
-      if (supportedChoices.length === 0) {
-        this.preferredCodec = 'auto';
-        return;
-      }
-      if (this.preferredCodec !== 'auto' && alternatives[this.preferredCodec] === true) {
-        return;
-      }
-      this.preferredCodec = supportedChoices[0];
-      this.codecPreferenceApplied = false;
-      this.lastCodecPreferenceAppliedAt = 0;
-      hilog.info(
-        DOMAIN,
-        TAG,
-        'Reconciled session codec preference to %{public}s from %{public}s',
-        this.preferredCodec,
-        raw,
-      );
-    } catch (error) {
-      hilog.error(DOMAIN, TAG, 'reconcilePreferredCodecForSession failed: %{public}s', String(error));
-    }
   }
 
   private configureDisplayFromPeerInfo(event: NativeEvent): void {
@@ -3868,28 +3839,23 @@ struct RustDeskIndex {
       )) {
         this.selectedQualityPreset = this.sessionDisplayController.getImageQuality();
       }
-      this.applyCodecPreference(false);
+      this.applyCodecPreference();
       this.performanceTuningApplied = true;
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'applyPerformanceTuning failed: %{public}s', String(error));
     }
   }
 
-  private applyCodecPreference(force: boolean): void {
+  private applyCodecPreference(): void {
     if (!this.activeSessionId) {
       return;
     }
-    const now = Date.now();
-    if (!force && this.codecPreferenceApplied) {
-      return;
-    }
-    if (force && this.lastCodecPreferenceAppliedAt > 0 && now - this.lastCodecPreferenceAppliedAt < PREFERRED_CODEC_REAPPLY_MS) {
+    if (this.codecPreferenceApplied) {
       return;
     }
     try {
       const response = this.parseResponse(native.sessionSetCodecPreference(this.activeSessionId, this.preferredCodec));
       this.codecPreferenceApplied = response.ok;
-      this.lastCodecPreferenceAppliedAt = now;
       if (!response.ok && response.message) {
         this.logRelativeDebug('codec_preference', response.message);
       }
@@ -4016,7 +3982,6 @@ struct RustDeskIndex {
         }
         this.connectionSummary = `peer=${String(event.hostname)}, platform=${String(event.platform)}, version=${String(event.version)}`;
       }
-      this.reconcilePreferredCodecForSession();
       this.applyPerformanceTuning();
       if (this.isRemoteControlSessionActive()) {
         this.remoteInteractionReady = true;
@@ -4049,9 +4014,6 @@ struct RustDeskIndex {
       }
       if (event.codec_format && event.codec_format.length > 0) {
         this.qualityTelemetry.codec = String(event.codec_format);
-        if (this.qualityTelemetry.codec.toLowerCase().includes('vp9') && this.preferredCodec !== 'auto') {
-          this.applyCodecPreference(true);
-        }
       }
       if (event.speed && event.speed.length > 0) {
         this.qualityTelemetry.speed = String(event.speed);
@@ -4230,6 +4192,7 @@ struct RustDeskIndex {
         : Uint8Array.from(rgbaPayload);
       const options: image.InitializationOptions = {
         editable: false,
+        srcPixelFormat: image.PixelMapFormat.RGBA_8888,
         pixelFormat: image.PixelMapFormat.RGBA_8888,
         size: { width, height },
         alphaType: image.AlphaType.UNPREMUL,
@@ -4367,7 +4330,7 @@ struct RustDeskIndex {
           Image(this.previewFramePixelMap)
             .width('100%')
             .height('100%')
-            .objectFit(ImageFit.Fill)
+            .objectFit(ImageFit.Contain)
             .interpolation(ImageInterpolation.Medium)
             .scale({ x: this.previewUserScale, y: this.previewUserScale, centerX: '50%', centerY: '50%' })
             .rotate({ angle: this.previewUserRotation, centerX: '50%', centerY: '50%' })

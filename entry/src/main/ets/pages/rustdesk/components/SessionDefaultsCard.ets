@@ -161,16 +161,16 @@ export struct SessionDefaultsCard {
   }
 
   private codecIndex(): number {
-    if (this.defaults.preferredCodec === 'h264') {
+    if (this.defaults.preferredCodec === 'h265') {
       return 1;
     }
-    if (this.defaults.preferredCodec === 'h265') {
+    if (this.defaults.preferredCodec === 'h264') {
       return 2;
     }
-    if (this.defaults.preferredCodec === 'vp9') {
+    if (this.defaults.preferredCodec === 'av1') {
       return 3;
     }
-    if (this.defaults.preferredCodec === 'av1') {
+    if (this.defaults.preferredCodec === 'vp9') {
       return 4;
     }
     return 0;
@@ -178,13 +178,13 @@ export struct SessionDefaultsCard {
 
   private updateCodecIndex(index: number): void {
     if (index === 1) {
-      this.updateCodec('h264');
-    } else if (index === 2) {
       this.updateCodec('h265');
+    } else if (index === 2) {
+      this.updateCodec('h264');
     } else if (index === 3) {
-      this.updateCodec('vp9');
-    } else if (index === 4) {
       this.updateCodec('av1');
+    } else if (index === 4) {
+      this.updateCodec('vp9');
     } else {
       this.updateCodec('auto');
     }
@@ -393,10 +393,10 @@ export struct SessionDefaultsCard {
       LuminousSegmentedControl({
         items: [
           new LuminousSelectionItem('auto', $r('app.string.settings_codec_auto')),
-          new LuminousSelectionItem('h264', 'H.264'),
           new LuminousSelectionItem('h265', 'H.265'),
-          new LuminousSelectionItem('vp9', 'VP9'),
+          new LuminousSelectionItem('h264', 'H.264'),
           new LuminousSelectionItem('av1', 'AV1'),
+          new LuminousSelectionItem('vp9', 'VP9'),
         ],
         selectedIndex: this.codecIndex(),
         controlWidth: this.fullSelectorWidth(720),
