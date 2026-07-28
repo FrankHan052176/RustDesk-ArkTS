@@ -1,4 +1,4 @@
-import native from 'rustdesk-ohrs';
+import { rustDeskNativeApi as native } from './RustDeskNativeApi';
 import {
   AccountActionResult,
   AccountLoginOptionsResult,

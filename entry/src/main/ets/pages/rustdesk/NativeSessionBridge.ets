@@ -1,4 +1,4 @@
-import native from 'rustdesk-ohrs';
+import { rustDeskNativeApi as native } from './RustDeskNativeApi';
 import { RemoteAudioState, SessionStartOptions } from './RustDeskSessionTypes';
 import { ActionResponse } from './RustDeskTypes';
 

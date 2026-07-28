@@ -6,7 +6,7 @@ import {
   IconStyleMode,
   hdsMaterial,
 } from '@kit.UIDesignKit';
-import native from 'rustdesk-ohrs';
+import { rustDeskNativeApi as native } from './rustdesk/RustDeskNativeApi';
 import { common, OpenLinkOptions } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { BusinessError, Callback, deviceInfo } from '@kit.BasicServicesKit';
