@@ -3,6 +3,8 @@ import { RemoteFilePath } from '../RemoteFilePath';
 import { FloatingDepthOverlay } from './FloatingDepth';
 import { FloatingActionSurface, FloatingGlassSurface } from './FloatingSurface';
 
+type TransferPrimaryPane = 'local' | 'remote';
+
 export interface TransferDrawerProps {
   scroller: Scroller;
   titleSpacerHeight: number;
@@ -44,6 +46,8 @@ export struct TransferDrawer {
   @Param transfers: TransferItem[] = [];
   @Param bottomAvoidInset: number = 0;
   @Local viewportWidth: number = 390;
+  @Local compactLayout: boolean = true;
+  @Local primaryPane: TransferPrimaryPane = 'remote';
   @Event onSelectLocal: (name: string) => void = (_name: string) => {};
   @Event onSelectRemote: (name: string) => void = (_name: string) => {};
   @Event onUpload: () => void = () => {};
@@ -109,12 +113,84 @@ export struct TransferDrawer {
     return '已取消';
   }
 
-  private useWideLayout(): boolean {
-    return this.viewportWidth >= 920;
+  private shouldUseCompactLayout(width: number): boolean {
+    return width < 920;
   }
 
-  private mobileEntrySurfaceHeight(entryCount: number): number {
-    return entryCount > 0 ? entryCount * 56 : 96;
+  private paneWidth(): number {
+    if (this.compactLayout) {
+      return this.viewportWidth;
+    }
+    return Math.max(1, (this.viewportWidth - 1) / 2);
+  }
+
+  private compactPeekWidth(): number {
+    return Math.max(40, this.viewportWidth * 0.1);
+  }
+
+  private compactPaneContentRightPadding(): number {
+    return this.compactLayout
+      ? this.compactPeekWidth() + 12
+      : 16;
+  }
+
+  private localPaneOffset(): number {
+    if (!this.compactLayout || this.primaryPane === 'local') {
+      return 0;
+    }
+    return -(this.viewportWidth - this.compactPeekWidth());
+  }
+
+  private remotePaneOffset(): number {
+    if (!this.compactLayout) {
+      return this.paneWidth() + 1;
+    }
+    return this.primaryPane === 'remote'
+      ? this.compactPeekWidth()
+      : this.viewportWidth - this.compactPeekWidth();
+  }
+
+  private dividerOffset(): number {
+    if (!this.compactLayout) {
+      return this.paneWidth();
+    }
+    return this.primaryPane === 'remote'
+      ? this.compactPeekWidth()
+      : this.viewportWidth - this.compactPeekWidth();
+  }
+
+  private transferTrayHeight(): number {
+    return 132;
+  }
+
+  private switchPrimaryPane(pane: TransferPrimaryPane): void {
+    if (!this.compactLayout || this.primaryPane === pane) {
+      return;
+    }
+    this.getUIContext().animateTo({
+      duration: 320,
+      curve: Curve.FastOutSlowIn,
+    }, (): void => {
+      this.primaryPane = pane;
+    });
+  }
+
+  private updateViewportWidth(width: number): void {
+    if (width <= 0 || Math.abs(width - this.viewportWidth) < 0.5) {
+      return;
+    }
+    const nextCompactLayout = this.shouldUseCompactLayout(width);
+    if (nextCompactLayout === this.compactLayout) {
+      this.viewportWidth = width;
+      return;
+    }
+    this.getUIContext().animateTo({
+      duration: 300,
+      curve: Curve.FastOutSlowIn,
+    }, (): void => {
+      this.viewportWidth = width;
+      this.compactLayout = nextCompactLayout;
+    });
   }
 
   private actionEnabled(key: string): boolean {
@@ -162,9 +238,16 @@ export struct TransferDrawer {
   }
 
   @Builder
-  private LocalEntry(entry: LocalFileEntry, showDivider: boolean) {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Stack() {
+  private LocalEntry(entry: LocalFileEntry) {
+    Stack() {
+      FloatingActionSurface({
+        actionEnabled: true,
+        compact: true,
+        subtleDepth: true,
+        stopTouchPropagation: true,
+        accessibilityLabel: entry.name,
+        onActivate: (): void => this.onSelectLocal(entry.name),
+      }) {
         Column({ space: $r('app.float.space_2') }) {
           Text(entry.name)
             .width('100%')
@@ -184,31 +267,33 @@ export struct TransferDrawer {
         .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_12') })
         .justifyContent(FlexAlign.Center)
         .alignItems(HorizontalAlign.Start)
-        .border({
-          width: { bottom: showDivider ? 0.5 : 0 },
-          color: $r('app.color.divider'),
-        })
         .borderRadius($r('app.float.radius_14'))
         .clip(true);
       }
-      .width('100%')
-      .height('100%')
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true);
     }
     .width('100%')
     .height($r('app.float.control_large'))
-    .padding(0)
-    .backgroundColor($r('app.color.transparent'))
     .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .onClick(() => this.onSelectLocal(entry.name));
+    .clip(false);
   }
 
   @Builder
-  private RemoteEntry(entry: RemoteFileEntry, showDivider: boolean) {
-    Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Stack() {
+  private RemoteEntry(entry: RemoteFileEntry) {
+    Stack() {
+      FloatingActionSurface({
+        actionEnabled: true,
+        compact: true,
+        subtleDepth: true,
+        stopTouchPropagation: true,
+        accessibilityLabel: this.isDirectory(entry) ? `打开文件夹 ${entry.name}` : entry.name,
+        onActivate: (): void => {
+          if (this.isDirectory(entry)) {
+            this.onOpenRemoteDirectory(entry.name);
+          } else {
+            this.onSelectRemote(entry.name);
+          }
+        },
+      }) {
         Row({ space: $r('app.float.space_8') }) {
           Column({ space: $r('app.float.space_2') }) {
             Text(this.isDirectory(entry) ? `文件夹 · ${entry.name}` : entry.name)
@@ -236,31 +321,14 @@ export struct TransferDrawer {
         .height('100%')
         .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_12') })
         .alignItems(VerticalAlign.Center)
-        .border({
-          width: { bottom: showDivider ? 0.5 : 0 },
-          color: $r('app.color.divider'),
-        })
         .borderRadius($r('app.float.radius_14'))
         .clip(true);
       }
-      .width('100%')
-      .height('100%')
-      .borderRadius($r('app.float.radius_14'))
-      .clip(true);
     }
     .width('100%')
     .height($r('app.float.control_large'))
-    .padding(0)
-    .backgroundColor($r('app.color.transparent'))
     .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .onClick(() => {
-      if (this.isDirectory(entry)) {
-        this.onOpenRemoteDirectory(entry.name);
-      } else {
-        this.onSelectRemote(entry.name);
-      }
-    });
+    .clip(false);
   }
 
   @Builder
@@ -319,23 +387,29 @@ export struct TransferDrawer {
   }
 
   @Builder
-  private LocalEntriesContent() {
-    Column({ space: 0 }) {
-      ForEach(this.localEntries, (entry: LocalFileEntry, index: number) => {
-        this.LocalEntry(entry, index < this.localEntries.length - 1);
+  private LocalEntriesList() {
+    List({ space: 8 }) {
+      ForEach(this.localEntries, (entry: LocalFileEntry) => {
+        ListItem() {
+          this.LocalEntry(entry);
+        }
       }, (entry: LocalFileEntry) => entry.path)
       if (this.localEntries.length === 0) {
-        Text('下载位置中没有可直接上传的文件')
-          .width('100%')
-          .fontSize($r('app.float.font_body'))
-          .fontColor($r('app.color.text_secondary'))
-          .textAlign(TextAlign.Center)
-          .padding($r('app.float.space_20'));
+        ListItem() {
+          Text('下载位置中没有可直接上传的文件')
+            .width('100%')
+            .fontSize($r('app.float.font_body'))
+            .fontColor($r('app.color.text_secondary'))
+            .textAlign(TextAlign.Center)
+            .padding($r('app.float.space_20'));
+        }
       }
     }
     .width('100%')
-    .borderRadius($r('app.float.radius_14'))
-    .clip(true);
+    .height('100%')
+    .padding($r('app.float.space_8'))
+    .scrollBar(BarState.Off)
+    .alignListItem(ListItemAlign.Start);
   }
 
   @Builder
@@ -355,6 +429,9 @@ export struct TransferDrawer {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start);
 
+      if (this.compactLayout) {
+        this.FloatingAction('show-remote', '远端', false, (): void => this.switchPrimaryPane('remote'))
+      }
       this.FloatingAction('upload', '上传', true, () => this.onUpload())
     }
     .width('100%')
@@ -365,73 +442,66 @@ export struct TransferDrawer {
         compact: true,
         inset: true,
         radius: $r('app.float.radius_10'),
+        surfaceHeight: 34,
       }) {
-        Text(this.downloadRootPath.length > 0 ? this.downloadRootPath : '未选择下载位置')
+        Row() {
+          Text(this.downloadRootPath.length > 0 ? this.downloadRootPath : '未选择下载位置')
+            .layoutWeight(1)
+            .fontSize($r('app.float.font_caption'))
+            .fontColor($r('app.color.text_secondary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
+        }
           .width('100%')
-          .height('100%')
-          .fontSize($r('app.float.font_caption'))
-          .fontColor($r('app.color.text_secondary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_12') });
+          .height(34)
+          .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_12') })
+          .alignItems(VerticalAlign.Center);
       }
     }
     .width('100%')
-    .height(36)
-    .margin({ top: $r('app.float.space_12'), bottom: $r('app.float.space_8') })
+    .height(34)
+    .margin({ top: $r('app.float.space_6'), bottom: $r('app.float.space_6') })
     .clip(false);
 
-    Stack() {
-      Stack() {
-        FloatingDepthOverlay({
-          inset: true,
-          radius: $r('app.float.radius_14'),
-        });
-
-        if (fillAvailable) {
-          Scroll() {
-            this.LocalEntriesContent();
-          }
-          .width('100%')
-          .height('100%')
-          .scrollBar(BarState.Off);
-        } else {
-          this.LocalEntriesContent();
-        }
-      }
-      .width('100%')
-      .height('100%')
-      .backgroundColor($r('app.color.transparent'))
-      .borderRadius($r('app.float.radius_14'))
-      .clip(false);
+    Stack({ alignContent: Alignment.TopStart }) {
+      FloatingDepthOverlay({
+        inset: true,
+        radius: $r('app.float.radius_14'),
+      });
+      this.LocalEntriesList();
     }
-    .height(fillAvailable ? 0 : this.mobileEntrySurfaceHeight(this.localEntries.length) + 16)
+    .height(fillAvailable ? 0 : 176)
     .layoutWeight(fillAvailable ? 1 : 0)
     .width('100%')
-    .padding({
-      top: $r('app.float.space_8'),
-      bottom: $r('app.float.space_8'),
-    });
+    .backgroundColor($r('app.color.transparent'))
+    .borderRadius($r('app.float.radius_14'))
+    .clip(false);
   }
 
   @Builder
-  private RemoteEntriesContent() {
-    Column({ space: 0 }) {
-      ForEach(this.remoteEntries, (entry: RemoteFileEntry, index: number) => {
-        this.RemoteEntry(entry, index < this.remoteEntries.length - 1);
+  private RemoteEntriesList() {
+    List({ space: 8 }) {
+      ForEach(this.remoteEntries, (entry: RemoteFileEntry) => {
+        ListItem() {
+          this.RemoteEntry(entry);
+        }
       }, (entry: RemoteFileEntry) => `${entry.entry_type}-${entry.name}`)
       if (this.remoteEntries.length === 0) {
-        Text('远端目录为空或正在加载')
-          .width('100%')
-          .fontSize($r('app.float.font_body'))
-          .fontColor($r('app.color.text_secondary'))
-          .textAlign(TextAlign.Center)
-          .padding($r('app.float.space_20'));
+        ListItem() {
+          Text('远端目录为空或正在加载')
+            .width('100%')
+            .fontSize($r('app.float.font_body'))
+            .fontColor($r('app.color.text_secondary'))
+            .textAlign(TextAlign.Center)
+            .padding($r('app.float.space_20'));
+        }
       }
     }
     .width('100%')
-    .borderRadius($r('app.float.radius_14'))
-    .clip(true);
+    .height('100%')
+    .padding($r('app.float.space_8'))
+    .scrollBar(BarState.Off)
+    .alignListItem(ListItemAlign.Start);
   }
 
   @Builder
@@ -449,6 +519,9 @@ export struct TransferDrawer {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start);
 
+      if (this.compactLayout) {
+        this.FloatingAction('show-local', '本机', false, (): void => this.switchPrimaryPane('local'))
+      }
       this.FloatingAction('remote-back', '上级', false, () => this.onRemoteBack())
       this.FloatingAction('download', '下载', true, () => this.onDownload())
     }
@@ -460,53 +533,40 @@ export struct TransferDrawer {
         compact: true,
         inset: true,
         radius: $r('app.float.radius_10'),
+        surfaceHeight: 34,
       }) {
-        Text(this.remoteDirectory)
+        Row() {
+          Text(this.remoteDirectory)
+            .layoutWeight(1)
+            .fontSize($r('app.float.font_caption'))
+            .fontColor($r('app.color.text_secondary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
+        }
           .width('100%')
-          .height('100%')
-          .fontSize($r('app.float.font_caption'))
-          .fontColor($r('app.color.text_secondary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_12') });
+          .height(34)
+          .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_12') })
+          .alignItems(VerticalAlign.Center);
       }
     }
     .width('100%')
-    .height(36)
-    .margin({ top: $r('app.float.space_12'), bottom: $r('app.float.space_8') })
+    .height(34)
+    .margin({ top: $r('app.float.space_6'), bottom: $r('app.float.space_6') })
     .clip(false);
 
-    Stack() {
-      Stack() {
-        FloatingDepthOverlay({
-          inset: true,
-          radius: $r('app.float.radius_14'),
-        });
-
-        if (fillAvailable) {
-          Scroll() {
-            this.RemoteEntriesContent();
-          }
-          .width('100%')
-          .height('100%')
-          .scrollBar(BarState.Off);
-        } else {
-          this.RemoteEntriesContent();
-        }
-      }
-      .width('100%')
-      .height('100%')
-      .backgroundColor($r('app.color.transparent'))
-      .borderRadius($r('app.float.radius_14'))
-      .clip(false);
+    Stack({ alignContent: Alignment.TopStart }) {
+      FloatingDepthOverlay({
+        inset: true,
+        radius: $r('app.float.radius_14'),
+      });
+      this.RemoteEntriesList();
     }
-    .height(fillAvailable ? 0 : this.mobileEntrySurfaceHeight(this.remoteEntries.length) + 16)
+    .height(fillAvailable ? 0 : 176)
     .layoutWeight(fillAvailable ? 1 : 0)
     .width('100%')
-    .padding({
-      top: $r('app.float.space_8'),
-      bottom: $r('app.float.space_8'),
-    });
+    .backgroundColor($r('app.color.transparent'))
+    .borderRadius($r('app.float.radius_14'))
+    .clip(false);
   }
 
   @Builder
@@ -560,92 +620,159 @@ export struct TransferDrawer {
     }
   }
 
-  build() {
-    Stack() {
-      if (this.useWideLayout()) {
-        Column() {
-          Blank()
-            .width('100%')
-            .height(this.titleSpacerHeight)
-            .flexShrink(0);
-
-          Row({ space: $r('app.float.space_16') }) {
-            Column() {
-              this.LocalPaneContent(true);
-            }
-            .layoutWeight(1)
-            .height('100%');
-
-            Column()
-              .width(1)
-              .height('100%')
-              .backgroundColor($r('app.color.divider'));
-
-            Column() {
-              this.RemotePaneContent(true);
-            }
-            .layoutWeight(1)
-            .height('100%');
-
-            Column()
-              .width(1)
-              .height('100%')
-              .backgroundColor($r('app.color.divider'));
-
-            Column() {
-              this.TransferPaneContent(true);
-            }
-            .width(this.viewportWidth >= 1280 ? 300 : 260)
-            .height('100%');
-          }
+  @Builder
+  private TransferTray() {
+    Column() {
+      Row({ space: $r('app.float.space_8') }) {
+        Text('传输任务')
           .layoutWeight(1)
-          .width('100%')
-          .alignItems(VerticalAlign.Top);
+          .fontSize($r('app.float.font_body'))
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'));
+        Text(this.transfers.length > 0 ? `${this.transfers.length} 项` : '暂无任务')
+          .fontSize($r('app.float.font_label'))
+          .fontColor(this.transfers.length > 0
+            ? $r('app.color.brand_primary')
+            : $r('app.color.text_secondary'));
+      }
+      .width('100%')
+      .height(44)
+      .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_16') })
+      .alignItems(VerticalAlign.Center);
+
+      if (this.transfers.length > 0) {
+        Scroll() {
+          this.TransferRowsContent();
         }
+        .layoutWeight(1)
         .width('100%')
-        .height('100%')
-        .alignItems(HorizontalAlign.Start);
-      } else {
-        Scroll(this.scroller) {
-          Column() {
-            Blank()
-              .width('100%')
-              .height(this.titleSpacerHeight)
-              .flexShrink(0);
-
-            Column({ space: $r('app.float.space_24') }) {
-              Column() {
-                this.LocalPaneContent(false);
-              }
-              .width('100%');
-
-              Column() {
-                this.RemotePaneContent(false);
-              }
-              .width('100%');
-
-              Column() {
-                this.TransferPaneContent(false);
-              }
-              .width('100%');
-            }
-            .width('100%')
-            .padding({ bottom: 24 + this.bottomAvoidInset });
-          }
-          .width('100%')
-        }
-        .width('100%')
-        .height('100%')
+        .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_16') })
         .scrollBar(BarState.Off);
       }
     }
     .width('100%')
+    .height('100%')
+    .backgroundColor($r('app.color.background'));
+  }
+
+  @Builder
+  private LocalWorkspacePane() {
+    Column() {
+      this.LocalPaneContent(true);
+    }
+    .width(this.paneWidth())
+    .height('100%')
+    .padding({
+      left: $r('app.float.space_16'),
+      right: this.compactPaneContentRightPadding(),
+      top: $r('app.float.space_8'),
+      bottom: $r('app.float.space_8'),
+    })
+    .backgroundColor($r('app.color.background'))
+    .translate({ x: this.localPaneOffset() })
+    .renderGroup(true)
+    .animation({ duration: 320, curve: Curve.FastOutSlowIn });
+  }
+
+  @Builder
+  private RemoteWorkspacePane() {
+    Column() {
+      this.RemotePaneContent(true);
+    }
+    .width(this.paneWidth())
+    .height('100%')
+    .padding({
+      left: $r('app.float.space_16'),
+      right: this.compactPaneContentRightPadding(),
+      top: $r('app.float.space_8'),
+      bottom: $r('app.float.space_8'),
+    })
+    .backgroundColor($r('app.color.background'))
+    .translate({ x: this.remotePaneOffset() })
+    .renderGroup(true)
+    .animation({ duration: 320, curve: Curve.FastOutSlowIn });
+  }
+
+  @Builder
+  private CompactPaneMask(leftEdge: boolean) {
+    Column()
+    .width(this.compactPeekWidth())
+    .height('100%')
+    .backgroundColor($r('app.color.surface_secondary'))
+    .border({
+      width: leftEdge ? { right: 1 } : { left: 1 },
+      color: $r('app.color.divider'),
+    })
+    .hitTestBehavior(HitTestMode.None)
+    .accessibilityLevel('no');
+  }
+
+  @Builder
+  private FileWorkspace() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      this.LocalWorkspacePane();
+      this.RemoteWorkspacePane();
+
+      Column()
+        .width(1)
+        .height('100%')
+        .backgroundColor($r('app.color.divider'))
+        .translate({ x: this.dividerOffset() })
+        .animation({ duration: 320, curve: Curve.FastOutSlowIn });
+
+      if (this.compactLayout && this.primaryPane === 'remote') {
+        this.CompactPaneMask(true);
+      } else if (this.compactLayout) {
+        Row() {
+          this.CompactPaneMask(false);
+        }
+        .width(this.compactPeekWidth())
+        .height('100%')
+        .translate({ x: this.viewportWidth - this.compactPeekWidth() });
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .clip(true);
+  }
+
+  build() {
+    Column() {
+      Blank()
+        .width('100%')
+        .height(this.titleSpacerHeight)
+        .flexShrink(0);
+
+      Column() {
+        Stack() {
+          this.FileWorkspace();
+        }
+        .layoutWeight(1)
+        .width('100%')
+        .clip(true);
+
+        Column()
+          .width('100%')
+          .height(1)
+          .backgroundColor($r('app.color.divider'));
+
+        Column() {
+          this.TransferTray();
+        }
+        .width('100%')
+        .height(this.transferTrayHeight())
+        .animation({ duration: 260, curve: Curve.FastOutSlowIn });
+      }
+      .layoutWeight(1)
+      .width('100%')
+      .padding({ bottom: this.bottomAvoidInset });
+    }
+    .width('100%')
+    .height('100%')
     .layoutWeight(1)
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       const width = Number(newArea.width);
-      if (width > 0) {
-        this.viewportWidth = width;
-      }
+      this.updateViewportWidth(width);
     });
   }
 }
