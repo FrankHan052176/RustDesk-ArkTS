@@ -1,159 +1,124 @@
-# RustDesk Core → HAR → ArkTS GitHub Actions 链路
+# RustDesk HAR → ArkTS GitHub Actions 链路
 
-这套链路只负责 HarmonyOS 主控客户端的内核 HAR 与 App 构建，不包含 2in1 被控端、录屏或本地输入注入能力。
+这套链路只负责 HarmonyOS 主控客户端的 Core HAR 与签名 App 构建，不包含 2in1 被控端、录屏或本地输入注入能力。
 
 ```mermaid
 flowchart LR
-  A["rustdesk4ohos / master"] -->|repository_dispatch + Core SHA| B["RustDeskHar / main"]
-  B -->|构建 arm64 HAR| C["私有 OHPM"]
-  B -->|repository_dispatch + 精确版本 + integrity| D["RustDesk-ArkTS / main"]
-  C -->|只读 Token 拉取精确版本| D
-  E["私有签名仓库<br/>仅保存加密归档"] -->|固定 commit + 只读 Token| D
-  D -->|assembleApp| F["签名 App + build-receipt.json"]
+  A["RustDesk Core"] -->|轮询或 HAR 仓提交/PR 合入| B["RustDeskHar / main"]
+  B -->|构建并发布 + latest| C["CodeArts 私有 OHPM"]
+  B -->|repository_dispatch，不携带版本| D["RustDesk-ArkTS / main"]
+  C -->|隔离解析 latest 的精确版本| D
+  E["AppGallerySigning 私有仓"] -->|固定 commit + 只读 Token| D
+  D -->|assembleApp publish/release| F["签名 App + build-receipt.json"]
 ```
 
-## 设计约束
+## 发布端固定流程
 
-- 跨仓触发使用 `repository_dispatch`。`GITHUB_TOKEN` 不能直接驱动另一个仓库，因此 Core 和 HAR 各自使用一个只允许访问目标仓库的 fine-grained token。
-- HAR 版本不是 `latest`。每次构建生成形如 `0.1.0-ci.<run>.<attempt>.g<core-sha>` 的唯一版本，ArkTS 只安装事件中携带的精确版本。
-- HAR 内嵌 `BUILD_PROVENANCE.json`，包含 Core commit、HAR 源码 commit 和 Action 地址。
-- 发布端计算 HAR 的 SHA-256 与 OHPM `sha512-...` integrity。ArkTS 安装后必须用 lockfile 核对包名、精确版本与 integrity，再核对包内 provenance。
-- `core-latest` 只作为人工查询指针，自动构建不依赖它。
-- 自动链路默认执行 `assembleApp product=default buildMode=debug`。可通过 ArkTS 仓库变量改成 `publish/release`，手动运行也可选择；`publish` 在这里仍然只代表 App 级 `assembleApp` 产品。
+RustDeskHar 的唯一 workflow 同时覆盖四种触发：
 
-## 默认分支合入顺序
+- 每 10 分钟轮询 Core `master`；标准 `latest` 已包含同一 Core 8 位 SHA 时直接跳过。
+- HAR `main` 的直接 commit 或 PR merge push：强制重新构建、发布并 dispatch。
+- HAR pull request：只构建和上传 HAR artifact，不读取发布 Secret。
+- 手动运行：强制重建，用于恢复发布或 dispatch。
 
-`repository_dispatch` 只会运行目标仓库默认分支上已经存在的 workflow，首次启用必须按以下顺序：
+版本与 EasyTier 使用同一格式：
 
-1. 先将 ArkTS 的 `.github/workflows/build-private-har.yml` 合入 `main`，配置私有 OHPM 与签名环境。
-2. 再将 HAR 的 `.github/workflows/publish-private-ohpm.yml` 合入 `main`，完成一次手动发布并确认 ArkTS 被唤醒。
-3. 最后将 Core 的 `.github/workflows/dispatch-harmonyos-har.yml` 合入 `master`，开启每次 Core 主分支提交的自动链路。
+```text
+<Core版本>-<最近语义版本tag之后的提交数>-<Action序号>-<重试序号>-g<8位Core SHA>
+```
 
-## GitHub 配置矩阵
+OHPM 6.1.2.285 把 `latest` 作为预设标签，禁止显式 `--tag latest` 或 `@tag:latest`。因此发布端执行普通 `ohpm publish`，再轮询 `dist-tags list`，只有 `latest` 确实指向本次唯一版本时才 dispatch。若先行版本排序使 `latest` 没有移动，workflow 会明确失败，不会让 ArkTS 安装旧包。
 
-### `FrankHan052176/rustdesk4ohos`
+旧的 self-hosted 与重复 Ubuntu HAR workflows 已删除，避免同一提交三重构建。
+
+## 消费端固定流程
+
+ArkTS workflow 只接受 `rustdesk-har-published` dispatch，也保留一个不带版本的手动恢复入口。dispatch payload 为：
+
+```json
+{
+  "har_repository": "FrankHan052176/RustDeskHar",
+  "core_repository": "FrankHan052176/rustdesk4ohos",
+  "core_ref": "refs/heads/master",
+  "package_name": "rustdesk-ohrs"
+}
+```
+
+消费端不信任 payload 中的精确版本，也不使用无版本安装或 `@tag:latest`：
+
+1. 在只有一个空 manifest 的临时 OHPM 工程中，用指定私仓执行 `ohpm dist-tags list rustdesk-ohrs`。
+2. 从标准 `latest: <version>` 输出取得精确版本，并在日志打印 `Core HAR latest` 与 `Core HAR spec`。
+3. 仅在该临时工程执行 `ohpm install rustdesk-ohrs@<version> --registry <CodeArts>`。
+4. 校验包名、版本、OHPM integrity、原生动态库和 `BUILD_PROVENANCE.json`。
+5. 把已安装包复制为 checkout 内的本地 `file:` 依赖，立即删除私仓配置和临时工程。
+6. 不带 `--registry` 执行普通 `ohpm install --all`，安装 `@ohos/hypium`、Luminous Neo 等其余依赖。
+7. 固定执行 App 级 `assembleApp product=publish buildMode=release`，校验并上传签名 `.app` 与构建回执。
+
+这层隔离避免 `--registry` 把整个应用依赖图都发往 Core 私仓。OHPM 6.1.2.285 不能可靠地用 `@tag:latest` 安装；直接无版本安装还可能在带数字的先行版本之间按字典序选中旧包，因此必须先解析标签，再安装精确版本。
+
+## HAR GitHub 配置
+
+`FrankHan052176/RustDeskHar` 需要：
 
 | 类型 | 名称 | 最小权限/值 |
 |---|---|---|
-| Secret | `HAR_DISPATCH_TOKEN` | fine-grained token；仅 `FrankHan052176/RustDeskHar`，`Contents: Read and write` |
-| Variable | `HAR_REPOSITORY` | 可选，默认 `FrankHan052176/RustDeskHar` |
-
-### `FrankHan052176/RustDeskHar`
-
-建议创建 Environment：`ohpm-publish`，并限制为 `main`。
-
-| 类型 | 名称 | 最小权限/值 |
-|---|---|---|
-| Environment Secret | `OHPM_PUBLISH_CONFIG` | 完整的发布端 `.ohpmrc`；使用私仓读写 AccessToken |
-| Environment Secret | `ARKTS_DISPATCH_TOKEN` | fine-grained token；仅 `FrankHan052176/RustDesk-ArkTS`，`Contents: Read and write` |
+| Secret | `CODEARTS_PRIVATE_OHPM` | 发布端完整 `.ohpmrc`，具备私仓读写权限 |
+| Secret | `DOWNSTREAM_DISPATCH_TOKEN` | 只授予 `FrankHan052176/RustDesk-ArkTS` `Contents: Read and write` 的 fine-grained token |
 | Variable | `CORE_REPOSITORY` | 可选，默认 `FrankHan052176/rustdesk4ohos` |
+| Variable | `CORE_REF` | 可选，默认 `master` |
 | Variable | `ARKTS_REPOSITORY` | 可选，默认 `FrankHan052176/RustDesk-ArkTS` |
 
-### `FrankHan052176/RustDesk-ArkTS`
+## ArkTS GitHub 配置
 
-建议创建 Environment：`harmonyos-ci-signing`，限制为 `main`；若启用 `publish/release`，再考虑 required reviewers。
+workflow 使用 `harmonyos-ci-signing` Environment；Secret 可配置在仓库级，或配置在该 Environment 并限制到默认分支。
 
 | 类型 | 名称 | 最小权限/值 |
 |---|---|---|
-| Environment Secret | `OHPM_READ_CONFIG` | 完整的消费端 `.ohpmrc`；只读 AccessToken |
-| Environment Secret | `SIGNING_REPO_TOKEN` | fine-grained token；只对签名私仓开放 `Contents: Read` |
-| Environment Secret | `SIGNING_BUNDLE_PASSWORD` | 加密签名归档的独立高强度密码 |
-| Variable | `SIGNING_REPOSITORY` | 私有签名仓库，例如 `FrankHan052176/HarmonyOS-Signing` |
-| Variable | `SIGNING_REPOSITORY_REF` | 签名仓库的完整 40 位 commit SHA，不使用可移动分支或 tag |
-| Variable | `SIGNING_BUNDLE_PATH` | 可选，默认 `rustdesk/signing-bundle.tar.gz.enc` |
-| Variable | `LUMINOUS_NEO_PACKAGE` | 可选，默认 `luminous_neo` |
-| Variable | `LUMINOUS_NEO_VERSION` | 必填；私有 OHPM 中的精确版本 |
+| Secret | `CODEARTS_PRIVATE_OHPM_READ` | CodeArts 私仓只读认证配置 |
+| Secret | `SIGNING_REPOSITORY_TOKEN` | 仅能读取签名私仓的 fine-grained token |
 | Variable | `HAR_REPOSITORY` | 可选，默认 `FrankHan052176/RustDeskHar` |
-| Variable | `ARKTS_CI_PRODUCT` | 可选，自动链路默认 `default`，也可设为 `publish` |
-| Variable | `ARKTS_CI_BUILD_MODE` | 可选，自动链路默认 `debug`，也可设为 `release` |
+| Variable | `CORE_REPOSITORY` | 可选，默认 `FrankHan052176/rustdesk4ohos` |
+| Variable | `SIGNING_REPOSITORY` | 可选，默认 `FrankHan052176/AppGallerySigning` |
+| Variable | `SIGNING_REPOSITORY_REF` | 可选；默认固定到已验证的 RustDesk 签名提交 `70779bd9e42c8565772dd8c43c80b89a197c3369` |
+| Variable | `LUMINOUS_NEO_PACKAGE` | 可选，默认 `luminous_neo` |
+| Variable | `LUMINOUS_NEO_VERSION` | 可选，默认 `1.0.0`；普通 OHPM registry 可访问的精确 SemVer |
+| Variable | `ENABLE_AGC_SIGNED_APP_UPLOAD` | 保持未设置；真实 AGC 上传实现后才可设为 `true` |
+| Variable | `ENABLE_AGC_TEST_RELEASE` | 保持未设置；真实 AGC 测试发布实现后才可设为 `true` |
 
-说明：fine-grained token 调用 `POST /repos/{owner}/{repo}/dispatches` 时，目标仓库需要 `Contents: Read and write`。不要复用 OHPM Token、签名仓 Token或两个 dispatch Token。
-
-## OHPM Secret 内容
-
-`OHPM_PUBLISH_CONFIG` 示例：
-
-```ini
-registry=https://ohpm-private.example.com/repos/ohpm/,https://ohpm.openharmony.cn/ohpm/
-publish_registry=https://ohpm-private.example.com/repos/ohpm/
-//ohpm-private.example.com/repos/ohpm/:_auth=REPLACE_WITH_READ_WRITE_TOKEN
-strict_ssl=true
-lockfile_stable_order=true
-```
-
-`OHPM_READ_CONFIG` 示例：
+`CODEARTS_PRIVATE_OHPM_READ` 保存完整认证片段，例如：
 
 ```ini
-registry=https://ohpm-private.example.com/repos/ohpm/,https://ohpm.openharmony.cn/ohpm/
-//ohpm-private.example.com/repos/ohpm/:_read_auth=REPLACE_WITH_READ_ONLY_TOKEN
+//devrepo.devcloud.cn-north-4.huaweicloud.com/artgalaxy/api/ohpm/cn-north-4_c07b1b38744f424b8d87a86532d38003_ohpm_1/:_read_auth=REPLACE_WITH_READ_ONLY_TOKEN
 strict_ssl=true
-lockfile_stable_order=true
 ```
 
-AccessToken 左侧的仓库地址必须去掉 `https:`，并保留仓库路径末尾的 `/`。私仓应排在公共仓之前，公共仓作为 `@ohos/hypium` 等依赖的后备源。不要把真实 `.ohpmrc` 写入仓库；两个工程都已忽略根目录 `.ohpmrc`。
+工作流中的 Core registry 已固定为：
 
-ArkTS Action 同时从私仓安装 `rustdesk-ohrs` 与 `luminous_neo`。因此启用链路前，必须先将当前 Luminous Neo HAR 发布到同一私仓，并把其精确版本写入 `LUMINOUS_NEO_VERSION`；源码中的本地文件依赖只保留给本机开发，CI 会在临时 checkout 中改写。
+```text
+https://devrepo.devcloud.cn-north-4.huaweicloud.com/artgalaxy/api/ohpm/cn-north-4_c07b1b38744f424b8d87a86532d38003_ohpm_1/
+```
+
+Secret 可以包含 `registry=`，但该配置只在隔离 Core 解析步骤中存在；进入普通依赖安装前一定会删除。不要把真实 Token 或 `.ohpmrc` 提交到仓库。
+
+Luminous Neo 由普通 `ohpm install` 解析，不能依赖仅在 Core 隔离步骤中存在的 CodeArts registry。上传后应把可由普通 registry 访问的精确版本写入 `LUMINOUS_NEO_VERSION`。源码中的本地 HAR 路径仍保留给本机开发，CI 只在临时 checkout 中改写。
 
 ## 私有签名仓库
 
-私有仓库中不提交裸 `.p12` 或可直接使用的密码，只提交加密归档：
+签名材料放在独立私有仓库中，RustDesk 使用自己的 debug/publish Profile：
 
 ```text
-HarmonyOS-Signing (private)
-└── rustdesk/
-    └── signing-bundle.tar.gz.enc
+AppGallerySigning (private)
+├── FrankHan.p12
+├── FrankHan_Debug.cer
+├── FrankHan_Publish.cer
+└── RustDesk/
+    ├── signingConfigs.json
+    ├── RustDesk_DebugDebug.p7b
+    └── RustDesk_PublishRelease.p7b
 ```
 
-归档解密后的固定结构：
+`.github/scripts/prepare-signing-config.sh` 只在 runner 临时目录生成绝对路径配置，`hvigorfile.ts` 在配置阶段注入 `default` 与 `publish` 签名。构建结束后会删除签名 checkout、临时配置、私仓认证和 vendored Core 包。
 
-```text
-signingConfigs.json
-materials/
-├── debug.cer
-├── debug.p7b
-├── publish.cer
-├── publish.p7b
-└── signing.p12
-```
+## AGC 占位
 
-`signingConfigs.json` 只保存原 `app.signingConfigs` 数组，不包含 `app`、`products`、`buildModeSet` 或 `modules`。数组必须同时包含名为 `default` 与 `publish` 的配置。所有签名文件路径使用 `__SIGNING_ROOT__` 占位，例如：
-
-```json5
-"storeFile": "__SIGNING_ROOT__/materials/signing.p12",
-"profile": "__SIGNING_ROOT__/materials/publish.p7b",
-"certpath": "__SIGNING_ROOT__/materials/publish.cer"
-```
-
-`storePassword`、`keyPassword` 和 `keyAlias` 也只存在于这个加密归档内部。归档命令必须与 Action 的解密参数一致：
-
-```bash
-signing_stage="$(mktemp -d)"
-signing_archive="$(mktemp)"
-
-# 将 signingConfigs.json 与 materials/ 放入 $signing_stage 后执行：
-tar -C "$signing_stage" -czf "$signing_archive" .
-openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 \
-  -in "$signing_archive" \
-  -out rustdesk/signing-bundle.tar.gz.enc
-```
-
-公开仓库中的 `build-profile.json5` 不包含 `signingConfigs`，product 也不包含 `signingConfig`。Action 解密归档后只把临时目录写入 `RUSTDESK_SIGNING_DIR`；`hvigorfile.ts` 在配置阶段读取并校验 `signingConfigs.json`，再将签名配置注入内存中的构建模型，不覆盖或生成受 Git 跟踪的 `build-profile.json5`。
-
-加密时输入的密码保存为 ArkTS Environment Secret `SIGNING_BUNDLE_PASSWORD`。提交加密文件后，将该提交的完整 SHA 配置到 `SIGNING_REPOSITORY_REF`。Action 只把归档解密到 runner 临时目录，构建结束删除解密目录与 OHPM 配置。
-
-## 首次启用与恢复
-
-1. 在 HAR 仓库手动运行 `Publish RustDesk HAR to private OHPM`，`core_ref` 建议先填一个完整 Core SHA。
-2. 确认 HAR artifact 内含 `package/BUILD_PROVENANCE.json`，私仓出现唯一版本，随后 ArkTS Action 自动启动。
-3. 在 ArkTS artifact 中检查 `build-receipt.json`：Core SHA、HAR SHA、OHPM integrity、ArkTS SHA、Luminous Neo 版本和 App SHA-256 应完整存在。
-4. 最后启用 Core dispatcher。之后 Core `master` 每次 push 会自动走完整链路。
-
-如果 HAR 已发布而 ArkTS dispatch 失败，可手动运行 ArkTS workflow，填入已发布的精确版本；同时填写 HAR workflow artifact 中 `release-metadata.json` 的 Core SHA、SHA-256 与 integrity，可恢复同一构建而不依赖移动标签。
-
-## 分支与密钥保护
-
-- 三个 workflow 必须经 PR 合入默认分支；对 Core `master`、HAR `main`、ArkTS `main` 开启 branch protection。
-- 不允许 fork PR 获得任何密钥；当前发布与签名 workflow 不监听 `pull_request`。
-- 对 Actions 设置 allow list，至少固定到当前 workflow 中已 pin 的 commit。
-- 签名仓 Token 只有只读权限；OHPM 消费端只用只读 Token；发布 Token只存在 HAR 的 `ohpm-publish` Environment。
-- 私有签名仓即使泄露也只有加密归档；解密密码与仓库访问 Token必须分别轮换。
+签名 App artifact 上传完成后有两个显式占位步骤：AGC App 上传、AGC 测试发布。当前没有任何 AGC 写入实现；如果误把对应变量设为 `true`，步骤会明确失败，避免把空占位误判为已上传或已发布。

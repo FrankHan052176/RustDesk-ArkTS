@@ -5,7 +5,6 @@ import { appTasks, OhosAppContext, OhosPluginId } from '@ohos/hvigor-ohos-plugin
 
 const SIGNING_DIRECTORY_ENV = 'RUSTDESK_SIGNING_DIR';
 const SIGNING_CONFIG_FILE = 'signingConfigs.json';
-const SIGNING_ROOT_PLACEHOLDER = '__SIGNING_ROOT__';
 
 interface SigningMaterial {
   storeFile: string;
@@ -79,7 +78,7 @@ function parseSigningConfig(value: unknown): SigningConfig {
   return config;
 }
 
-function assertMaterialFile(materialRoot: string, filePath: string, fieldName: string): void {
+function assertMaterialFile(filePath: string, fieldName: string): void {
   if (!path.isAbsolute(filePath)) {
     throw new Error(`Signing material ${fieldName} must resolve to an absolute path.`);
   }
@@ -90,26 +89,16 @@ function assertMaterialFile(materialRoot: string, filePath: string, fieldName: s
   } catch {
     throw new Error(`Signing material ${fieldName} is missing or unreadable.`);
   }
-  const relativePath = path.relative(materialRoot, realFilePath);
-  if (relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
-    throw new Error(`Signing material ${fieldName} must stay inside the materials directory.`);
-  }
   if (!fs.statSync(realFilePath).isFile()) {
     throw new Error(`Signing material ${fieldName} must be a regular file.`);
   }
 }
 
-function validateSigningMaterials(signingRoot: string, configs: SigningConfig[]): void {
-  let materialRoot: string;
-  try {
-    materialRoot = fs.realpathSync(path.join(signingRoot, 'materials'));
-  } catch {
-    throw new Error('RUSTDESK_SIGNING_DIR must contain a readable materials directory.');
-  }
+function validateSigningMaterials(configs: SigningConfig[]): void {
   for (const config of configs) {
-    assertMaterialFile(materialRoot, config.material.storeFile, `${config.name}.storeFile`);
-    assertMaterialFile(materialRoot, config.material.profile, `${config.name}.profile`);
-    assertMaterialFile(materialRoot, config.material.certpath, `${config.name}.certpath`);
+    assertMaterialFile(config.material.storeFile, `${config.name}.storeFile`);
+    assertMaterialFile(config.material.profile, `${config.name}.profile`);
+    assertMaterialFile(config.material.certpath, `${config.name}.certpath`);
   }
 }
 
@@ -127,16 +116,9 @@ function loadSigningConfigs(): SigningConfig[] | undefined {
   } catch {
     throw new Error('RUSTDESK_SIGNING_DIR must contain a readable signingConfigs.json file.');
   }
-  if (!rawConfig.includes(SIGNING_ROOT_PLACEHOLDER)) {
-    throw new Error('signingConfigs.json must reference materials through __SIGNING_ROOT__.');
-  }
-
-  const portableSigningRoot = signingRoot.replace(/\\/g, '/');
   let parsedConfig: unknown;
   try {
-    parsedConfig = JSON.parse(
-      rawConfig.split(SIGNING_ROOT_PLACEHOLDER).join(portableSigningRoot)
-    ) as unknown;
+    parsedConfig = JSON.parse(rawConfig) as unknown;
   } catch {
     throw new Error('signingConfigs.json must contain valid JSON.');
   }
@@ -156,7 +138,7 @@ function loadSigningConfigs(): SigningConfig[] | undefined {
     throw new Error('signingConfigs.json must contain default and publish configurations.');
   }
 
-  validateSigningMaterials(signingRoot, configs);
+  validateSigningMaterials(configs);
   return configs;
 }
 
