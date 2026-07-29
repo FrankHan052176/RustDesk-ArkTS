@@ -152,12 +152,23 @@ jobs:
           AGC_CLIENT_SECRET: ${{ secrets.AGC_CLIENT_SECRET }}
           AGC_APP_ID: ${{ secrets.AGC_APP_ID }}
           AGC_APP_FILE: ${{ steps.app.outputs.path }}
+          AGC_PERMISSION_VIDEO_FILE: ${{ github.workspace }}/.github/assets/permission-intro-intercept-input.mp4
+          AGC_RESULT_FILE: ${{ github.workspace }}/ci-output/agc-release.json
           AGC_EVENT_NAME: ${{ github.event_name }}
           AGC_RUN_ATTEMPT: ${{ github.run_attempt }}
           AGC_CORE_HAR_VERSION: ${{ steps.ohpm.outputs.core_har_version }}
           AGC_PUSH_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
           AGC_WORKFLOW_SHA: ${{ github.sha }}
         run: .github/scripts/agc-test-release.sh "$AGC_APP_FILE"
+
+      - name: Upload AGC result
+        if: ${{ always() && env.AGC_ENABLED == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: RustDesk-${{ steps.ohpm.outputs.core_har_version }}-agc-ids
+          path: ci-output/agc-release.json
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Cleanup
         if: always()
