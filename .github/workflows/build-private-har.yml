@@ -55,14 +55,14 @@ jobs:
 
           ohpm uninstall rustdesk-ohrs
           echo "Installing Core HAR: $CORE_HAR_PACKAGE"
-          ohpm install "$CORE_HAR_PACKAGE" \
+          ohpm install "${CORE_HAR_PACKAGE}@latest" \
             --registry "$CORE_HAR_REGISTRY" \
             --retry_times 5 \
             --retry_interval 3000
           (
             cd entry
             ohpm uninstall luminous_neo
-            ohpm install luminous_neo@1.0.0 \
+            ohpm install luminous_neo@latest \
               --registry "$CORE_HAR_REGISTRY" \
               --retry_times 5 \
               --retry_interval 3000
