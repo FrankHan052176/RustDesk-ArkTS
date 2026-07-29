@@ -85,13 +85,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          ohpm install
-
           rm -f entry/oh-package-lock.json5
           rm -rf entry/oh_modules
           jq '.dependencies.luminous_neo = "1.0.0"' \
             entry/oh-package.json5 > "$RUNNER_TEMP/entry-oh-package.json5"
           mv "$RUNNER_TEMP/entry-oh-package.json5" entry/oh-package.json5
+
+          ohpm install
           (
             cd entry
             ohpm install
