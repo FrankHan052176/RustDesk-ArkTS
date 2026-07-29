@@ -162,7 +162,7 @@ case "$event_name" in
     test_desc="${AGC_WORKFLOW_SHA:-unknown}"
     ;;
 esac
-test_desc="${test_desc:0:50}"
+test_desc="${test_desc:0:30}"
 need_notify=0
 if [[ "$event_name" == "push" && "$run_attempt" == "1" ]]; then
   need_notify=1
