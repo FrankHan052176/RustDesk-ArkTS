@@ -20,6 +20,10 @@ env:
   CORE_HAR_REGISTRY: https://devrepo.devcloud.cn-north-4.huaweicloud.com/artgalaxy/api/ohpm/cn-north-4_c07b1b38744f424b8d87a86532d38003_ohpm_1/
   SIGNING_REPOSITORY: ${{ vars.SIGNING_REPOSITORY || 'FrankHan052176/AppGallerySigning' }}
   SIGNING_REPOSITORY_REF: ${{ vars.SIGNING_REPOSITORY_REF || '70779bd9e42c8565772dd8c43c80b89a197c3369' }}
+  AGC_ENABLED: ${{ secrets.AGC_CLIENT_ID != '' && secrets.AGC_CLIENT_SECRET != '' && secrets.AGC_APP_ID != '' }}
+  AGC_API_DOMAIN: ${{ vars.AGC_API_DOMAIN || 'connect-api.cloud.huawei.com' }}
+  AGC_TEST_TYPE: ${{ vars.AGC_TEST_TYPE || '3' }}
+  AGC_TEST_DESC: ${{ vars.AGC_TEST_DESC || '' }}
 
 jobs:
   build:
@@ -45,6 +49,7 @@ jobs:
           cache: true
 
       - name: ohpm
+        id: ohpm
         shell: bash
         env:
           CODEARTS_PRIVATE_OHPM_READ: ${{ secrets.CODEARTS_PRIVATE_OHPM_READ }}
@@ -74,6 +79,10 @@ jobs:
             cd entry
             ohpm install
           )
+
+          core_har_version="$(jq -er '.version' "oh_modules/${CORE_HAR_PACKAGE}/oh-package.json5")"
+          echo "Core HAR version: $core_har_version"
+          echo "core_har_version=$core_har_version" >> "$GITHUB_OUTPUT"
 
       - name: Sign
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -109,6 +118,8 @@ jobs:
       - name: Upload prep
         id: app
         shell: bash
+        env:
+          CORE_HAR_VERSION: ${{ steps.ohpm.outputs.core_har_version }}
         run: |
           set -euo pipefail
 
@@ -119,26 +130,31 @@ jobs:
           fi
 
           mkdir -p ci-output
-          output_app="ci-output/RustDesk-publish-release-signed.app"
+          output_app="ci-output/RustDesk-${CORE_HAR_VERSION}.app"
           cp "$signed_app" "$output_app"
           echo "path=$output_app" >> "$GITHUB_OUTPUT"
 
       - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: RustDesk-publish-release-signed-app
+          name: RustDesk-${{ steps.ohpm.outputs.core_har_version }}.app
           path: ${{ steps.app.outputs.path }}
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
 
-      - name: AGC upload placeholder
-        if: ${{ vars.ENABLE_AGC_UPLOAD == 'true' }}
-        run: echo "AGC signed App upload is not configured yet."
-
-      - name: AGC test placeholder
-        if: ${{ vars.ENABLE_AGC_TEST == 'true' }}
-        run: echo "AGC test release is not configured yet."
+      - name: Upload and submit AGC test version
+        if: ${{ env.AGC_ENABLED == 'true' }}
+        id: agc
+        env:
+          AGC_CLIENT_ID: ${{ secrets.AGC_CLIENT_ID }}
+          AGC_CLIENT_SECRET: ${{ secrets.AGC_CLIENT_SECRET }}
+          AGC_APP_ID: ${{ secrets.AGC_APP_ID }}
+          AGC_API_DOMAIN: ${{ env.AGC_API_DOMAIN }}
+          AGC_TEST_TYPE: ${{ env.AGC_TEST_TYPE }}
+          AGC_TEST_DESC: ${{ env.AGC_TEST_DESC }}
+          AGC_APP_FILE: ${{ steps.app.outputs.path }}
+        run: .github/scripts/agc-test-release.sh "$AGC_APP_FILE"
 
       - name: Cleanup
         if: always()

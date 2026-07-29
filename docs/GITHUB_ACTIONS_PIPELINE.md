@@ -35,7 +35,7 @@ ArkTS workflow 只接受 `rustdesk-har-published` dispatch，并保留手动恢�
    hvigorw assembleApp -p product=publish -p buildMode=release
    ```
 
-6. 找到并上传签名 `.app` artifact。
+6. 找到并上传名为 `RustDesk-${完整 HAR 版本}.app` 的签名 artifact。
 
 ## GitHub 配置
 
@@ -57,6 +57,6 @@ strict_ssl=true
 
 不要把真实 Token 或 `.ohpmrc` 提交到仓库。
 
-## AGC 占位
+## AGC 测试发布
 
-签名 App artifact 上传完成后保留两个禁用步骤：AGC 签名 App 上传与 AGC 测试发布。它们目前不执行任何外部写入，后续接入 AGC 凭据和 API 后再启用。
+配置三个 AGC Secret 后，workflow 会调用 `.github/scripts/agc-test-release.sh` 上传并提交邀请测试版本；缺少任一 Secret 时跳过该步骤，仅保留签名 App artifact。
