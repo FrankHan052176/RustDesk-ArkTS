@@ -43,12 +43,12 @@ workflow 使用 `harmonyos-ci-signing` Environment。
 
 | 类型 | 名称 | 用途 |
 |---|---|---|
-| Secret | `CODEARTS_PRIVATE_OHPM` | CodeArts 私仓只读认证配置 |
+| Secret | `CODEARTS_PRIVATE_OHPM_READ` | CodeArts 私仓只读认证配置 |
 | Secret | `SIGNING_REPOSITORY_TOKEN` | 读取签名私仓 |
 | Variable | `SIGNING_REPOSITORY` | 可选，默认 `FrankHan052176/AppGallerySigning` |
 | Variable | `SIGNING_REPOSITORY_REF` | 可选，默认固定到已验证的签名提交 |
 
-`CODEARTS_PRIVATE_OHPM` 保存私仓认证片段，例如：
+`CODEARTS_PRIVATE_OHPM_READ` 保存私仓认证片段，例如：
 
 ```ini
 //devrepo.devcloud.cn-north-4.huaweicloud.com/artgalaxy/api/ohpm/cn-north-4_c07b1b38744f424b8d87a86532d38003_ohpm_1/:_read_auth=REPLACE_WITH_READ_ONLY_TOKEN

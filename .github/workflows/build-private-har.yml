@@ -47,11 +47,11 @@ jobs:
       - name: ohpm
         shell: bash
         env:
-          CODEARTS_PRIVATE_OHPM: ${{ secrets.CODEARTS_PRIVATE_OHPM }}
+          CODEARTS_PRIVATE_OHPM_READ: ${{ secrets.CODEARTS_PRIVATE_OHPM_READ }}
         run: |
           private_config="$HOME/.ohpm/.ohpmrc"
           mkdir -p "$HOME/.ohpm"
-          printf '%s' "$CODEARTS_PRIVATE_OHPM" > "$private_config"
+          printf '%s' "$CODEARTS_PRIVATE_OHPM_READ" > "$private_config"
 
           ohpm uninstall rustdesk-ohrs
           echo "Installing Core HAR: $CORE_HAR_PACKAGE"
