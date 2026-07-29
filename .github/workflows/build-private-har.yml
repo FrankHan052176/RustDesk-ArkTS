@@ -1,4 +1,4 @@
-name: Build ArkTS with latest RustDesk HAR
+name: ohos
 
 on:
   repository_dispatch:
@@ -16,323 +16,97 @@ permissions:
 
 env:
   OHOS_COMMAND_LINE_TOOLS_VERSION: 6.1.1.280
-  CORE_HAR_PACKAGE: rustdesk-ohrs
+  CORE_HAR_PACKAGE: ${{ github.event.client_payload.package_name || inputs.package_name || 'rustdesk-ohrs' }}
   CORE_HAR_REGISTRY: https://devrepo.devcloud.cn-north-4.huaweicloud.com/artgalaxy/api/ohpm/cn-north-4_c07b1b38744f424b8d87a86532d38003_ohpm_1/
+  SIGNING_REPOSITORY: ${{ vars.SIGNING_REPOSITORY || 'FrankHan052176/AppGallerySigning' }}
+  SIGNING_REPOSITORY_REF: ${{ vars.SIGNING_REPOSITORY_REF || '70779bd9e42c8565772dd8c43c80b89a197c3369' }}
 
 jobs:
-  build-app:
-    name: Resolve latest HAR and assemble publish App
+  build:
+    name: build
     runs-on: ubuntu-22.04
     environment: harmonyos-ci-signing
     steps:
-      - name: Validate build request
-        id: request
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          PAYLOAD_PACKAGE_NAME: ${{ github.event.client_payload.package_name }}
-          PAYLOAD_HAR_REPOSITORY: ${{ github.event.client_payload.har_repository }}
-          PAYLOAD_CORE_REPOSITORY: ${{ github.event.client_payload.core_repository }}
-          PAYLOAD_CORE_REF: ${{ github.event.client_payload.core_ref }}
-          INPUT_PACKAGE_NAME: ${{ inputs.package_name }}
-          EXPECTED_HAR_REPOSITORY: ${{ vars.HAR_REPOSITORY }}
-          EXPECTED_CORE_REPOSITORY: ${{ vars.CORE_REPOSITORY }}
-          LUMINOUS_PACKAGE: ${{ vars.LUMINOUS_NEO_PACKAGE }}
-          LUMINOUS_VERSION: ${{ vars.LUMINOUS_NEO_VERSION }}
-          SIGNING_REPOSITORY: ${{ vars.SIGNING_REPOSITORY }}
-          SIGNING_REPOSITORY_REF: ${{ vars.SIGNING_REPOSITORY_REF }}
-        run: |
-          set -euo pipefail
-
-          expected_har_repository="${EXPECTED_HAR_REPOSITORY:-FrankHan052176/RustDeskHar}"
-          expected_core_repository="${EXPECTED_CORE_REPOSITORY:-FrankHan052176/rustdesk4ohos}"
-
-          if [[ "$EVENT_NAME" == "repository_dispatch" ]]; then
-            package_name="$PAYLOAD_PACKAGE_NAME"
-            har_repository="$PAYLOAD_HAR_REPOSITORY"
-            core_repository="$PAYLOAD_CORE_REPOSITORY"
-            core_ref="$PAYLOAD_CORE_REF"
-          else
-            package_name="$INPUT_PACKAGE_NAME"
-            har_repository="$expected_har_repository"
-            core_repository="$expected_core_repository"
-            core_ref="manual"
-          fi
-
-          if [[ "$package_name" != "$CORE_HAR_PACKAGE" ]]; then
-            echo "Refusing unexpected Core HAR package: $package_name" >&2
-            exit 2
-          fi
-          if [[ "$har_repository" != "$expected_har_repository" ]]; then
-            echo "Refusing unexpected HAR repository: $har_repository" >&2
-            exit 2
-          fi
-          if [[ "$core_repository" != "$expected_core_repository" ]]; then
-            echo "Refusing unexpected Core repository: $core_repository" >&2
-            exit 2
-          fi
-          if [[ "$EVENT_NAME" == "repository_dispatch" && -z "$core_ref" ]]; then
-            echo "repository_dispatch must include core_ref." >&2
-            exit 2
-          fi
-
-          luminous_package="${LUMINOUS_PACKAGE:-luminous_neo}"
-          luminous_version="${LUMINOUS_VERSION:-1.0.0}"
-          if [[ ! "$luminous_package" =~ ^[a-z][a-z0-9._-]{0,127}$ ]]; then
-            echo "Invalid Luminous Neo package name: $luminous_package" >&2
-            exit 2
-          fi
-          if [[ ! "$luminous_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
-            echo "LUMINOUS_NEO_VERSION must be an exact SemVer version." >&2
-            exit 2
-          fi
-
-          signing_repository="${SIGNING_REPOSITORY:-FrankHan052176/AppGallerySigning}"
-          signing_repository_ref="${SIGNING_REPOSITORY_REF:-70779bd9e42c8565772dd8c43c80b89a197c3369}"
-          if [[ ! "$signing_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
-            echo "SIGNING_REPOSITORY must name the dedicated private repository." >&2
-            exit 2
-          fi
-          if [[ ! "$signing_repository_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "SIGNING_REPOSITORY_REF must pin an immutable 40-character commit." >&2
-            exit 2
-          fi
-
-          echo "package_name=$package_name" >> "$GITHUB_OUTPUT"
-          echo "har_repository=$har_repository" >> "$GITHUB_OUTPUT"
-          echo "core_repository=$core_repository" >> "$GITHUB_OUTPUT"
-          echo "core_ref=$core_ref" >> "$GITHUB_OUTPUT"
-          echo "luminous_package=$luminous_package" >> "$GITHUB_OUTPUT"
-          echo "luminous_version=$luminous_version" >> "$GITHUB_OUTPUT"
-          echo "signing_repository=$signing_repository" >> "$GITHUB_OUTPUT"
-          echo "signing_repository_ref=$signing_repository_ref" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout ArkTS source
+      - name: Setup
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
 
-      - name: Set up Java 17
+      - name: Setup Java
         uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up HarmonyOS CLI tools
+      - name: Setup HarmonyOS
         uses: ErBWs/setup-ohos@4dbb63025116eb6165ceac58a4bf47cbdc5ac721 # v2
         with:
           version: ${{ env.OHOS_COMMAND_LINE_TOOLS_VERSION }}
           cache: true
 
-      - name: Resolve latest Core HAR in an isolated OHPM project
-        id: core_har
+      - name: Install Core
         shell: bash
         env:
           CODEARTS_PRIVATE_OHPM_READ: ${{ secrets.CODEARTS_PRIVATE_OHPM_READ }}
         run: |
           set -euo pipefail
 
-          if [[ -z "${CODEARTS_PRIVATE_OHPM_READ:-}" ]]; then
-            echo "CODEARTS_PRIVATE_OHPM_READ is not configured." >&2
-            exit 2
-          fi
-          if [[ -z "${GITHUB_WORKSPACE:-}" || "$GITHUB_WORKSPACE" == "/" || \
-                -z "${RUNNER_TEMP:-}" || "$RUNNER_TEMP" == "/" ]]; then
-            echo "Unsafe CI path." >&2
-            exit 2
-          fi
+          hypium_version="$(jq -r '.devDependencies["@ohos/hypium"] // empty' oh-package.json5)"
+          jq 'del(.dependencies["rustdesk-ohrs"], .devDependencies["@ohos/hypium"])' \
+            oh-package.json5 > "$RUNNER_TEMP/oh-package.json5"
+          mv "$RUNNER_TEMP/oh-package.json5" oh-package.json5
+          rm -rf oh_modules
+          rm -f oh-package-lock.json5
 
-          resolver_dir="$(mktemp -d "$RUNNER_TEMP/rustdesk-core.XXXXXX")"
           private_config="$HOME/.ohpm/.ohpmrc"
-          cleanup_private_resolver() {
-            rm -f "$private_config"
-            case "$resolver_dir" in
-              "$RUNNER_TEMP"/rustdesk-core.*) rm -rf "$resolver_dir" ;;
-            esac
-          }
-          trap cleanup_private_resolver EXIT
-
-          umask 077
           mkdir -p "$HOME/.ohpm"
+          umask 077
           printf '%s\n' "$CODEARTS_PRIVATE_OHPM_READ" > "$private_config"
-          private_auth_scope="${CORE_HAR_REGISTRY#https:}"
-          if ! grep -Fq "${private_auth_scope}:_read_auth=" "$private_config" && \
-             ! grep -Fq "${private_auth_scope}:_auth=" "$private_config"; then
-            echo "CODEARTS_PRIVATE_OHPM_READ has no credential for the configured registry." >&2
-            exit 2
+          trap 'rm -f "$private_config"' EXIT
+
+          echo "Installing Core HAR: $CORE_HAR_PACKAGE"
+          ohpm install "$CORE_HAR_PACKAGE" \
+            --registry "$CORE_HAR_REGISTRY" \
+            --retry_times 5 \
+            --retry_interval 3000
+
+          rm -f "$private_config"
+          trap - EXIT
+
+          if [[ -n "$hypium_version" ]]; then
+            jq --arg version "$hypium_version" \
+              '.devDependencies["@ohos/hypium"] = $version' \
+              oh-package.json5 > "$RUNNER_TEMP/oh-package.json5"
+            mv "$RUNNER_TEMP/oh-package.json5" oh-package.json5
           fi
 
-          ohpm --version
-          tags_output="$(
-            NO_COLOR=1 ohpm dist-tags list "$CORE_HAR_PACKAGE" \
-              --registry "$CORE_HAR_REGISTRY" \
-              --log_level error
-          )"
-          latest_version="$(
-            printf '%s\n' "$tags_output" |
-              awk '$1 == "latest:" { print $2; exit }'
-          )"
-          if [[ ! "$latest_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
-            echo "Unable to resolve a valid latest version for $CORE_HAR_PACKAGE." >&2
-            exit 2
-          fi
+      - name: ohpm install
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          exact_spec="$CORE_HAR_PACKAGE@$latest_version"
-          echo "Core HAR latest: $latest_version"
-          echo "Core HAR spec: $exact_spec"
+          ohpm install
 
-          jq -n \
-            --arg name "rustdesk-core-resolver" \
-            '{
-              modelVersion: "6.1.0",
-              name: $name,
-              version: "1.0.0",
-              dependencies: {},
-              devDependencies: {},
-              dynamicDependencies: {}
-            }' > "$resolver_dir/oh-package.json5"
-
+          rm -f entry/oh-package-lock.json5
+          rm -rf entry/oh_modules
+          jq '.dependencies.luminous_neo = "1.0.0"' \
+            entry/oh-package.json5 > "$RUNNER_TEMP/entry-oh-package.json5"
+          mv "$RUNNER_TEMP/entry-oh-package.json5" entry/oh-package.json5
           (
-            cd "$resolver_dir"
-            ohpm install "$exact_spec" \
-              --registry "$CORE_HAR_REGISTRY" \
-              --retry_times 5 \
-              --retry_interval 3000 \
-              --lockfile_stable_order true
+            cd entry
+            ohpm install
           )
 
-          installed_package="$(
-            cd "$resolver_dir/oh_modules/$CORE_HAR_PACKAGE" && pwd -P
-          )"
-          installed_manifest="$installed_package/oh-package.json5"
-          test -s "$installed_manifest"
-          jq -e \
-            --arg name "$CORE_HAR_PACKAGE" \
-            --arg version "$latest_version" \
-            '.name == $name and .version == $version' \
-            "$installed_manifest" >/dev/null
-          test -s "$installed_package/libs/arm64-v8a/librustdesk_native_har.so"
-          test -s "$installed_package/libs/arm64-v8a/libc++_shared.so"
-          test -s "$installed_package/BUILD_PROVENANCE.json"
-          jq -e \
-            --arg name "$CORE_HAR_PACKAGE" \
-            --arg version "$latest_version" \
-            '.packageName == $name and .packageVersion == $version' \
-            "$installed_package/BUILD_PROVENANCE.json" >/dev/null
-
-          core_integrity="$(
-            jq -r \
-              --arg name "$CORE_HAR_PACKAGE" \
-              --arg version "$latest_version" '
-                [.packages[] |
-                  select(.name == $name and .version == $version) |
-                  .integrity // ""] |
-                first // ""
-              ' "$resolver_dir/oh-package-lock.json5"
-          )"
-          if [[ ! "$core_integrity" =~ ^sha512-[A-Za-z0-9+/=]+$ ]]; then
-            echo "Installed Core HAR has no valid OHPM integrity." >&2
-            exit 2
-          fi
-
-          vendor_root="$GITHUB_WORKSPACE/.ci-packages"
-          vendor_package="$vendor_root/$CORE_HAR_PACKAGE"
-          rm -rf "$vendor_package"
-          mkdir -p "$vendor_package"
-          cp -a "$installed_package/." "$vendor_package/"
-
-          jq \
-            '.dependencies["rustdesk-ohrs"] = "file:./.ci-packages/rustdesk-ohrs"' \
-            oh-package.json5 > oh-package.ci.json5
-          mv oh-package.ci.json5 oh-package.json5
-
-          echo "version=$latest_version" >> "$GITHUB_OUTPUT"
-          echo "integrity=$core_integrity" >> "$GITHUB_OUTPUT"
-
-      - name: Install remaining dependencies from the normal registry
-        shell: bash
-        env:
-          LUMINOUS_PACKAGE: ${{ steps.request.outputs.luminous_package }}
-          LUMINOUS_VERSION: ${{ steps.request.outputs.luminous_version }}
-        run: |
-          set -euo pipefail
-
-          if [[ -e "$HOME/.ohpm/.ohpmrc" ]]; then
-            echo "Private OHPM configuration was not removed before normal dependency installation." >&2
-            exit 2
-          fi
-
-          effective_registry="$(ohpm config get registry)"
-          if [[ "$effective_registry" != "https://ohpm.openharmony.cn/ohpm/" ]]; then
-            echo "Unexpected normal OHPM registry: $effective_registry" >&2
-            exit 2
-          fi
-
-          jq \
-            --arg package "$LUMINOUS_PACKAGE" \
-            --arg version "$LUMINOUS_VERSION" \
-            '.dependencies = (
-              (.dependencies // {} | del(.luminous_neo)) +
-              {($package): $version}
-            )' \
-            entry/oh-package.json5 > entry/oh-package.ci.json5
-          mv entry/oh-package.ci.json5 entry/oh-package.json5
-
-          rm -f oh-package-lock.json5 entry/oh-package-lock.json5
-          rm -rf oh_modules entry/oh_modules
-
-          # Deliberately omit --registry: only the Core resolver may access the
-          # private CodeArts repository.
-          ohpm install --all --lockfile_stable_order true
-
-      - name: Verify installed dependencies
-        shell: bash
-        env:
-          CORE_HAR_VERSION: ${{ steps.core_har.outputs.version }}
-          LUMINOUS_PACKAGE: ${{ steps.request.outputs.luminous_package }}
-          LUMINOUS_VERSION: ${{ steps.request.outputs.luminous_version }}
-        run: |
-          set -euo pipefail
-
-          installed_core_manifest="oh_modules/$CORE_HAR_PACKAGE/oh-package.json5"
-          test -s "$installed_core_manifest"
-          jq -e \
-            --arg name "$CORE_HAR_PACKAGE" \
-            --arg version "$CORE_HAR_VERSION" \
-            '.name == $name and .version == $version' \
-            "$installed_core_manifest" >/dev/null
-          jq -e \
-            --arg name "$CORE_HAR_PACKAGE" \
-            --arg version "$CORE_HAR_VERSION" '
-              any(.packages[];
-                .name == $name and
-                .version == $version and
-                .registryType == "local")
-            ' oh-package-lock.json5 >/dev/null
-
-          luminous_manifest="entry/oh_modules/$LUMINOUS_PACKAGE/oh-package.json5"
-          test -s "$luminous_manifest"
-          jq -e \
-            --arg name "$LUMINOUS_PACKAGE" \
-            --arg version "$LUMINOUS_VERSION" \
-            '.name == $name and .version == $version' \
-            "$luminous_manifest" >/dev/null
-
-          if rg -F "$CORE_HAR_REGISTRY" oh-package-lock.json5 entry/oh-package-lock.json5; then
-            echo "A normal dependency was resolved through the private Core registry." >&2
-            exit 2
-          fi
-
-      - name: Checkout private signing repository
+      - name: Sign
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: ${{ steps.request.outputs.signing_repository }}
-          ref: ${{ steps.request.outputs.signing_repository_ref }}
+          repository: ${{ env.SIGNING_REPOSITORY }}
+          ref: ${{ env.SIGNING_REPOSITORY_REF }}
           token: ${{ secrets.SIGNING_REPOSITORY_TOKEN }}
           path: .ci-signing-repo
           persist-credentials: false
 
-      - name: Prepare RustDesk signing configuration
+      - name: Sign config
         shell: bash
         env:
           SIGNING_REPOSITORY_DIR: ${{ github.workspace }}/.ci-signing-repo
@@ -343,15 +117,7 @@ jobs:
           .github/scripts/prepare-signing-config.sh
           echo "RUSTDESK_SIGNING_DIR=$SIGNING_OUTPUT_DIR" >> "$GITHUB_ENV"
 
-      - name: Confirm App-level publish task
-        shell: bash
-        run: |
-          set -euo pipefail
-          hvigorw --version
-          hvigorw --help >/dev/null
-          hvigorw tasks --no-daemon | rg -q 'assembleApp'
-
-      - name: Assemble signed publish release App
+      - name: Build
         shell: bash
         run: |
           set -euo pipefail
@@ -362,131 +128,44 @@ jobs:
             --no-daemon \
             --no-incremental
 
-      - name: Verify App and write build receipt
+      - name: Upload prep
         id: app
         shell: bash
-        env:
-          CORE_HAR_VERSION: ${{ steps.core_har.outputs.version }}
-          CORE_HAR_INTEGRITY: ${{ steps.core_har.outputs.integrity }}
-          HAR_REPOSITORY: ${{ steps.request.outputs.har_repository }}
-          CORE_REPOSITORY: ${{ steps.request.outputs.core_repository }}
-          CORE_REF: ${{ steps.request.outputs.core_ref }}
-          LUMINOUS_PACKAGE: ${{ steps.request.outputs.luminous_package }}
-          LUMINOUS_VERSION: ${{ steps.request.outputs.luminous_version }}
         run: |
           set -euo pipefail
 
-          mapfile -t signed_apps < <(
-            find build/outputs/publish -maxdepth 1 \
-              -type f -name '*-signed.app' -print
-          )
-          test "${#signed_apps[@]}" -eq 1
-          source_app="${signed_apps[0]}"
-          test -s "$source_app"
-
-          verify_dir="$(mktemp -d "$RUNNER_TEMP/rustdesk-app-verify.XXXXXX")"
-          cleanup_verification() {
-            case "$verify_dir" in
-              "$RUNNER_TEMP"/rustdesk-app-verify.*) rm -rf "$verify_dir" ;;
-            esac
-          }
-          trap cleanup_verification EXIT
-          java -jar "$OHOS_NDK_HOME/toolchains/lib/hap-sign-tool.jar" verify-app \
-            -inFile "$source_app" \
-            -outCertChain "$verify_dir/cert-chain.cer" \
-            -outProfile "$verify_dir/profile.p7b" \
-            -inForm zip
-          test -s "$verify_dir/cert-chain.cer"
-          test -s "$verify_dir/profile.p7b"
+          signed_app="$(find build -type f -name '*-signed.app' -print -quit 2>/dev/null || true)"
+          if [[ -z "$signed_app" ]]; then
+            echo "Signed App was not produced." >&2
+            exit 1
+          fi
 
           mkdir -p ci-output
-          output_app="ci-output/RustDesk-publish-release-${CORE_HAR_VERSION}.app"
-          cp "$source_app" "$output_app"
-          app_sha256="$(sha256sum "$output_app" | awk '{print $1}')"
-          action_run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          output_app="ci-output/RustDesk-publish-release-signed.app"
+          cp "$signed_app" "$output_app"
+          echo "path=$output_app" >> "$GITHUB_OUTPUT"
 
-          jq -n \
-            --arg arkts_repository "$GITHUB_REPOSITORY" \
-            --arg arkts_sha "$GITHUB_SHA" \
-            --arg product "publish" \
-            --arg build_mode "release" \
-            --arg app_sha256 "$app_sha256" \
-            --arg core_har_package "$CORE_HAR_PACKAGE" \
-            --arg core_har_version "$CORE_HAR_VERSION" \
-            --arg core_har_integrity "$CORE_HAR_INTEGRITY" \
-            --arg har_repository "$HAR_REPOSITORY" \
-            --arg core_repository "$CORE_REPOSITORY" \
-            --arg core_ref "$CORE_REF" \
-            --arg luminous_package "$LUMINOUS_PACKAGE" \
-            --arg luminous_version "$LUMINOUS_VERSION" \
-            --arg action_run_url "$action_run_url" '
-              {
-                schemaVersion: 1,
-                arktsRepository: $arkts_repository,
-                arktsCommit: $arkts_sha,
-                product: $product,
-                buildMode: $build_mode,
-                appSha256: $app_sha256,
-                coreHarPackage: $core_har_package,
-                coreHarVersion: $core_har_version,
-                coreHarIntegrity: $core_har_integrity,
-                harRepository: $har_repository,
-                coreRepository: $core_repository,
-                coreRef: $core_ref,
-                luminousPackage: $luminous_package,
-                luminousVersion: $luminous_version,
-                actionRunUrl: $action_run_url
-              }
-            ' > ci-output/build-receipt.json
-
-          echo "sha256=$app_sha256" >> "$GITHUB_OUTPUT"
-
-      - name: Upload signed App and receipt
+      - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: RustDesk-publish-release-${{ steps.core_har.outputs.version }}
-          path: ci-output/**
+          name: RustDesk-publish-release-signed-app
+          path: ${{ steps.app.outputs.path }}
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
 
-      # TODO(AGC): Replace this guard with the real AGC App upload after its
-      # credentials and API parameters are configured.
-      - name: Upload signed App to AGC (placeholder)
-        if: ${{ vars.ENABLE_AGC_SIGNED_APP_UPLOAD == 'true' }}
-        shell: bash
-        run: |
-          echo "::error::Implement the AGC signed App upload before enabling this step."
-          exit 1
+      - name: AGC upload placeholder
+        if: ${{ vars.ENABLE_AGC_UPLOAD == 'true' }}
+        run: echo "AGC signed App upload is not configured yet."
 
-      # TODO(AGC): Enable only after the upload step returns an AGC release ID.
-      - name: Publish AGC test release (placeholder)
-        if: ${{ vars.ENABLE_AGC_TEST_RELEASE == 'true' }}
-        shell: bash
-        run: |
-          echo "::error::Implement the AGC test release before enabling this step."
-          exit 1
+      - name: AGC test placeholder
+        if: ${{ vars.ENABLE_AGC_TEST == 'true' }}
+        run: echo "AGC test release is not configured yet."
 
-      - name: Remove ephemeral credentials and build inputs
+      - name: Cleanup
         if: always()
         shell: bash
         run: |
-          if [[ -z "${RUNNER_TEMP:-}" || "$RUNNER_TEMP" == "/" || \
-                -z "${GITHUB_WORKSPACE:-}" || "$GITHUB_WORKSPACE" == "/" ]]; then
-            echo "Unsafe cleanup path." >&2
-            exit 2
-          fi
-
-          signing_root="$RUNNER_TEMP/rustdesk-signing"
-          signing_checkout="$GITHUB_WORKSPACE/.ci-signing-repo"
-          vendored_core="$GITHUB_WORKSPACE/.ci-packages/rustdesk-ohrs"
-          case "$signing_root" in
-            "$RUNNER_TEMP"/*) rm -rf "$signing_root" ;;
-          esac
-          case "$signing_checkout" in
-            "$GITHUB_WORKSPACE"/*) rm -rf "$signing_checkout" ;;
-          esac
-          case "$vendored_core" in
-            "$GITHUB_WORKSPACE"/.ci-packages/*) rm -rf "$vendored_core" ;;
-          esac
           rm -f "$HOME/.ohpm/.ohpmrc"
+          rm -rf "$RUNNER_TEMP/rustdesk-signing"
+          rm -rf "$GITHUB_WORKSPACE/.ci-signing-repo"
