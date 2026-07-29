@@ -1,6 +1,8 @@
 name: ohos
 
 on:
+  push:
+    branches: [main]
   repository_dispatch:
     types: [rustdesk-har-published]
   workflow_dispatch:
@@ -22,8 +24,7 @@ env:
   SIGNING_REPOSITORY_REF: ${{ vars.SIGNING_REPOSITORY_REF || '70779bd9e42c8565772dd8c43c80b89a197c3369' }}
   AGC_ENABLED: ${{ secrets.AGC_CLIENT_ID != '' && secrets.AGC_CLIENT_SECRET != '' && secrets.AGC_APP_ID != '' }}
   AGC_API_DOMAIN: ${{ vars.AGC_API_DOMAIN || 'connect-api.cloud.huawei.com' }}
-  AGC_TEST_TYPE: ${{ vars.AGC_TEST_TYPE || '3' }}
-  AGC_TEST_DESC: ${{ vars.AGC_TEST_DESC || '' }}
+  AGC_TEST_DURATION_DAYS: ${{ vars.AGC_TEST_DURATION_DAYS || '14' }}
 
 jobs:
   build:
@@ -150,10 +151,12 @@ jobs:
           AGC_CLIENT_ID: ${{ secrets.AGC_CLIENT_ID }}
           AGC_CLIENT_SECRET: ${{ secrets.AGC_CLIENT_SECRET }}
           AGC_APP_ID: ${{ secrets.AGC_APP_ID }}
-          AGC_API_DOMAIN: ${{ env.AGC_API_DOMAIN }}
-          AGC_TEST_TYPE: ${{ env.AGC_TEST_TYPE }}
-          AGC_TEST_DESC: ${{ env.AGC_TEST_DESC }}
           AGC_APP_FILE: ${{ steps.app.outputs.path }}
+          AGC_EVENT_NAME: ${{ github.event_name }}
+          AGC_RUN_ATTEMPT: ${{ github.run_attempt }}
+          AGC_CORE_HAR_VERSION: ${{ steps.ohpm.outputs.core_har_version }}
+          AGC_PUSH_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          AGC_WORKFLOW_SHA: ${{ github.sha }}
         run: .github/scripts/agc-test-release.sh "$AGC_APP_FILE"
 
       - name: Cleanup

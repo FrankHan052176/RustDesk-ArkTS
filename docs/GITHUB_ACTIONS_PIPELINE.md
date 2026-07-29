@@ -59,4 +59,4 @@ strict_ssl=true
 
 ## AGC 测试发布
 
-配置三个 AGC Secret 后，workflow 会调用 `.github/scripts/agc-test-release.sh` 上传并提交邀请测试版本；缺少任一 Secret 时跳过该步骤，仅保留签名 App artifact。
+配置 `AGC_CLIENT_ID`、`AGC_CLIENT_SECRET` 和 `AGC_APP_ID` 后，workflow 会调用 `.github/scripts/agc-test-release.sh` 上传并提交邀请测试版本；缺少任一 Secret 时跳过该步骤，仅保留签名 App artifact。测试固定使用 `testType=3` 与 `onshelfSelfDetect=0`，会收集所有测试群组；无群组时失败而不会提交空测试版本。可选变量 `AGC_TEST_DURATION_DAYS` 默认设置为 14 天。

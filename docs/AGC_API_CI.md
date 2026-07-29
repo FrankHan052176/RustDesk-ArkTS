@@ -12,10 +12,14 @@ The API Client must be a team-level client (`N/A` project) with permission to up
 
 Optional repository variables:
 
-- `AGC_TEST_TYPE`: `3` for invitation testing (default), `4` for public testing.
-- `AGC_TEST_DESC`: test description; the API limit is 50 characters.
+- `AGC_API_DOMAIN`: defaults to `connect-api.cloud.huawei.com`.
+- `AGC_TEST_DURATION_DAYS`: invitation-test lifetime in days; defaults to `14`.
 
-The script obtains a token, requests a short-lived upload URL, uploads the `.app`, creates a test version, adds the package, waits for package compilation, binds the package, and submits the test version. It does not print the Client Secret or access token. When any required Secret is absent, the AGC step is skipped and the signed GitHub artifact is still produced.
+The workflow only creates HarmonyOS invitation testing versions: `testType=3` and `onshelfSelfDetect=0`. It obtains a token, requests a short-lived upload URL, uploads the `.app`, creates a test version, adds the package, waits for package compilation, then queries every invitation-test group through the paginated `/api/app-test/v1/test-group/list` API. `appId` is sent as a request header for that API.
+
+The update request refuses to proceed without at least one group. It writes every `groupId`, a start time one hour after the current UTC time, an end time after `AGC_TEST_DURATION_DAYS`, `displayArea="1"`, and `needShareLink=0`. It sends a test notification only for the first attempt of an ArkTS `push` run; dispatches, manual runs, and retries do not notify testers.
+
+The test description is truncated to the API's 50-character limit: `同步上游 <HAR version>` for a Core dispatch, the push commit message for a push, and the current SHA for a manual run. The script does not print the Client Secret or access token. When the three required Secrets are absent, the AGC step is skipped and the signed GitHub artifact is still produced.
 
 Official API references:
 
