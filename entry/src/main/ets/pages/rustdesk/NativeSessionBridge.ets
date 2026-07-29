@@ -19,6 +19,7 @@ export interface NativeSessionBridge {
   sendClipboard(sessionId: string, content: string): ActionResponse;
   addSession(sessionId: string, target: string, options: SessionStartOptions): ActionResponse;
   startSession(sessionId: string): ActionResponse;
+  setViewOnly(sessionId: string, enabled: boolean): ActionResponse;
   login(sessionId: string, password: string, remember?: boolean): ActionResponse;
   closeSession(sessionId: string): ActionResponse;
   pollEvents(sessionId: string, limit: number): ActionResponse;
@@ -81,6 +82,10 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
 
   startSession(sessionId: string): ActionResponse {
     return this.parseNativeResponse(() => native.sessionStart(sessionId));
+  }
+
+  setViewOnly(sessionId: string, enabled: boolean): ActionResponse {
+    return this.parseNativeResponse(() => native.sessionSetViewOnly(sessionId, enabled));
   }
 
   login(sessionId: string, password: string, remember: boolean = false): ActionResponse {

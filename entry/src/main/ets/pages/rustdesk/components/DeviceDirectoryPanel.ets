@@ -27,6 +27,7 @@ export interface DeviceDirectoryPanelProps {
   onSetFavorite: (peerId: string, favorite: boolean) => void;
   onRemoveRecent: (peerId: string) => void;
   onConnectRemote: (peerId: string) => void;
+  onViewOnly: (peerId: string) => void;
   onViewCamera: (peerId: string) => void;
   onOpenTransfer: (peerId: string) => void;
 }
@@ -53,6 +54,7 @@ export struct DeviceDirectoryPanel {
   @Event onSetFavorite: (peerId: string, favorite: boolean) => void = (_peerId: string, _favorite: boolean) => {};
   @Event onRemoveRecent: (peerId: string) => void = (_peerId: string) => {};
   @Event onConnectRemote: (peerId: string) => void = (_peerId: string) => {};
+  @Event onViewOnly: (peerId: string) => void = (_peerId: string) => {};
   @Event onViewCamera: (peerId: string) => void = (_peerId: string) => {};
   @Event onOpenTransfer: (peerId: string) => void = (_peerId: string) => {};
 
@@ -495,6 +497,7 @@ export struct DeviceDirectoryPanel {
             onSetFavorite: (peerId: string, favorite: boolean) => this.onSetFavorite(peerId, favorite),
             onRemoveRecent: (peerId: string) => this.onRemoveRecent(peerId),
             onConnectRemote: (peerId: string) => this.onConnectRemote(peerId),
+            onViewOnly: (peerId: string) => this.onViewOnly(peerId),
             onViewCamera: (peerId: string) => this.onViewCamera(peerId),
             onOpenTransfer: (peerId: string) => this.onOpenTransfer(peerId),
           });
@@ -516,6 +519,7 @@ export struct DeviceDirectoryPanel {
             onSetFavorite: (peerId: string, favorite: boolean) => this.onSetFavorite(peerId, favorite),
             onRemoveRecent: (peerId: string) => this.onRemoveRecent(peerId),
             onConnectRemote: (peerId: string) => this.onConnectRemote(peerId),
+            onViewOnly: (peerId: string) => this.onViewOnly(peerId),
             onViewCamera: (peerId: string) => this.onViewCamera(peerId),
             onOpenTransfer: (peerId: string) => this.onOpenTransfer(peerId),
           })

@@ -6,6 +6,7 @@ export interface DisplaySelectorSheetProps {
   resolutions: ResolutionInfo[];
   selectedResolution?: ResolutionInfo;
   resolutionEnabled: boolean;
+  viewOnlySession: boolean;
   onSelectDisplay: (index: number) => void;
   onSelectResolution: (resolution: ResolutionInfo) => void;
   onClose: () => void;
@@ -18,6 +19,7 @@ export struct DisplaySelectorSheet {
   @Param resolutions: ResolutionInfo[] = [];
   @Param selectedResolution: ResolutionInfo | undefined = undefined;
   @Param resolutionEnabled: boolean = false;
+  @Param viewOnlySession: boolean = false;
   @Event onSelectDisplay: (index: number) => void = (_index: number) => {};
   @Event onSelectResolution: (resolution: ResolutionInfo) => void = (_resolution: ResolutionInfo) => {};
   @Event onClose: () => void = () => {};
@@ -182,7 +184,9 @@ export struct DisplaySelectorSheet {
             .fontColor($r('app.color.text_primary'));
 
           if (!this.resolutionEnabled) {
-            Text('远端 OHOS 暂不支持修改显示器分辨率')
+            Text(this.viewOnlySession
+              ? '只观看模式不修改远端分辨率'
+              : '远端 OHOS 暂不支持修改显示器分辨率')
               .fontSize($r('app.float.font_body'))
               .fontColor($r('app.color.text_secondary'))
               .padding({ top: $r('app.float.space_8'), bottom: $r('app.float.space_8') });

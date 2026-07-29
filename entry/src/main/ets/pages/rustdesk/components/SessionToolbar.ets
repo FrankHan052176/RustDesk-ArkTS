@@ -1,6 +1,8 @@
 import { SessionOverlayPanel } from '../SessionOverlayState';
 import { SessionToolbarMetrics } from '../SessionToolbarMetrics';
 
+const SOFT_KEYBOARD_TRANSITION_ID = 'rustdesk-session-soft-keyboard';
+
 export interface SessionToolbarProps {
   relativeMouseMode: boolean;
   metrics: SessionToolbarMetrics;
@@ -10,6 +12,9 @@ export interface SessionToolbarProps {
   qualityTransitionId: string;
   unreadCount: number;
   cameraSession: boolean;
+  viewOnlySession: boolean;
+  softKeyboardAvailable: boolean;
+  softKeyboardVisible: boolean;
   audioAvailable: boolean;
   audioMuted: boolean;
   wideLayout: boolean;
@@ -23,6 +28,7 @@ export interface SessionToolbarProps {
   onOpenChat: () => void;
   onOpenDisplay: () => void;
   onOpenQuality: () => void;
+  onToggleSoftKeyboard: () => void;
   onAudioChange: (enabled: boolean) => void;
   onDisconnect: () => void;
   onMinimize: () => void;
@@ -46,6 +52,9 @@ export struct SessionToolbar {
   @Param qualityTransitionId: string = '';
   @Param unreadCount: number = 0;
   @Param cameraSession: boolean = false;
+  @Param viewOnlySession: boolean = false;
+  @Param softKeyboardAvailable: boolean = false;
+  @Param softKeyboardVisible: boolean = false;
   @Param audioAvailable: boolean = false;
   @Param audioMuted: boolean = false;
   @Param wideLayout: boolean = false;
@@ -60,6 +69,7 @@ export struct SessionToolbar {
   @Event onOpenChat: () => void = () => {};
   @Event onOpenDisplay: () => void = () => {};
   @Event onOpenQuality: () => void = () => {};
+  @Event onToggleSoftKeyboard: () => void = () => {};
   @Event onAudioChange: (enabled: boolean) => void = (_enabled: boolean) => {};
   @Event onDisconnect: () => void = () => {};
   @Event onMinimize: () => void = () => {};
@@ -340,9 +350,22 @@ export struct SessionToolbar {
         this.DangerAction('断开连接')
       }
       .width('100%');
+    } else if (this.viewOnlySession) {
+      Row({ space: $r('app.float.space_8') }) {
+        this.ToolbarAction('display', '显示器', this.activeOverlayPanel === 'display', this.displayTransitionId,
+          () => this.onOpenDisplay())
+        this.ToolbarAction('quality', '画质', this.activeOverlayPanel === 'quality', this.qualityTransitionId,
+          () => this.onOpenQuality())
+        this.DangerAction('断开')
+      }
+      .width('100%');
     } else if (this.wideLayout) {
       Row({ space: $r('app.float.space_8') }) {
         this.PointerModeAction()
+        if (this.softKeyboardAvailable) {
+          this.ToolbarAction('keyboard', this.softKeyboardVisible ? '键盘开' : '键盘', this.softKeyboardVisible, SOFT_KEYBOARD_TRANSITION_ID,
+            () => this.onToggleSoftKeyboard())
+        }
         this.ToolbarAction('chat', this.unreadCount > 0 ? `聊天 ${this.unreadCount}` : '聊天',
           this.activeOverlayPanel === 'chat', this.chatTransitionId, () => this.onOpenChat())
         this.ToolbarAction('display', '显示器', this.activeOverlayPanel === 'display', this.displayTransitionId,
@@ -357,6 +380,10 @@ export struct SessionToolbar {
       Column({ space: $r('app.float.space_8') }) {
         Row({ space: $r('app.float.space_8') }) {
           this.PointerModeAction()
+          if (this.softKeyboardAvailable) {
+            this.ToolbarAction('keyboard', this.softKeyboardVisible ? '键盘开' : '键盘', this.softKeyboardVisible, SOFT_KEYBOARD_TRANSITION_ID,
+              () => this.onToggleSoftKeyboard())
+          }
           this.ToolbarAction('chat', this.unreadCount > 0 ? `聊天 ${this.unreadCount}` : '聊天',
             this.activeOverlayPanel === 'chat', this.chatTransitionId, () => this.onOpenChat())
         }

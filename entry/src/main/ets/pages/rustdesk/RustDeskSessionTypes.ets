@@ -6,6 +6,7 @@ export interface SessionStartOptions {
   forceRelay: boolean;
   isFileTransfer: boolean;
   isViewCamera: boolean;
+  isViewOnly: boolean;
 }
 
 export interface RemoteFileEntry {

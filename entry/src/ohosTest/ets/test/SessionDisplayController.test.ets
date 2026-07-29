@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@ohos/hypium';
 import { NativeSessionBridge } from '../../../main/ets/pages/rustdesk/NativeSessionBridge';
-import { SessionStartOptions } from '../../../main/ets/pages/rustdesk/RustDeskSessionTypes';
+import { RemoteAudioState, SessionStartOptions } from '../../../main/ets/pages/rustdesk/RustDeskSessionTypes';
 import { SessionDisplayController } from '../../../main/ets/pages/rustdesk/SessionDisplayController';
 import { RustDeskViewportModel } from '../../../main/ets/pages/rustdesk/RustDeskViewportModel';
 import { ActionResponse, PeerDisplayInfo, ResolutionInfo } from '../../../main/ets/pages/rustdesk/RustDeskTypes';
@@ -51,6 +51,10 @@ class RecordingNativeSessionBridge implements NativeSessionBridge {
     return this.ok('send_chat');
   }
 
+  sendClipboard(_sessionId: string, _content: string): ActionResponse {
+    return this.ok('send_clipboard');
+  }
+
   addSession(_sessionId: string, _target: string, _options: SessionStartOptions): ActionResponse {
     return this.ok('add_session');
   }
@@ -61,6 +65,14 @@ class RecordingNativeSessionBridge implements NativeSessionBridge {
 
   closeSession(_sessionId: string): ActionResponse {
     return this.ok('close_session');
+  }
+
+  setViewOnly(_sessionId: string, _enabled: boolean): ActionResponse {
+    return this.ok('set_view_only');
+  }
+
+  login(_sessionId: string, _password: string, _remember: boolean = false): ActionResponse {
+    return this.ok('login');
   }
 
   pollEvents(_sessionId: string, _limit: number): ActionResponse {
@@ -79,12 +91,32 @@ class RecordingNativeSessionBridge implements NativeSessionBridge {
     return this.ok('send_files');
   }
 
-  setConfirmOverrideFile(_sessionId: string, _actId: number, _needOverride: boolean, _isUpload: boolean): ActionResponse {
+  setConfirmOverrideFile(_sessionId: string, _actId: number, _fileNum: number,
+    _needOverride: boolean, _isUpload: boolean): ActionResponse {
     return this.ok('set_confirm_override_file');
   }
 
   cancelTransfer(_sessionId: string, _actId: number): ActionResponse {
     return this.ok('cancel_transfer');
+  }
+
+  getToggleOption(_sessionId: string, _option: string): boolean {
+    return false;
+  }
+
+  toggleOption(_sessionId: string, _option: string): void {}
+
+  getRemoteAudioState(_sessionId: string): RemoteAudioState {
+    return {
+      available: false,
+      muted: false,
+      rendererActive: false,
+      errorText: '',
+    };
+  }
+
+  setRemoteAudioMuted(_sessionId: string, _muted: boolean): boolean {
+    return true;
   }
 
   private ok(action: string): ActionResponse {

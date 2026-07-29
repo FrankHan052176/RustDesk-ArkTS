@@ -12,6 +12,8 @@ oh_modules/
 
 # Build artifacts
 build/
+artifacts/
+entry/.test/
 .hvigor/
 .cxx/
 *.har

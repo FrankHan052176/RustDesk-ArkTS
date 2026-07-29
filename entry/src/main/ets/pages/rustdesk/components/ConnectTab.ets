@@ -17,6 +17,7 @@ export interface ConnectTabProps {
   scroller: Scroller;
   onTargetChange: (value: string) => void;
   onConnectRemote: () => void;
+  onViewOnly: () => void;
   onViewCamera: () => void;
   onOpenTransfer: () => void;
   onDisconnect: () => void;
@@ -30,6 +31,7 @@ export interface ConnectTabProps {
   onSetPeerFavorite: (peerId: string, favorite: boolean) => void;
   onRemoveRecentPeer: (peerId: string) => void;
   onConnectPeerRemote: (peerId: string) => void;
+  onViewPeerOnly: (peerId: string) => void;
   onViewPeerCamera: (peerId: string) => void;
   onOpenPeerTransfer: (peerId: string) => void;
 }
@@ -50,12 +52,14 @@ export struct ConnectTab {
   @Local connectionMode: number = 0;
   @Event onTargetChange: (value: string) => void = (_value: string) => {};
   @Event onConnectRemote: () => void = () => {};
+  @Event onViewOnly: () => void = () => {};
   @Event onViewCamera: () => void = () => {};
   @Event onOpenTransfer: () => void = () => {};
   @Event onDisconnect: () => void = () => {};
   @Event onSetPeerFavorite: (peerId: string, favorite: boolean) => void = (_peerId: string, _favorite: boolean) => {};
   @Event onRemoveRecentPeer: (peerId: string) => void = (_peerId: string) => {};
   @Event onConnectPeerRemote: (peerId: string) => void = (_peerId: string) => {};
+  @Event onViewPeerOnly: (peerId: string) => void = (_peerId: string) => {};
   @Event onViewPeerCamera: (peerId: string) => void = (_peerId: string) => {};
   @Event onOpenPeerTransfer: (peerId: string) => void = (_peerId: string) => {};
 
@@ -107,6 +111,7 @@ export struct ConnectTab {
   private modeItems(): LuminousSelectionItem[] {
     return [
       new LuminousSelectionItem('control', '远程控制', '控制远端设备'),
+      new LuminousSelectionItem('view_only', '只看屏幕', '观看远端屏幕，不发送输入'),
       new LuminousSelectionItem('camera', '查看相机', '查看远端摄像头'),
       new LuminousSelectionItem('files', '文件传输', '浏览并传输文件'),
     ];
@@ -114,9 +119,12 @@ export struct ConnectTab {
 
   private modeSymbol(): Resource {
     if (this.connectionMode === 1) {
-      return $r('sys.symbol.video');
+      return $r('sys.symbol.display');
     }
     if (this.connectionMode === 2) {
+      return $r('sys.symbol.video');
+    }
+    if (this.connectionMode === 3) {
       return $r('sys.symbol.folder');
     }
     return $r('sys.symbol.display');
@@ -124,9 +132,12 @@ export struct ConnectTab {
 
   private modeTitle(): ResourceStr {
     if (this.connectionMode === 1) {
-      return '查看远端相机';
+      return '观看远端屏幕';
     }
     if (this.connectionMode === 2) {
+      return '查看远端相机';
+    }
+    if (this.connectionMode === 3) {
       return '打开文件工作区';
     }
     return '建立远程控制';
@@ -134,9 +145,12 @@ export struct ConnectTab {
 
   private modeDescription(): ResourceStr {
     if (this.connectionMode === 1) {
-      return '只查看视频，不发送键鼠输入';
+      return '只查看远端画面，不发送键鼠、触摸或剪贴板输入';
     }
     if (this.connectionMode === 2) {
+      return '只查看视频，不发送键鼠输入';
+    }
+    if (this.connectionMode === 3) {
       return '在本机与远端之间浏览和传输文件';
     }
     return '连接后使用触摸、键鼠或触控板操作远端';
@@ -144,9 +158,12 @@ export struct ConnectTab {
 
   private primaryActionLabel(): ResourceStr {
     if (this.connectionMode === 1) {
-      return '查看相机';
+      return '只看屏幕';
     }
     if (this.connectionMode === 2) {
+      return '查看相机';
+    }
+    if (this.connectionMode === 3) {
       return this.transferActive ? '返回文件传输' : '开始文件传输';
     }
     return this.canDisconnect ? '建立新连接' : '开始连接';
@@ -154,10 +171,14 @@ export struct ConnectTab {
 
   private activatePrimaryAction(): void {
     if (this.connectionMode === 1) {
-      this.onViewCamera();
+      this.onViewOnly();
       return;
     }
     if (this.connectionMode === 2) {
+      this.onViewCamera();
+      return;
+    }
+    if (this.connectionMode === 3) {
       this.onOpenTransfer();
       return;
     }
@@ -251,7 +272,7 @@ export struct ConnectTab {
         controlWidth: this.controlWidth(),
         controlSizeMode: LuminousControlSize.Regular,
         tone: LuminousTone.Accent,
-        isEnabled: this.targetReady() || (this.connectionMode === 2 && this.transferActive),
+        isEnabled: this.targetReady() || (this.connectionMode === 3 && this.transferActive),
         motionEnabled: true,
         onAction: (): void => this.activatePrimaryAction(),
       })
@@ -353,6 +374,7 @@ export struct ConnectTab {
             onSetFavorite: (peerId: string, favorite: boolean) => this.onSetPeerFavorite(peerId, favorite),
             onRemoveRecent: (peerId: string) => this.onRemoveRecentPeer(peerId),
             onConnectRemote: (peerId: string) => this.onConnectPeerRemote(peerId),
+            onViewOnly: (peerId: string) => this.onViewPeerOnly(peerId),
             onViewCamera: (peerId: string) => this.onViewPeerCamera(peerId),
             onOpenTransfer: (peerId: string) => this.onOpenPeerTransfer(peerId),
           })

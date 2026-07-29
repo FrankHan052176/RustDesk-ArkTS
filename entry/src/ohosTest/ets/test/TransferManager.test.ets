@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@ohos/hypium';
 import { NativeSessionBridge } from '../../../main/ets/pages/rustdesk/NativeSessionBridge';
-import { SessionStartOptions } from '../../../main/ets/pages/rustdesk/RustDeskSessionTypes';
+import { RemoteAudioState, SessionStartOptions } from '../../../main/ets/pages/rustdesk/RustDeskSessionTypes';
 import { TransferManager } from '../../../main/ets/pages/rustdesk/TransferManager';
 import { ActionResponse, NativeEvent } from '../../../main/ets/pages/rustdesk/RustDeskTypes';
 
@@ -12,6 +12,7 @@ class RecordingTransferBridge implements NativeSessionBridge {
     forceRelay: false,
     isFileTransfer: false,
     isViewCamera: false,
+    isViewOnly: false,
   };
   private nextJobId: number = 7;
 
@@ -29,6 +30,10 @@ class RecordingTransferBridge implements NativeSessionBridge {
   closeSession(sessionId: string): ActionResponse {
     this.calls.push(`close:${sessionId}`);
     return this.ok('close_session');
+  }
+
+  setViewOnly(_sessionId: string, _enabled: boolean): ActionResponse {
+    return this.ok('set_view_only');
   }
 
   pollEvents(sessionId: string, limit: number): ActionResponse {
@@ -52,7 +57,8 @@ class RecordingTransferBridge implements NativeSessionBridge {
     return this.ok('send_files');
   }
 
-  setConfirmOverrideFile(sessionId: string, actId: number, needOverride: boolean, isUpload: boolean): ActionResponse {
+  setConfirmOverrideFile(sessionId: string, actId: number, _fileNum: number,
+    needOverride: boolean, isUpload: boolean): ActionResponse {
     this.calls.push(`override:${sessionId}:${actId}:${needOverride}:${isUpload}`);
     return this.ok('set_confirm_override_file');
   }
@@ -96,6 +102,33 @@ class RecordingTransferBridge implements NativeSessionBridge {
     return this.ok('send_chat');
   }
 
+  sendClipboard(_sessionId: string, _content: string): ActionResponse {
+    return this.ok('send_clipboard');
+  }
+
+  login(_sessionId: string, _password: string, _remember: boolean = false): ActionResponse {
+    return this.ok('login');
+  }
+
+  getToggleOption(_sessionId: string, _option: string): boolean {
+    return false;
+  }
+
+  toggleOption(_sessionId: string, _option: string): void {}
+
+  getRemoteAudioState(_sessionId: string): RemoteAudioState {
+    return {
+      available: false,
+      muted: false,
+      rendererActive: false,
+      errorText: '',
+    };
+  }
+
+  setRemoteAudioMuted(_sessionId: string, _muted: boolean): boolean {
+    return true;
+  }
+
   private ok(action: string): ActionResponse {
     return { ok: true, action };
   }
@@ -123,6 +156,7 @@ export default function transferManagerTest(): void {
       expect(bridge.lastOptions.forceRelay).assertTrue();
       expect(bridge.lastOptions.isFileTransfer).assertTrue();
       expect(bridge.lastOptions.isViewCamera).assertFalse();
+      expect(bridge.lastOptions.isViewOnly).assertFalse();
     });
 
     it('advances a queued upload from progress to completed', 0, () => {

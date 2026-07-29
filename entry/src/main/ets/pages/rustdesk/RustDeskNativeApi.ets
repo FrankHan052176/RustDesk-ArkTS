@@ -63,6 +63,7 @@ import {
   sessionSetImageQuality as bridgeSessionSetImageQuality,
   sessionSetShowRemoteCursor as bridgeSessionSetShowRemoteCursor,
   sessionSetSize as bridgeSessionSetSize,
+  sessionSetViewOnly as bridgeSessionSetViewOnly,
   sessionStart as bridgeSessionStart,
   sessionSwitchDisplay as bridgeSessionSwitchDisplay,
   sessionTakeRgbaFrame as bridgeSessionTakeRgbaFrame,
@@ -325,6 +326,10 @@ export class RustDeskNativeApi {
 
   sessionSetSize(sessionId: string, display: number, width: number, height: number): string {
     return bridgeSessionSetSize(sessionId, display, width, height);
+  }
+
+  sessionSetViewOnly(sessionId: string, enabled: boolean): string {
+    return bridgeSessionSetViewOnly(sessionId, enabled);
   }
 
   sessionStart(sessionId: string): string {

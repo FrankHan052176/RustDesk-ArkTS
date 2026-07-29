@@ -4,6 +4,7 @@ import {
   HdsTabs,
   HdsTabsController,
   IconStyleMode,
+  ScrollEffectType,
   hdsMaterial,
 } from '@kit.UIDesignKit';
 import { rustDeskNativeApi as native } from './rustdesk/RustDeskNativeApi';
@@ -23,6 +24,10 @@ import { PasswordDialog } from './rustdesk/components/PasswordDialog';
 import { ConnectionAttemptOverlay } from './rustdesk/components/ConnectionAttemptOverlay';
 import { SettingsTab } from './rustdesk/components/SettingsTab';
 import { SessionToolbar } from './rustdesk/components/SessionToolbar';
+import {
+  REMOTE_SOFT_KEYBOARD_PANEL_HEIGHT,
+  RemoteSoftKeyboard,
+} from './rustdesk/components/RemoteSoftKeyboard';
 import { ChatDrawer } from './rustdesk/components/ChatDrawer';
 import { DisplaySelectorSheet } from './rustdesk/components/DisplaySelectorSheet';
 import { QualityControlSheet, QualityPreset } from './rustdesk/components/QualityControlSheet';
@@ -122,9 +127,9 @@ const PREVIEW_MAX_USER_SCALE = 4.0;
 const PREVIEW_SURFACE_WAIT_ATTEMPTS = 100;
 const PREVIEW_SURFACE_WAIT_INTERVAL_MS = 50;
 
-type PrimarySessionKind = 'remote_control' | 'view_camera';
+type PrimarySessionKind = 'remote_control' | 'view_only' | 'view_camera';
 type PasswordSessionKind = 'primary' | 'file_transfer';
-type PeerLaunchKind = 'remote_control' | 'view_camera' | 'file_transfer';
+type PeerLaunchKind = 'remote_control' | 'view_only' | 'view_camera' | 'file_transfer';
 type ConnectionUiPhase = 'idle' | 'connecting' | 'awaiting_password' | 'authenticating' | 'connected' | 'failed';
 
 interface RuntimeDirectoryResponse {
@@ -186,6 +191,11 @@ struct RustDeskIndex {
   private inputInterceptorActive: boolean = false;
   private previewKeyboardCaptureFocused: boolean = false;
   private previewKeyboardBlurTimer: number = -1;
+  private softKeyboardPressedKeys: string[] = [];
+  private softKeyboardAltActive: boolean = false;
+  private softKeyboardCtrlActive: boolean = false;
+  private softKeyboardShiftActive: boolean = false;
+  private softKeyboardCommandActive: boolean = false;
   private lanScanTimer: number = -1;
   private accountPollTimer: number = -1;
   private accountOptionsPollTimer: number = -1;
@@ -263,6 +273,8 @@ struct RustDeskIndex {
   @Local previewFramePixelMap: image.PixelMap | undefined = undefined;
   @Local rgbaFallbackActive: boolean = false;
   @Local isFoldHoverMode: boolean = false;
+  @Local softKeyboardVisible: boolean = false;
+  @Local softKeyboardDockTop: boolean = false;
   @Local foldHoverUpperHeight: number = 0;
   @Local foldHoverCreaseHeight: number = 0;
 
@@ -407,6 +419,7 @@ struct RustDeskIndex {
       this.accountOidcOpenedUrl = '';
     }
     this.previewKeyboardCaptureFocused = false;
+    this.releaseSoftKeyboardKeys();
     this.stopInputInterceptor();
     this.clipboardController?.reset();
     this.setSessionKeyboardEntered(false);
@@ -1177,6 +1190,10 @@ struct RustDeskIndex {
       this.connectCameraSession();
       return;
     }
+    if (kind === 'view_only') {
+      this.connectViewOnlySession();
+      return;
+    }
     if (kind === 'file_transfer') {
       this.openTransferWorkspace();
       return;
@@ -1238,7 +1255,9 @@ struct RustDeskIndex {
     this.connectionUiPhase = 'connecting';
     this.connectionUiMessage = kind === 'view_camera'
       ? '正在协商摄像头会话，成功后再进入预览。'
-      : '正在建立安全连接，成功后再进入远控。';
+      : (kind === 'view_only'
+        ? '正在建立只观看会话，不会发送键鼠输入。'
+        : '正在建立安全连接，成功后再进入远控。');
   }
 
   private beginTransferConnectionAttempt(target: string): void {
@@ -1324,6 +1343,10 @@ struct RustDeskIndex {
     await this.connectSession('view_camera');
   }
 
+  private async connectViewOnlySession(): Promise<void> {
+    await this.connectSession('view_only');
+  }
+
   private async connectSession(kind: PrimarySessionKind): Promise<void> {
     if (this.sessionCloseInFlight) {
       return;
@@ -1354,8 +1377,12 @@ struct RustDeskIndex {
     this.syncClipboardController();
     this.syncInputInterceptor();
     this.errorText = '';
-    this.connectionSummary = kind === 'view_camera' ? '正在连接远端摄像头...' : '正在建立远控连接...';
-    this.sessionMessage = kind === 'view_camera' ? '正在连接摄像头' : '正在连接远端';
+    this.connectionSummary = kind === 'view_camera'
+      ? '正在连接远端摄像头...'
+      : (kind === 'view_only' ? '正在连接远端屏幕（只观看）...' : '正在建立远控连接...');
+    this.sessionMessage = kind === 'view_camera'
+      ? '正在连接摄像头'
+      : (kind === 'view_only' ? '正在连接远端屏幕' : '正在连接远端');
     hilog.info(DOMAIN, TAG, 'connectSession kind=%{public}s target=%{public}s', kind, target);
     this.showTransferWorkspace = false;
     this.showPreviewModal = false;
@@ -1404,9 +1431,21 @@ struct RustDeskIndex {
         forceRelay: false,
         isFileTransfer: false,
         isViewCamera: kind === 'view_camera',
+        isViewOnly: kind === 'view_only',
       });
       this.updateSessionState(response);
-      return response.ok && this.activeSessionId.length > 0;
+      if (!response.ok || this.activeSessionId.length === 0) {
+        return false;
+      }
+      if (kind === 'view_camera') {
+        return true;
+      }
+      const policy = this.nativeSessionBridge.setViewOnly(
+        this.activeSessionId,
+        kind === 'view_only',
+      );
+      this.updateSessionState(policy);
+      return policy.ok;
     } catch (error) {
       this.errorText = String(error);
       hilog.error(DOMAIN, TAG, 'createSession failed target=%{public}s error=%{public}s', target, this.errorText);
@@ -1549,6 +1588,7 @@ struct RustDeskIndex {
       }
       const sessionId = this.activeSessionId;
       hilog.info(DOMAIN, TAG, 'closeSession sessionId=%{public}s reason=%{public}s', sessionId, reason ?? '');
+      this.releaseSoftKeyboardKeys();
       if (this.relativeMouseMode && sessionId) {
         this.syncRelativeMouseMode(false);
       }
@@ -1628,6 +1668,9 @@ struct RustDeskIndex {
     this.previewUserOffsetX = 0;
     this.previewUserOffsetY = 0;
     this.previewUserRotation = 0;
+    this.softKeyboardVisible = false;
+    this.softKeyboardDockTop = false;
+    this.clearSoftKeyboardKeyState();
     this.previewGestureStartScale = 1;
     this.previewGestureStartOffsetX = 0;
     this.previewGestureStartOffsetY = 0;
@@ -1705,6 +1748,7 @@ struct RustDeskIndex {
     if (!this.overlayState.open(panel)) {
       return;
     }
+    this.hideSoftKeyboard();
     this.previewKeyboardCaptureFocused = false;
     this.syncInputInterceptor();
     this.getUIContext()?.animateTo({ duration: 300, curve: Curve.FastOutSlowIn }, () => {
@@ -1747,6 +1791,168 @@ struct RustDeskIndex {
 
   private isRemoteControlSessionActive(): boolean {
     return this.activeSessionKind === 'remote_control' && this.activeSessionId.length > 0;
+  }
+
+  private isRemoteViewerSessionActive(): boolean {
+    return this.activeSessionKind === 'view_only' && this.activeSessionId.length > 0;
+  }
+
+  private isRemoteDesktopSessionActive(): boolean {
+    return this.isRemoteControlSessionActive() || this.isRemoteViewerSessionActive();
+  }
+
+  private softKeyboardAvailable(): boolean {
+    return !this.isPcDevice()
+      && this.isRemoteControlSessionActive()
+      && this.showPreviewModal
+      && !this.isFoldHoverMode
+      && !this.showTransferWorkspace;
+  }
+
+  private toggleSoftKeyboard(): void {
+    if (!this.softKeyboardAvailable()) {
+      this.hideSoftKeyboard();
+      return;
+    }
+    if (this.softKeyboardVisible) {
+      this.hideSoftKeyboard();
+      setTimeout(() => this.requestPreviewInputFocus(), 80);
+      return;
+    }
+    this.softKeyboardVisible = true;
+  }
+
+  private moveSoftKeyboardToOtherEdge(): void {
+    this.softKeyboardDockTop = !this.softKeyboardDockTop;
+  }
+
+  private sendSoftKeyboardKey(
+    name: string,
+    down: boolean,
+    alt: boolean,
+    ctrl: boolean,
+    shift: boolean,
+    command: boolean,
+  ): void {
+    if (!this.isRemoteControlSessionActive()) {
+      this.clearSoftKeyboardKeyState();
+      return;
+    }
+    if (down && !this.remoteInteractionReady) {
+      return;
+    }
+    if (!down && this.softKeyboardPressedKeys.indexOf(name) < 0) {
+      return;
+    }
+    const payload = new RustDeskKeyPayload(name, down);
+    payload.alt = alt;
+    payload.ctrl = ctrl;
+    payload.shift = shift;
+    payload.command = command;
+    if (this.sendKeyPayloadObject(payload)) {
+      this.rememberSoftKeyboardKey(name, down, alt, ctrl, shift, command);
+    }
+  }
+
+  private isSoftKeyboardModifier(name: string): boolean {
+    return name === 'VK_CONTROL' || name === 'VK_MENU' || name === 'VK_SHIFT' || name === 'Meta';
+  }
+
+  private rememberSoftKeyboardKey(
+    name: string,
+    down: boolean,
+    alt: boolean,
+    ctrl: boolean,
+    shift: boolean,
+    command: boolean,
+  ): void {
+    this.softKeyboardAltActive = alt;
+    this.softKeyboardCtrlActive = ctrl;
+    this.softKeyboardShiftActive = shift;
+    this.softKeyboardCommandActive = command;
+    if (name === 'VK_CONTROL') {
+      this.softKeyboardCtrlActive = down;
+    } else if (name === 'VK_MENU') {
+      this.softKeyboardAltActive = down;
+    } else if (name === 'VK_SHIFT') {
+      this.softKeyboardShiftActive = down;
+    } else if (name === 'Meta') {
+      this.softKeyboardCommandActive = down;
+    }
+    const index = this.softKeyboardPressedKeys.indexOf(name);
+    if (down && index < 0) {
+      this.softKeyboardPressedKeys.push(name);
+    } else if (!down && index >= 0) {
+      this.softKeyboardPressedKeys.splice(index, 1);
+    }
+  }
+
+  private releaseSoftKeyboardKey(name: string): void {
+    const payload = new RustDeskKeyPayload(name, false);
+    payload.alt = this.softKeyboardAltActive;
+    payload.ctrl = this.softKeyboardCtrlActive;
+    payload.shift = this.softKeyboardShiftActive;
+    payload.command = this.softKeyboardCommandActive;
+    this.sendKeyPayloadObject(payload);
+    this.rememberSoftKeyboardKey(
+      name,
+      false,
+      this.softKeyboardAltActive,
+      this.softKeyboardCtrlActive,
+      this.softKeyboardShiftActive,
+      this.softKeyboardCommandActive,
+    );
+  }
+
+  private releaseSoftKeyboardKeys(): void {
+    if (!this.isRemoteControlSessionActive()) {
+      this.clearSoftKeyboardKeyState();
+      return;
+    }
+    const pressedKeys = this.softKeyboardPressedKeys.slice();
+    for (let index = 0; index < pressedKeys.length; index += 1) {
+      const name = pressedKeys[index];
+      if (!this.isSoftKeyboardModifier(name)) {
+        this.releaseSoftKeyboardKey(name);
+      }
+    }
+    const modifiers: string[] = ['VK_CONTROL', 'VK_MENU', 'VK_SHIFT', 'Meta'];
+    for (let index = 0; index < modifiers.length; index += 1) {
+      const name = modifiers[index];
+      if (this.softKeyboardPressedKeys.indexOf(name) >= 0) {
+        this.releaseSoftKeyboardKey(name);
+      }
+    }
+    this.clearSoftKeyboardKeyState();
+  }
+
+  private clearSoftKeyboardKeyState(): void {
+    this.softKeyboardPressedKeys = [];
+    this.softKeyboardAltActive = false;
+    this.softKeyboardCtrlActive = false;
+    this.softKeyboardShiftActive = false;
+    this.softKeyboardCommandActive = false;
+  }
+
+  private hideSoftKeyboard(): void {
+    if (this.softKeyboardVisible) {
+      this.releaseSoftKeyboardKeys();
+    }
+    this.softKeyboardVisible = false;
+  }
+
+  private softKeyboardWidth(): number {
+    if (this.previewViewWidth <= 0) {
+      return 320;
+    }
+    return Math.max(280, Math.min(this.previewViewWidth - 16, 760));
+  }
+
+  private softKeyboardOffsetY(): number {
+    if (this.softKeyboardDockTop || this.previewViewHeight <= 0) {
+      return 12;
+    }
+    return Math.max(12, this.previewViewHeight - REMOTE_SOFT_KEYBOARD_PANEL_HEIGHT - 16);
   }
 
   private sendClipboardText(content: string): boolean {
@@ -1917,8 +2123,8 @@ struct RustDeskIndex {
   }
 
   private openDisplaySheet(): void {
-    if (!this.isRemoteControlSessionActive()) {
-      this.sessionMessage = '请先建立远控连接';
+    if (!this.isRemoteDesktopSessionActive()) {
+      this.sessionMessage = '请先建立远程桌面连接';
       return;
     }
     this.openOverlayPanel('display');
@@ -2827,6 +3033,9 @@ struct RustDeskIndex {
       return;
     }
     this.isFoldHoverMode = active;
+    if (active) {
+      this.hideSoftKeyboard();
+    }
     hilog.info(DOMAIN, TAG, 'Fold hover mode changed: %{public}s', active ? 'true' : 'false');
     setTimeout(() => {
       this.applyDisplayConfiguration();
@@ -3160,6 +3369,9 @@ struct RustDeskIndex {
   }
 
   private setSessionKeyboardEntered(enter: boolean): void {
+    if (!this.isRemoteControlSessionActive()) {
+      return;
+    }
     const sessionId = this.activeSessionId;
     if (enter) {
       if (!sessionId || this.keyboardEnteredSessionId === sessionId) {
@@ -3306,6 +3518,9 @@ struct RustDeskIndex {
   }
 
   private handlePreviewTouchEvent(event: TouchEvent): void {
+    if (!this.isRemoteControlSessionActive()) {
+      return;
+    }
     this.requestPreviewInputFocus();
     this.getInputController().handleTouchEvent(event);
   }
@@ -3348,22 +3563,34 @@ struct RustDeskIndex {
   }
 
   private handlePreviewMouseEvent(event: MouseEvent): void {
+    if (!this.isRemoteControlSessionActive()) {
+      return;
+    }
     this.requestPreviewInputFocus();
     this.getInputController().handleMouseEvent(event);
   }
 
   private handlePreviewAxisEvent(event: AxisEvent): void {
+    if (!this.isRemoteControlSessionActive()) {
+      return;
+    }
     this.requestPreviewInputFocus();
     this.getInputController().handleAxisEvent(event);
   }
 
   private handlePreviewKeyEvent(event: KeyEvent): boolean {
+    if (!this.isRemoteControlSessionActive()) {
+      return false;
+    }
     this.requestPreviewInputFocus();
     this.logRelativeDebug('keyboard_event', `keyCode=${event.keyCode} type=${String(event.type)} keyText=${String(event.keyText ?? '')} unicode=${String(event.unicode ?? '')}`);
     return this.getInputController().handleKeyEvent(event);
   }
 
   private handlePreviewRootKeyEvent(event: KeyEvent): boolean {
+    if (!this.isRemoteControlSessionActive()) {
+      return false;
+    }
     this.logRelativeDebug('keyboard_root_event', `keyCode=${event.keyCode} type=${String(event.type)} keyText=${String(event.keyText ?? '')} unicode=${String(event.unicode ?? '')}`);
     return this.getInputController().handleKeyEvent(event);
   }
@@ -4421,6 +4648,30 @@ struct RustDeskIndex {
             .hitTestBehavior(HitTestMode.None)
             .zIndex(20);
         }
+
+        if (this.softKeyboardVisible && this.softKeyboardAvailable()) {
+          Row() {
+            RemoteSoftKeyboard({
+              keyboardWidth: this.softKeyboardWidth(),
+              dockTop: this.softKeyboardDockTop,
+              onKey: (
+                name: string,
+                down: boolean,
+                alt: boolean,
+                ctrl: boolean,
+                shift: boolean,
+                command: boolean,
+              ): void => this.sendSoftKeyboardKey(name, down, alt, ctrl, shift, command),
+              onMoveDock: (): void => this.moveSoftKeyboardToOtherEdge(),
+              onCollapse: (): void => this.toggleSoftKeyboard(),
+            });
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.Center)
+          .position({ x: 0, y: this.softKeyboardOffsetY() })
+          .hitTestBehavior(HitTestMode.Block)
+          .zIndex(40);
+        }
       }
         .width('100%')
         .height('100%')
@@ -4447,6 +4698,9 @@ struct RustDeskIndex {
             qualityTransitionId: SESSION_OVERLAY_TRANSITION_QUALITY,
             unreadCount: this.chatRevision >= 0 ? this.chatStore.unreadCount() : 0,
             cameraSession: this.activeSessionKind === 'view_camera',
+            viewOnlySession: this.activeSessionKind === 'view_only',
+            softKeyboardAvailable: this.softKeyboardAvailable(),
+            softKeyboardVisible: this.softKeyboardVisible,
             audioAvailable: this.remoteAudioState.available,
             audioMuted: this.remoteAudioState.muted,
             wideLayout: this.previewViewWidth >= 700,
@@ -4461,6 +4715,7 @@ struct RustDeskIndex {
             onAudioChange: (enabled: boolean) => this.setRemoteAudioEnabled(enabled),
             onOpenDisplay: () => this.openDisplaySheet(),
             onOpenQuality: () => this.openQualitySheet(),
+            onToggleSoftKeyboard: () => this.toggleSoftKeyboard(),
             onDisconnect: () => this.closeSession('已手动断开连接'),
             onMinimize: () => {
               this.getUIContext()?.animateTo({ duration: 300, curve: Curve.FastOutSlowIn }, () => {
@@ -4480,7 +4735,7 @@ struct RustDeskIndex {
         }
         .width('92%')
         .constraintSize({
-          maxWidth: this.activeSessionKind === 'view_camera'
+          maxWidth: this.activeSessionKind === 'view_camera' || this.activeSessionKind === 'view_only'
             ? 420
             : (this.previewViewWidth >= 700 ? 580 : 380),
         })
@@ -4817,6 +5072,7 @@ struct RustDeskIndex {
       style: {
         scrollEffectOpts: {
           enableScrollEffect: false,
+          scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
         },
         systemMaterialEffect: {
           materialType: hdsMaterial.MaterialType.ADAPTIVE,
@@ -4848,7 +5104,9 @@ struct RustDeskIndex {
           width: this.pendingResolutionWidth,
           height: this.pendingResolutionHeight,
         } : undefined,
-        resolutionEnabled: this.sessionDisplayController.canChangeResolution(this.peerPlatform),
+        resolutionEnabled: this.activeSessionKind !== 'view_only'
+          && this.sessionDisplayController.canChangeResolution(this.peerPlatform),
+        viewOnlySession: this.activeSessionKind === 'view_only',
         onSelectDisplay: (index: number) => this.requestDisplaySelection(index),
         onSelectResolution: (resolution: ResolutionInfo) => this.requestResolutionChange(resolution),
         onClose: () => this.closeOverlayPanel(),
@@ -5002,7 +5260,7 @@ struct RustDeskIndex {
   }
 
   private deviceTitleSpacerHeight(): number {
-    return RustDeskLayoutTokens.PAGE_TITLE_SPACER;
+    return RustDeskLayoutTokens.DEVICE_PAGE_TITLE_SPACER;
   }
 
   private boundMainTitleSpacerHeight(): number {
@@ -5028,12 +5286,14 @@ struct RustDeskIndex {
       bottomAvoidInset: this.windowBottomAvoidInset,
       onTargetChange: (value: string) => this.updatePeerTarget(value),
       onConnectRemote: () => this.connectRemoteSession(),
+      onViewOnly: () => this.connectViewOnlySession(),
       onViewCamera: () => this.connectCameraSession(),
       onOpenTransfer: () => this.openTransferWorkspace(),
       onDisconnect: () => this.closeSession('已手动断开连接'),
       onSetPeerFavorite: (peerId: string, favorite: boolean) => this.setPeerFavorite(peerId, favorite),
       onRemoveRecentPeer: (peerId: string) => this.removeRecentPeer(peerId),
       onConnectPeerRemote: (peerId: string) => this.launchPeer(peerId, 'remote_control'),
+      onViewPeerOnly: (peerId: string) => this.launchPeer(peerId, 'view_only'),
       onViewPeerCamera: (peerId: string) => this.launchPeer(peerId, 'view_camera'),
       onOpenPeerTransfer: (peerId: string) => this.launchPeer(peerId, 'file_transfer'),
     })
@@ -5055,6 +5315,7 @@ struct RustDeskIndex {
       onSetFavorite: (peerId: string, favorite: boolean) => this.setPeerFavorite(peerId, favorite),
       onRemoveRecent: (peerId: string) => this.removeRecentPeer(peerId),
       onConnectRemote: (peerId: string) => this.launchPeer(peerId, 'remote_control'),
+      onViewOnly: (peerId: string) => this.launchPeer(peerId, 'view_only'),
       onViewCamera: (peerId: string) => this.launchPeer(peerId, 'view_camera'),
       onOpenTransfer: (peerId: string) => this.launchPeer(peerId, 'file_transfer'),
     })
@@ -5234,6 +5495,20 @@ struct RustDeskIndex {
           Stack() {
             if (this.activeSessionKind === 'remote_control') {
               this.foldHoverControlPane();
+            } else if (this.activeSessionKind === 'view_only') {
+              Column({ space: $r('app.float.space_12') }) {
+                Text('只观看模式 · 触摸与键盘输入已关闭')
+                  .fontSize(16)
+                  .fontColor($r('app.color.text_primary'))
+                  .textAlign(TextAlign.Center)
+                  .width('100%');
+                this.FoldControlButton('断开连接', 'fold-view-only-disconnect', false, true, false,
+                  () => this.closeSession('已手动断开连接'));
+              }
+              .width('100%')
+              .height('100%')
+              .justifyContent(FlexAlign.Center)
+              .padding({ left: $r('app.float.space_20'), right: $r('app.float.space_20') });
             } else {
               Text('摄像头预览')
                 .fontSize(18)
@@ -5406,10 +5681,6 @@ struct RustDeskIndex {
     .barFloatingStyle({
       barWidth: { smallWidth: 264, mediumWidth: 300, largeWidth: 328 },
       barBottomMargin: this.mainTabBottomMargin(),
-      gradientMask: {
-        maskColor: Color.Transparent,
-        maskHeight: 0,
-      },
       systemMaterialEffect: {
         materialType: hdsMaterial.MaterialType.ADAPTIVE,
         materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
@@ -5444,6 +5715,7 @@ struct RustDeskIndex {
       style: {
         scrollEffectOpts: {
           enableScrollEffect: false,
+          scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
         },
         systemMaterialEffect: {
           materialType: hdsMaterial.MaterialType.ADAPTIVE,

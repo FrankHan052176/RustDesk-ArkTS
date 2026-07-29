@@ -2,6 +2,7 @@ import {
   HdsNavigation,
   HdsNavigationTitleMode,
   IconStyleMode,
+  ScrollEffectType,
   hdsMaterial,
 } from '@kit.UIDesignKit';
 import {
@@ -971,6 +972,7 @@ export struct SettingsTab {
       style: {
         scrollEffectOpts: {
           enableScrollEffect: false,
+          scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
         },
         systemMaterialEffect: {
           materialType: hdsMaterial.MaterialType.ADAPTIVE,

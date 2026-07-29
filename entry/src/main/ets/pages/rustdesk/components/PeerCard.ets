@@ -9,6 +9,7 @@ export interface PeerCardProps {
   onSetFavorite: (peerId: string, favorite: boolean) => void;
   onRemoveRecent: (peerId: string) => void;
   onConnectRemote: (peerId: string) => void;
+  onViewOnly: (peerId: string) => void;
   onViewCamera: (peerId: string) => void;
   onOpenTransfer: (peerId: string) => void;
 }
@@ -23,6 +24,7 @@ export struct PeerCard {
   @Event onSetFavorite: (peerId: string, favorite: boolean) => void = (_peerId: string, _favorite: boolean) => {};
   @Event onRemoveRecent: (peerId: string) => void = (_peerId: string) => {};
   @Event onConnectRemote: (peerId: string) => void = (_peerId: string) => {};
+  @Event onViewOnly: (peerId: string) => void = (_peerId: string) => {};
   @Event onViewCamera: (peerId: string) => void = (_peerId: string) => {};
   @Event onOpenTransfer: (peerId: string) => void = (_peerId: string) => {};
 
@@ -268,9 +270,10 @@ export struct PeerCard {
         surfaceHeight: 72,
       }) {
         Stack({ alignContent: Alignment.Center }) {
-          Row({ space: 16 }) {
+          Row({ space: 8 }) {
             this.SessionAction('远控', true, (): void => this.onConnectRemote(this.peer.id));
-            this.SessionAction('摄像头', false, (): void => this.onViewCamera(this.peer.id));
+            this.SessionAction('观看', false, (): void => this.onViewOnly(this.peer.id));
+            this.SessionAction('相机', false, (): void => this.onViewCamera(this.peer.id));
             this.SessionAction(
               this.transferActive ? '传输中' : '文件',
               this.transferActive,

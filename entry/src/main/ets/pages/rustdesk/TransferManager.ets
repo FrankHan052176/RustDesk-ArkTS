@@ -47,6 +47,7 @@ export class TransferManager {
       forceRelay,
       isFileTransfer: true,
       isViewCamera: false,
+      isViewOnly: false,
     };
     const addResponse = this.bridge.addSession(sessionId, target, options);
     if (!addResponse.ok) {

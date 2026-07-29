@@ -1,3 +1,10 @@
+import {
+  HdsNavigation,
+  HdsNavigationTitleMode,
+  IconStyleMode,
+  ScrollEffectType,
+  hdsMaterial,
+} from '@kit.UIDesignKit';
 import { LocalFileEntry, RemoteFileEntry, TransferItem } from '../RustDeskSessionTypes';
 import { RemoteFilePath } from '../RemoteFilePath';
 import { FloatingDepthOverlay } from './FloatingDepth';
@@ -47,7 +54,10 @@ export struct TransferDrawer {
   @Param bottomAvoidInset: number = 0;
   @Local viewportWidth: number = 390;
   @Local compactLayout: boolean = true;
+  @Local threePaneLayout: boolean = false;
   @Local primaryPane: TransferPrimaryPane = 'remote';
+  @Local transferSheetVisible: boolean = false;
+  private transferSheetScroller: Scroller = new Scroller();
   @Event onSelectLocal: (name: string) => void = (_name: string) => {};
   @Event onSelectRemote: (name: string) => void = (_name: string) => {};
   @Event onUpload: () => void = () => {};
@@ -117,21 +127,48 @@ export struct TransferDrawer {
     return width < 920;
   }
 
+  private shouldUseThreePaneLayout(width: number): boolean {
+    return width >= 1280;
+  }
+
+  private paneGap(): number {
+    return 12;
+  }
+
+  private halfPaneGap(): number {
+    return this.paneGap() / 2;
+  }
+
   private paneWidth(): number {
     if (this.compactLayout) {
       return this.viewportWidth;
     }
-    return Math.max(1, (this.viewportWidth - 1) / 2);
+    if (this.threePaneLayout) {
+      return Math.max(1, (this.viewportWidth - this.paneGap() * 2) / 3);
+    }
+    return Math.max(1, (this.viewportWidth - this.paneGap()) / 2);
   }
 
   private compactPeekWidth(): number {
     return Math.max(40, this.viewportWidth * 0.1);
   }
 
-  private compactPaneContentRightPadding(): number {
-    return this.compactLayout
-      ? this.compactPeekWidth() + 12
-      : 16;
+  private localPaneContentRightPadding(): number {
+    if (!this.compactLayout || this.primaryPane === 'remote') {
+      return this.compactLayout ? this.halfPaneGap() : 0;
+    }
+    return this.compactPeekWidth() + this.halfPaneGap();
+  }
+
+  private remotePaneContentLeftPadding(): number {
+    return this.compactLayout ? this.halfPaneGap() : 0;
+  }
+
+  private remotePaneContentRightPadding(): number {
+    if (!this.compactLayout) {
+      return 0;
+    }
+    return this.compactPeekWidth();
   }
 
   private localPaneOffset(): number {
@@ -143,20 +180,15 @@ export struct TransferDrawer {
 
   private remotePaneOffset(): number {
     if (!this.compactLayout) {
-      return this.paneWidth() + 1;
+      return this.paneWidth() + this.paneGap();
     }
     return this.primaryPane === 'remote'
       ? this.compactPeekWidth()
       : this.viewportWidth - this.compactPeekWidth();
   }
 
-  private dividerOffset(): number {
-    if (!this.compactLayout) {
-      return this.paneWidth();
-    }
-    return this.primaryPane === 'remote'
-      ? this.compactPeekWidth()
-      : this.viewportWidth - this.compactPeekWidth();
+  private transferPaneOffset(): number {
+    return (this.paneWidth() + this.paneGap()) * 2;
   }
 
   private transferTrayHeight(): number {
@@ -180,7 +212,8 @@ export struct TransferDrawer {
       return;
     }
     const nextCompactLayout = this.shouldUseCompactLayout(width);
-    if (nextCompactLayout === this.compactLayout) {
+    const nextThreePaneLayout = this.shouldUseThreePaneLayout(width);
+    if (nextCompactLayout === this.compactLayout && nextThreePaneLayout === this.threePaneLayout) {
       this.viewportWidth = width;
       return;
     }
@@ -190,7 +223,20 @@ export struct TransferDrawer {
     }, (): void => {
       this.viewportWidth = width;
       this.compactLayout = nextCompactLayout;
+      this.threePaneLayout = nextThreePaneLayout;
     });
+  }
+
+  private recentTransfers(limit: number): TransferItem[] {
+    const recent: TransferItem[] = [];
+    for (let index = this.transfers.length - 1; index >= 0 && recent.length < limit; index -= 1) {
+      recent.push(this.transfers[index]);
+    }
+    return recent;
+  }
+
+  private summaryTransferLimit(): number {
+    return this.compactLayout ? 1 : 2;
   }
 
   private actionEnabled(key: string): boolean {
@@ -202,6 +248,9 @@ export struct TransferDrawer {
     }
     if (key === 'remote-back') {
       return this.sessionReady;
+    }
+    if (key === 'all-transfers') {
+      return this.transfers.length > 0;
     }
     return true;
   }
@@ -332,7 +381,7 @@ export struct TransferDrawer {
   }
 
   @Builder
-  private TransferRow(item: TransferItem) {
+  private TransferRow(item: TransferItem, showDivider: boolean) {
     Column({ space: $r('app.float.space_6') }) {
       Text(`${item.direction === 'upload' ? '上传' : '下载'} · ${item.fileName}`)
         .width('100%')
@@ -383,7 +432,45 @@ export struct TransferDrawer {
     .width('100%')
     .alignItems(HorizontalAlign.Start)
     .padding({ top: $r('app.float.space_12'), bottom: $r('app.float.space_12') })
-    .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') });
+    .border({ width: { bottom: showDivider ? 0.5 : 0 }, color: $r('app.color.divider') });
+  }
+
+  @Builder
+  private TransferSummaryRow(item: TransferItem) {
+    Column({ space: $r('app.float.space_4') }) {
+      Text(`${item.direction === 'upload' ? '上传' : '下载'} · ${item.fileName}`)
+        .width('100%')
+        .fontSize($r('app.float.font_body'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis });
+      Text(this.transferDetail(item))
+        .width('100%')
+        .fontSize($r('app.float.font_caption'))
+        .fontColor($r('app.color.text_secondary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis });
+      if ((item.state === 'queued' || item.state === 'running') && item.totalBytes > 0) {
+        Progress({
+          value: this.transferProgressValue(item),
+          total: item.totalBytes,
+          type: ProgressType.Linear,
+        })
+          .width('100%')
+          .height(4)
+          .color($r('app.color.brand_primary'))
+          .backgroundColor($r('app.color.surface_secondary'));
+      }
+    }
+    .layoutWeight(1)
+    .alignItems(HorizontalAlign.Start)
+    .padding({
+      left: $r('app.float.space_12'),
+      right: $r('app.float.space_12'),
+      top: $r('app.float.space_8'),
+      bottom: $r('app.float.space_8'),
+    });
   }
 
   @Builder
@@ -393,6 +480,8 @@ export struct TransferDrawer {
         ListItem() {
           this.LocalEntry(entry);
         }
+        .width('100%')
+        .clip(false)
       }, (entry: LocalFileEntry) => entry.path)
       if (this.localEntries.length === 0) {
         ListItem() {
@@ -407,7 +496,14 @@ export struct TransferDrawer {
     }
     .width('100%')
     .height('100%')
-    .padding($r('app.float.space_8'))
+    .padding({
+      left: $r('app.float.space_8'),
+      right: $r('app.float.space_8'),
+      top: $r('app.float.space_12'),
+      bottom: $r('app.float.space_12'),
+    })
+    .clip(false)
+    .clipContent(ContentClipMode.BOUNDARY)
     .scrollBar(BarState.Off)
     .alignListItem(ListItemAlign.Start);
   }
@@ -415,19 +511,13 @@ export struct TransferDrawer {
   @Builder
   private LocalPaneContent(fillAvailable: boolean) {
     Row({ space: $r('app.float.space_8') }) {
-      Column({ space: $r('app.float.space_2') }) {
-        Text('本机文件')
-          .fontSize($r('app.float.font_body_large'))
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'));
-        Text(this.rootStatus || 'HarmonyOS 下载目录')
-          .fontSize($r('app.float.font_caption'))
-          .fontColor($r('app.color.text_secondary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis });
-      }
+      Text('本机文件')
+        .fontSize($r('app.float.font_body_large'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
       .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start);
 
       if (this.compactLayout) {
         this.FloatingAction('show-remote', '远端', false, (): void => this.switchPrimaryPane('remote'))
@@ -435,6 +525,7 @@ export struct TransferDrawer {
       this.FloatingAction('upload', '上传', true, () => this.onUpload())
     }
     .width('100%')
+    .padding({ right: $r('app.float.space_16') })
     .alignItems(VerticalAlign.Center);
 
     Stack() {
@@ -485,6 +576,8 @@ export struct TransferDrawer {
         ListItem() {
           this.RemoteEntry(entry);
         }
+        .width('100%')
+        .clip(false)
       }, (entry: RemoteFileEntry) => `${entry.entry_type}-${entry.name}`)
       if (this.remoteEntries.length === 0) {
         ListItem() {
@@ -499,7 +592,14 @@ export struct TransferDrawer {
     }
     .width('100%')
     .height('100%')
-    .padding($r('app.float.space_8'))
+    .padding({
+      left: $r('app.float.space_8'),
+      right: $r('app.float.space_8'),
+      top: $r('app.float.space_12'),
+      bottom: $r('app.float.space_12'),
+    })
+    .clip(false)
+    .clipContent(ContentClipMode.BOUNDARY)
     .scrollBar(BarState.Off)
     .alignListItem(ListItemAlign.Start);
   }
@@ -507,17 +607,13 @@ export struct TransferDrawer {
   @Builder
   private RemotePaneContent(fillAvailable: boolean) {
     Row({ space: $r('app.float.space_8') }) {
-      Column({ space: $r('app.float.space_2') }) {
-        Text('远端文件')
-          .fontSize($r('app.float.font_body_large'))
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'));
-        Text(this.sessionStatus)
-          .fontSize($r('app.float.font_caption'))
-          .fontColor($r('app.color.text_secondary'));
-      }
+      Text('远端文件')
+        .fontSize($r('app.float.font_body_large'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
       .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start);
 
       if (this.compactLayout) {
         this.FloatingAction('show-local', '本机', false, (): void => this.switchPrimaryPane('local'))
@@ -526,6 +622,7 @@ export struct TransferDrawer {
       this.FloatingAction('download', '下载', true, () => this.onDownload())
     }
     .width('100%')
+    .padding({ right: $r('app.float.space_16') })
     .alignItems(VerticalAlign.Center);
 
     Stack() {
@@ -573,7 +670,7 @@ export struct TransferDrawer {
   private TransferRowsContent() {
     Column() {
       ForEach(this.transfers, (item: TransferItem) => {
-        this.TransferRow(item);
+        this.TransferRow(item, true);
       }, (item: TransferItem) =>
         `${item.id}-${item.fileNum}-${item.state}-${Math.round(item.transferredBytes)}-${Math.round(item.speedBytesPerSecond)}`)
       if (this.transfers.length === 0) {
@@ -590,6 +687,35 @@ export struct TransferDrawer {
       }
     }
     .width('100%');
+  }
+
+  @Builder
+  private TransferSummaryContent() {
+    if (this.transfers.length === 0) {
+      Row() {
+        Text('暂无传输任务')
+          .fontSize($r('app.float.font_body'))
+          .fontColor($r('app.color.text_secondary'));
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_16') })
+      .alignItems(VerticalAlign.Center);
+    } else {
+      Row({ space: this.paneGap() }) {
+        ForEach(this.recentTransfers(this.summaryTransferLimit()), (item: TransferItem) => {
+          this.TransferSummaryRow(item);
+        }, (item: TransferItem) =>
+          `summary-${item.id}-${item.fileNum}-${item.state}-${Math.round(item.transferredBytes)}`)
+        if (!this.compactLayout && this.transfers.length < 2) {
+          Blank()
+            .layoutWeight(1);
+        }
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .alignItems(VerticalAlign.Top);
+    }
   }
 
   @Builder
@@ -614,6 +740,7 @@ export struct TransferDrawer {
       }
       .layoutWeight(1)
       .width('100%')
+      .align(Alignment.TopStart)
       .scrollBar(BarState.Off);
     } else {
       this.TransferRowsContent();
@@ -629,30 +756,88 @@ export struct TransferDrawer {
           .fontSize($r('app.float.font_body'))
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'));
-        Text(this.transfers.length > 0 ? `${this.transfers.length} 项` : '暂无任务')
-          .fontSize($r('app.float.font_label'))
-          .fontColor(this.transfers.length > 0
-            ? $r('app.color.brand_primary')
-            : $r('app.color.text_secondary'));
+        this.FloatingAction('all-transfers', '全部', false, (): void => {
+          this.transferSheetVisible = true;
+        })
       }
       .width('100%')
-      .height(44)
+      .height(56)
       .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_16') })
       .alignItems(VerticalAlign.Center);
 
-      if (this.transfers.length > 0) {
-        Scroll() {
-          this.TransferRowsContent();
-        }
-        .layoutWeight(1)
-        .width('100%')
-        .padding({ left: $r('app.float.space_16'), right: $r('app.float.space_16') })
-        .scrollBar(BarState.Off);
-      }
+      this.TransferSummaryContent();
     }
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.background'));
+  }
+
+  @Builder
+  private AllTransfersSheet() {
+    HdsNavigation() {
+      Scroll(this.transferSheetScroller) {
+        Column() {
+          this.TransferRowsContent();
+        }
+        .width('100%')
+        .padding({
+          left: $r('app.float.space_20'),
+          right: $r('app.float.space_20'),
+          top: $r('app.float.space_8'),
+          bottom: $r('app.float.space_24'),
+        })
+        .backgroundColor($r('app.color.neu_base'));
+      }
+      .width('100%')
+      .height('100%')
+      .align(Alignment.TopStart)
+      .clip(false)
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+      .nestedScroll({
+        scrollForward: NestedScrollMode.PARENT_FIRST,
+        scrollBackward: NestedScrollMode.SELF_FIRST,
+      })
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM]);
+    }
+    .mode(NavigationMode.Stack)
+    .titleMode(HdsNavigationTitleMode.MODAL)
+    .hideBackButton(true)
+    .titleBar({
+      enableComponentSafeArea: true,
+      content: {
+        title: {
+          mainTitle: '全部传输任务',
+        },
+        menu: {
+          value: [{
+            content: {
+              label: '关闭',
+              icon: $r('sys.symbol.xmark'),
+              type: IconStyleMode.SMALL,
+              action: (): void => {
+                this.transferSheetVisible = false;
+              },
+            },
+          }],
+        },
+      },
+      style: {
+        scrollEffectOpts: {
+          enableScrollEffect: false,
+          scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
+        },
+        systemMaterialEffect: {
+          materialType: hdsMaterial.MaterialType.ADAPTIVE,
+          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
+        },
+      },
+    })
+    .bindToScrollable([this.transferSheetScroller])
+    .width('100%')
+    .height('100%')
+    .backgroundColor($r('app.color.neu_base'))
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM]);
   }
 
   @Builder
@@ -663,9 +848,9 @@ export struct TransferDrawer {
     .width(this.paneWidth())
     .height('100%')
     .padding({
-      left: $r('app.float.space_16'),
-      right: this.compactPaneContentRightPadding(),
-      top: $r('app.float.space_8'),
+      left: 0,
+      right: this.localPaneContentRightPadding(),
+      top: $r('app.float.space_20'),
       bottom: $r('app.float.space_8'),
     })
     .backgroundColor($r('app.color.background'))
@@ -682,9 +867,9 @@ export struct TransferDrawer {
     .width(this.paneWidth())
     .height('100%')
     .padding({
-      left: $r('app.float.space_16'),
-      right: this.compactPaneContentRightPadding(),
-      top: $r('app.float.space_8'),
+      left: this.remotePaneContentLeftPadding(),
+      right: this.remotePaneContentRightPadding(),
+      top: $r('app.float.space_20'),
       bottom: $r('app.float.space_8'),
     })
     .backgroundColor($r('app.color.background'))
@@ -694,17 +879,22 @@ export struct TransferDrawer {
   }
 
   @Builder
-  private CompactPaneMask(leftEdge: boolean) {
-    Column()
-    .width(this.compactPeekWidth())
+  private TransferWorkspacePane() {
+    Column() {
+      this.TransferPaneContent(true);
+    }
+    .width(this.paneWidth())
     .height('100%')
-    .backgroundColor($r('app.color.surface_secondary'))
-    .border({
-      width: leftEdge ? { right: 1 } : { left: 1 },
-      color: $r('app.color.divider'),
+    .padding({
+      left: $r('app.float.space_8'),
+      right: $r('app.float.space_8'),
+      top: $r('app.float.space_20'),
+      bottom: $r('app.float.space_8'),
     })
-    .hitTestBehavior(HitTestMode.None)
-    .accessibilityLevel('no');
+    .backgroundColor($r('app.color.background'))
+    .translate({ x: this.transferPaneOffset() })
+    .renderGroup(true)
+    .animation({ duration: 320, curve: Curve.FastOutSlowIn });
   }
 
   @Builder
@@ -712,23 +902,8 @@ export struct TransferDrawer {
     Stack({ alignContent: Alignment.TopStart }) {
       this.LocalWorkspacePane();
       this.RemoteWorkspacePane();
-
-      Column()
-        .width(1)
-        .height('100%')
-        .backgroundColor($r('app.color.divider'))
-        .translate({ x: this.dividerOffset() })
-        .animation({ duration: 320, curve: Curve.FastOutSlowIn });
-
-      if (this.compactLayout && this.primaryPane === 'remote') {
-        this.CompactPaneMask(true);
-      } else if (this.compactLayout) {
-        Row() {
-          this.CompactPaneMask(false);
-        }
-        .width(this.compactPeekWidth())
-        .height('100%')
-        .translate({ x: this.viewportWidth - this.compactPeekWidth() });
+      if (this.threePaneLayout) {
+        this.TransferWorkspacePane();
       }
     }
     .width('100%')
@@ -751,17 +926,19 @@ export struct TransferDrawer {
         .width('100%')
         .clip(true);
 
-        Column()
-          .width('100%')
-          .height(1)
-          .backgroundColor($r('app.color.divider'));
+        if (!this.threePaneLayout) {
+          Column()
+            .width('100%')
+            .height(1)
+            .backgroundColor($r('app.color.divider'));
 
-        Column() {
-          this.TransferTray();
+          Column() {
+            this.TransferTray();
+          }
+          .width('100%')
+          .height(this.transferTrayHeight())
+          .animation({ duration: 260, curve: Curve.FastOutSlowIn });
         }
-        .width('100%')
-        .height(this.transferTrayHeight())
-        .animation({ duration: 260, curve: Curve.FastOutSlowIn });
       }
       .layoutWeight(1)
       .width('100%')
@@ -773,6 +950,14 @@ export struct TransferDrawer {
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       const width = Number(newArea.width);
       this.updateViewportWidth(width);
+    })
+    .bindSheet(this.transferSheetVisible!!, this.AllTransfersSheet(), {
+      height: SheetSize.LARGE,
+      preferType: SheetType.CENTER,
+      showClose: false,
+      dragBar: false,
+      enableFloatingDragBar: false,
+      backgroundColor: $r('app.color.neu_base'),
     });
   }
 }
