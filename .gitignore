@@ -7,6 +7,8 @@
 node_modules/
 oh_modules/
 .ohpm/
+.ohpmrc
+.ci-signing-repo/
 
 # Build artifacts
 build/
@@ -20,6 +22,11 @@ build/
 
 # Environment/local configuration
 local.properties
+.signing/
+signingConfigs.json
+*.p12
+*.p7b
+*.cer
 
 # Logs
 *.log
