@@ -44,53 +44,31 @@ jobs:
           version: ${{ env.OHOS_COMMAND_LINE_TOOLS_VERSION }}
           cache: true
 
-      - name: Install Core
+      - name: ohpm
         shell: bash
         env:
-          CODEARTS_PRIVATE_OHPM_READ: ${{ secrets.CODEARTS_PRIVATE_OHPM_READ }}
+          CODEARTS_PRIVATE_OHPM: ${{ secrets.CODEARTS_PRIVATE_OHPM }}
         run: |
-          set -euo pipefail
-
-          hypium_version="$(jq -r '.devDependencies["@ohos/hypium"] // empty' oh-package.json5)"
-          jq 'del(.dependencies["rustdesk-ohrs"], .devDependencies["@ohos/hypium"])' \
-            oh-package.json5 > "$RUNNER_TEMP/oh-package.json5"
-          mv "$RUNNER_TEMP/oh-package.json5" oh-package.json5
-          rm -rf oh_modules
-          rm -f oh-package-lock.json5
-
           private_config="$HOME/.ohpm/.ohpmrc"
           mkdir -p "$HOME/.ohpm"
-          umask 077
-          printf '%s\n' "$CODEARTS_PRIVATE_OHPM_READ" > "$private_config"
-          trap 'rm -f "$private_config"' EXIT
+          printf '%s' "$CODEARTS_PRIVATE_OHPM" > "$private_config"
 
+          ohpm uninstall rustdesk-ohrs
           echo "Installing Core HAR: $CORE_HAR_PACKAGE"
           ohpm install "$CORE_HAR_PACKAGE" \
             --registry "$CORE_HAR_REGISTRY" \
             --retry_times 5 \
             --retry_interval 3000
+          (
+            cd entry
+            ohpm uninstall luminous_neo
+            ohpm install luminous_neo@1.0.0 \
+              --registry "$CORE_HAR_REGISTRY" \
+              --retry_times 5 \
+              --retry_interval 3000
+          )
 
           rm -f "$private_config"
-          trap - EXIT
-
-          if [[ -n "$hypium_version" ]]; then
-            jq --arg version "$hypium_version" \
-              '.devDependencies["@ohos/hypium"] = $version' \
-              oh-package.json5 > "$RUNNER_TEMP/oh-package.json5"
-            mv "$RUNNER_TEMP/oh-package.json5" oh-package.json5
-          fi
-
-      - name: ohpm install
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -f entry/oh-package-lock.json5
-          rm -rf entry/oh_modules
-          jq '.dependencies.luminous_neo = "1.0.0"' \
-            entry/oh-package.json5 > "$RUNNER_TEMP/entry-oh-package.json5"
-          mv "$RUNNER_TEMP/entry-oh-package.json5" entry/oh-package.json5
-
           ohpm install
           (
             cd entry

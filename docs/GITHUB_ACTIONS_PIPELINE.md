@@ -7,7 +7,7 @@ flowchart LR
   A["RustDesk Core"] --> B["RustDeskHar 构建"]
   B -->|发布并更新 latest| C["CodeArts 私有 OHPM"]
   B -->|repository_dispatch| D["RustDesk-ArkTS"]
-  C -->|只安装 rustdesk-ohrs| D
+  C -->|安装 rustdesk-ohrs 与 luminous_neo| D
   E["公共 OHPM"] -->|普通 ohpm install| D
   F["AppGallerySigning 私有仓"] --> D
   D -->|assembleApp publish/release| G["签名 App artifact"]
@@ -26,21 +26,16 @@ ArkTS workflow 只接受 `rustdesk-har-published` dispatch，并保留手动恢�
 构建步骤固定为：
 
 1. Checkout ArkTS，安装 Java 17 与 HarmonyOS 命令行工具。
-2. 暂时从根 `oh-package.json5` 移除本地 `rustdesk-ohrs` 和 `@ohos/hypium` 声明。
-3. 仅对 `ohpm install rustdesk-ohrs` 指定 CodeArts 私仓；该命令安装私仓中 `latest` 指向的 HAR。
-4. 安装完成后立即删除私仓认证，并恢复 `@ohos/hypium` 声明。
-5. 在根目录执行普通 `ohpm install`，然后进入 `entry` 执行普通 `ohpm install`。
-6. CI 中将 Luminous Neo 固定为公共仓的 `luminous_neo@1.0.0`。
-7. Checkout 私有签名仓并调用 `.github/scripts/prepare-signing-config.sh` 准备签名配置。
-8. 执行 App 级构建：
+2. 从 CodeArts 私仓安装 `rustdesk-ohrs@latest` 与 `luminous_neo@1.0.0`。
+3. 删除私仓认证，再在根目录与 `entry` 执行普通 `ohpm install`。
+4. Checkout 私有签名仓并调用 `.github/scripts/prepare-signing-config.sh` 准备签名配置。
+5. 执行 App 级构建：
 
    ```shell
    hvigorw assembleApp -p product=publish -p buildMode=release
    ```
 
-9. 找到并上传签名 `.app` artifact。
-
-私仓 registry 只出现在 Core HAR 的安装命令中，其余依赖始终使用普通 OHPM 安装。
+6. 找到并上传签名 `.app` artifact。
 
 ## GitHub 配置
 
@@ -48,12 +43,12 @@ workflow 使用 `harmonyos-ci-signing` Environment。
 
 | 类型 | 名称 | 用途 |
 |---|---|---|
-| Secret | `CODEARTS_PRIVATE_OHPM_READ` | CodeArts 私仓只读认证配置 |
+| Secret | `CODEARTS_PRIVATE_OHPM` | CodeArts 私仓只读认证配置 |
 | Secret | `SIGNING_REPOSITORY_TOKEN` | 读取签名私仓 |
 | Variable | `SIGNING_REPOSITORY` | 可选，默认 `FrankHan052176/AppGallerySigning` |
 | Variable | `SIGNING_REPOSITORY_REF` | 可选，默认固定到已验证的签名提交 |
 
-`CODEARTS_PRIVATE_OHPM_READ` 保存私仓认证片段，例如：
+`CODEARTS_PRIVATE_OHPM` 保存私仓认证片段，例如：
 
 ```ini
 //devrepo.devcloud.cn-north-4.huaweicloud.com/artgalaxy/api/ohpm/cn-north-4_c07b1b38744f424b8d87a86532d38003_ohpm_1/:_read_auth=REPLACE_WITH_READ_ONLY_TOKEN
