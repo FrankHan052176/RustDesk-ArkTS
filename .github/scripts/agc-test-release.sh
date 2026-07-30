@@ -11,8 +11,7 @@ AGC_PERMISSION_VIDEO_FILE="${AGC_PERMISSION_VIDEO_FILE:-}"
 AGC_RESULT_FILE="${AGC_RESULT_FILE:-}"
 app_object_id=""
 video_object_id=""
-test_package_id=""
-listing_package_id=""
+release_package_id=""
 version_id=""
 if [[ -z "$AGC_APP_FILE" || ! -f "$AGC_APP_FILE" ]]; then
   echo "Signed App file is missing." >&2
@@ -218,14 +217,12 @@ write_result() {
   umask 077
   jq -n \
     --arg version_id "$version_id" \
-    --arg test_package_id "$test_package_id" \
-    --arg listing_package_id "$listing_package_id" \
+    --arg release_package_id "$release_package_id" \
     --arg app_object_id "$app_object_id" \
     --arg video_object_id "$video_object_id" \
     '{
       versionId: $version_id,
-      testPackageId: $test_package_id,
-      listingPackageId: $listing_package_id,
+      releasePackageId: $release_package_id,
       appObjectId: $app_object_id,
       permissionVideoObjectId: $video_object_id
     }' > "$AGC_RESULT_FILE"
@@ -305,17 +302,14 @@ write_output agc_app_object_id "$app_object_id"
 write_output agc_video_object_id "$video_object_id"
 write_result
 
-test_package_id=$(add_package 1)
-write_output agc_test_package_id "$test_package_id"
-write_result
-listing_package_id=$(add_package 2)
-write_output agc_listing_package_id "$listing_package_id"
+release_package_id=$(add_package 2)
+write_output agc_package_id "$release_package_id"
+write_output agc_release_package_id "$release_package_id"
 write_result
 
 poll_attempts="${AGC_POLL_ATTEMPTS:-30}"
 poll_seconds="${AGC_POLL_SECONDS:-20}"
-wait_for_package "$test_package_id"
-wait_for_package "$listing_package_id"
+wait_for_package "$release_package_id"
 
 group_infos=$(fetch_group_infos)
 group_count=$(jq -er 'length' <<<"$group_infos")
@@ -337,7 +331,7 @@ update_response=$(curl --silent --show-error --fail-with-body \
   "${api_headers[@]}" \
   --data "$(jq -cn \
     --arg version_id "$version_id" \
-    --arg package_id "$test_package_id" \
+    --arg package_id "$release_package_id" \
     --arg desc "$test_desc" \
     --arg permission_name 'ohos.permission.INTERCEPT_INPUT_EVENT' \
     --arg video_object_id "$video_object_id" \
@@ -373,4 +367,4 @@ submit_response=$(curl --silent --show-error --fail-with-body \
 check_ret "$submit_response"
 
 cleanup_local_test_version
-echo "AGC invitation test version submitted: $version_id ($group_count groups, notify=$need_notify)"
+echo "AGC invitation test version submitted: $version_id (release_package=$release_package_id, groups=$group_count, notify=$need_notify)"

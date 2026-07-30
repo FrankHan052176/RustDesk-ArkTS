@@ -15,7 +15,7 @@ Optional repository variables:
 - `AGC_API_DOMAIN`: defaults to `connect-api.cloud.huawei.com`.
 - `AGC_TEST_DURATION_DAYS`: invitation-test lifetime in days; defaults to `14`.
 
-The workflow only creates HarmonyOS invitation testing versions: `testType=3` and `onshelfSelfDetect=0`. It obtains a token, queries every invitation-test group through the paginated `/api/app-test/v1/test-group/list` API, then uploads the signed `.app` and the ACL permission-introduction video. The same App object is registered twice: `distributeMode=1` for testing and `distributeMode=2` for AppGallery. Only the mode-1 package is bound to the invitation test version. `appId` is sent as a request header for the group API.
+The workflow only creates HarmonyOS invitation testing versions: `testType=3` and `onshelfSelfDetect=0`. It obtains a token, queries every invitation-test group through the paginated `/api/app-test/v1/test-group/list` API, then uploads the signed `.app` and the ACL permission-introduction video. The App object is registered once with `distributeMode=2` (testing and AppGallery listing), and that package is bound to the invitation test version. `appId` is sent as a request header for the group API.
 
 The update request refuses to proceed without at least one group. It writes every `groupId`, a start time one hour after the current UTC time, an end time after `AGC_TEST_DURATION_DAYS`, `displayArea="1"`, and `needShareLink=0`. It sends a test notification only for the first attempt of an ArkTS `push` run; dispatches, manual runs, and retries do not notify testers.
 
