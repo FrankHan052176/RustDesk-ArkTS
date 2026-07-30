@@ -25,6 +25,8 @@ The same web-configurable test description is used when creating and updating a 
 
 The workflow also retains a non-sensitive `*-agc-ids` artifact containing the created version, package, and upload-object IDs. It intentionally does not delete AGC objects: the final CI run is the retained release record, and the public Testing API documents deletion of a test version but not deletion by package ID.
 
+For a disposable local proof only, set `AGC_LOCAL_CLEANUP_AFTER_SUBMIT=1`. After a successful submit, the script follows the documented lifecycle for that exact generated test version: stop it, then delete it. This flag is not set by the workflow, and it never deletes package records.
+
 Official API references:
 
 - [AppGallery Connect API](https://developer.huawei.com/consumer/cn/doc/app/agc-help-connect-api-0000002236015554)

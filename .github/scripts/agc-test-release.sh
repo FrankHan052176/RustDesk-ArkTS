@@ -232,6 +232,28 @@ write_result() {
   chmod 600 "$AGC_RESULT_FILE"
 }
 
+cleanup_local_test_version() {
+  if [[ "${AGC_LOCAL_CLEANUP_AFTER_SUBMIT:-0}" != "1" ]]; then
+    return 0
+  fi
+
+  local stop_response
+  local delete_response
+  stop_response=$(curl --silent --show-error --fail-with-body \
+    --request POST "$api_base/publish/v2/test/version/stop?appId=$app_id_q" \
+    "${api_headers[@]}" \
+    --data "$(jq -cn --arg version_id "$version_id" '{versionId: $version_id}')")
+  check_ret "$stop_response"
+
+  delete_response=$(curl --silent --show-error --fail-with-body \
+    --request DELETE "$api_base/publish/v2/test/app/version?versionId=$version_id&appId=$app_id_q" \
+    "${api_headers[@]}")
+  if [[ -n "$delete_response" ]]; then
+    check_ret "$delete_response"
+  fi
+  echo "AGC local test version stopped and deleted: $version_id"
+}
+
 token_response=$(curl --silent --show-error --fail-with-body \
   --request POST "$api_base/oauth2/v1/token" \
   --header 'Content-Type: application/json' \
@@ -350,4 +372,5 @@ submit_response=$(curl --silent --show-error --fail-with-body \
   --data "$(jq -cn --arg version_id "$version_id" '{versionId: $version_id}')")
 check_ret "$submit_response"
 
+cleanup_local_test_version
 echo "AGC invitation test version submitted: $version_id ($group_count groups, notify=$need_notify)"
