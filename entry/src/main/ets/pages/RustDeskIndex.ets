@@ -124,6 +124,8 @@ const SESSION_OVERLAY_TRANSITION_DISPLAY = 'rustdesk-session-overlay-display';
 const SESSION_OVERLAY_TRANSITION_QUALITY = 'rustdesk-session-overlay-quality';
 const MAIN_PAGE_TRANSITION_DURATION_MS = 280;
 const MAIN_PAGE_TRANSITION_DISTANCE_VP = 20;
+const FREE_WINDOW_TITLE_BAR_HEIGHT_VP = 42;
+const WIDE_RAIL_EDGE_INSET_VP = 33;
 const ROTATION_TRANSITION_OUT_DURATION_MS = 100;
 const ROTATION_TRANSITION_IN_DURATION_MS = 200;
 const ROTATION_TRANSITION_MID_OPACITY = 0.86;
@@ -363,7 +365,7 @@ struct RustDeskIndex {
   private freeWindow?: window.Window;
   private freeWindowDragExpected: boolean = false;
   private freeWindowStatusChangeRegistered: boolean = false;
-  private freeWindowChromeSupported: boolean = false;
+  private freeWindowChromeOwned: boolean = false;
   private onFreeWindowStatusChange: Callback<window.WindowStatusType> = (status: window.WindowStatusType) => {
     this.applyFreeMultiWindowChrome(status);
   };
@@ -470,6 +472,7 @@ struct RustDeskIndex {
     this.pageVisible = true;
     this.syncClipboardController();
     this.syncInputInterceptor();
+    this.refreshFreeWindowChrome();
     this.refreshSessionOrientation();
     if (this.accountOidcActive) {
       this.scheduleAccountPoll(200);
@@ -2712,51 +2715,75 @@ struct RustDeskIndex {
     return deviceInfo.deviceType === '2in1';
   }
 
-  private detectFreeWindowChrome(currentWindow: window.Window): boolean {
-    if (this.freeWindowChromeSupported) {
-      return true;
-    }
-    try {
-      const titleButtons = currentWindow.getTitleButtonRect();
-      this.freeWindowChromeSupported = titleButtons.width > 0 && titleButtons.height > 0;
-    } catch (error) {
-      hilog.info(DOMAIN, TAG, 'Window has no title button area: %{public}s', String(error));
-    }
-    return this.freeWindowChromeSupported;
-  }
-
   private applyFreeMultiWindowChrome(status: window.WindowStatusType): void {
     const currentWindow = this.freeWindow;
     if (!currentWindow) {
       this.freeMultiWindow = false;
       return;
     }
-    const hasFreeWindowChrome = this.detectFreeWindowChrome(currentWindow);
-    const isFreeMultiWindow = hasFreeWindowChrome && status === window.WindowStatusType.FLOATING;
+    const isFreeMultiWindow = status === window.WindowStatusType.FLOATING;
     const hideForPcSession = this.isPcDevice() && this.pcSessionImmersiveRequested;
-    if (!hasFreeWindowChrome && !hideForPcSession) {
-      this.freeMultiWindow = false;
-      return;
-    }
-    try {
-      currentWindow.setWindowDecorVisible(!(isFreeMultiWindow || hideForPcSession));
-    } catch (error) {
-      hilog.error(DOMAIN, TAG, 'Failed to update free-window decor: %{public}s', String(error));
-      return;
-    }
-    this.freeMultiWindow = isFreeMultiWindow;
-    if (isFreeMultiWindow || hideForPcSession) {
+
+    if (isFreeMultiWindow) {
+      try {
+        currentWindow.setWindowDecorVisible(false);
+      } catch (error) {
+        this.freeMultiWindow = false;
+        hilog.error(DOMAIN, TAG, 'Failed to hide free-window decor: %{public}s', String(error));
+        return;
+      }
+      this.freeWindowChromeOwned = true;
+      this.freeMultiWindow = true;
       currentWindow.setTitleAndDockHoverShown(false, false)
         .catch((error: BusinessError) => {
           hilog.error(DOMAIN, TAG, 'Failed to disable free-window title and dock hover: %{public}s',
             JSON.stringify(error) ?? '');
         });
-    } else {
-      currentWindow.setTitleAndDockHoverShown(true, true)
+      return;
+    }
+
+    this.freeMultiWindow = false;
+    if (hideForPcSession) {
+      try {
+        currentWindow.setWindowDecorVisible(false);
+      } catch (error) {
+        hilog.error(DOMAIN, TAG, 'Failed to keep PC session decor hidden: %{public}s', String(error));
+        return;
+      }
+      currentWindow.setTitleAndDockHoverShown(false, false)
         .catch((error: BusinessError) => {
-          hilog.error(DOMAIN, TAG, 'Failed to restore free-window title and dock hover: %{public}s',
+          hilog.error(DOMAIN, TAG, 'Failed to keep PC session title and dock hover hidden: %{public}s',
             JSON.stringify(error) ?? '');
         });
+      return;
+    }
+
+    if (!this.freeWindowChromeOwned) {
+      return;
+    }
+    try {
+      currentWindow.setWindowDecorVisible(true);
+      this.freeWindowChromeOwned = false;
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'Failed to restore free-window decor: %{public}s', String(error));
+      return;
+    }
+    currentWindow.setTitleAndDockHoverShown(true, true)
+      .catch((error: BusinessError) => {
+        hilog.error(DOMAIN, TAG, 'Failed to restore free-window title and dock hover: %{public}s',
+          JSON.stringify(error) ?? '');
+      });
+  }
+
+  private refreshFreeWindowChrome(): void {
+    const currentWindow = this.freeWindow;
+    if (!currentWindow) {
+      return;
+    }
+    try {
+      this.applyFreeMultiWindowChrome(currentWindow.getWindowStatus());
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'Refresh free-window chrome failed: %{public}s', String(error));
     }
   }
 
@@ -2794,7 +2821,7 @@ struct RustDeskIndex {
         hilog.error(DOMAIN, TAG, 'unregister free-window status failed: %{public}s', String(error));
       }
     }
-    if (this.freeWindow && this.freeWindowChromeSupported) {
+    if (this.freeWindow && this.freeWindowChromeOwned) {
       try {
         this.freeWindow.setWindowDecorVisible(true);
       } catch (error) {
@@ -2807,7 +2834,7 @@ struct RustDeskIndex {
         });
     }
     this.freeWindowStatusChangeRegistered = false;
-    this.freeWindowChromeSupported = false;
+    this.freeWindowChromeOwned = false;
     this.freeMultiWindow = false;
     this.freeWindow = undefined;
   }
@@ -5474,9 +5501,10 @@ struct RustDeskIndex {
     .titleMode(HdsNavigationTitleMode.MINI)
     .hideBackButton(true)
     .titleBar({
-      enableComponentSafeArea: false,
+      enableComponentSafeArea: !this.freeMultiWindow,
       avoidLayoutSafeArea: true,
       content: {
+        stackBuilder: (): void => this.FreeWindowTitleBarStack(),
         title: {
           mainTitle: '文件传输',
           subTitle: `${this.transferSessionTarget || this.peerTarget} · ${this.transferSessionReady ? '已安全连接' : '正在连接'}`,
@@ -5576,6 +5604,21 @@ struct RustDeskIndex {
     return this.wideRailWidth() + LuminousNeoTokens.shadowPaddingFor(LuminousNeoTokens.BASE_SURFACE_SIZE) * 2;
   }
 
+  private wideRailTopInset(): number {
+    const titleBarInset = this.freeMultiWindow ? FREE_WINDOW_TITLE_BAR_HEIGHT_VP : 0;
+    return titleBarInset + WIDE_RAIL_EDGE_INSET_VP;
+  }
+
+  private wideRailHeight(): number {
+    const titleBarInset = this.freeMultiWindow ? FREE_WINDOW_TITLE_BAR_HEIGHT_VP : 0;
+    return Math.max(1,
+      this.mainViewportHeight - titleBarInset - WIDE_RAIL_EDGE_INSET_VP * 2);
+  }
+
+  private wideContentTitleSpacerHeight(): number {
+    return Math.max(0, WIDE_RAIL_EDGE_INSET_VP - RustDeskLayoutTokens.PAGE_CONTENT_TOP_PADDING);
+  }
+
   private wideRailItemSurfaceWidth(): number {
     // LuminousSurface 会在实体两侧预留完整阴影框；36vp 与当前页签高度的阴影安全区匹配。
     return this.wideRailWidth() - 36;
@@ -5655,6 +5698,10 @@ struct RustDeskIndex {
     this.playRotationTransition();
   }
 
+  private shouldShowPhoneMainTitleBar(): boolean {
+    return deviceInfo.deviceType === 'phone' && !this.freeMultiWindow && !this.isWideMainLayout();
+  }
+
   private mainNavigationTitle(): ResourceStr {
     if (this.currentTabIndex === 0) {
       return $r('app.string.navigation_home_title');
@@ -5686,14 +5733,41 @@ struct RustDeskIndex {
   }
 
   private mainTitleSpacerHeight(): number {
+    if (this.shouldShowPhoneMainTitleBar()) {
+      return 0;
+    }
+    if (this.freeMultiWindow) {
+      return FREE_WINDOW_TITLE_BAR_HEIGHT_VP + this.wideContentTitleSpacerHeight();
+    }
+    if (this.isWideMainLayout()) {
+      return this.wideContentTitleSpacerHeight();
+    }
     return RustDeskLayoutTokens.PAGE_TITLE_SPACER;
   }
 
   private deviceTitleSpacerHeight(): number {
+    if (this.shouldShowPhoneMainTitleBar()) {
+      return 0;
+    }
+    if (this.freeMultiWindow) {
+      return FREE_WINDOW_TITLE_BAR_HEIGHT_VP + this.wideContentTitleSpacerHeight();
+    }
+    if (this.isWideMainLayout()) {
+      return this.wideContentTitleSpacerHeight();
+    }
     return RustDeskLayoutTokens.DEVICE_PAGE_TITLE_SPACER;
   }
 
   private boundMainTitleSpacerHeight(): number {
+    if (this.shouldShowPhoneMainTitleBar()) {
+      return 0;
+    }
+    if (this.freeMultiWindow) {
+      return FREE_WINDOW_TITLE_BAR_HEIGHT_VP + this.wideContentTitleSpacerHeight();
+    }
+    if (this.isWideMainLayout()) {
+      return this.wideContentTitleSpacerHeight();
+    }
     return RustDeskLayoutTokens.PAGE_TITLE_SPACER;
   }
 
@@ -5862,6 +5936,7 @@ struct RustDeskIndex {
       FloatingGlassSurface({
         radius: $r('app.float.radius_24'),
         surfaceWidth: this.wideRailWidth(),
+        surfaceHeight: this.wideRailHeight(),
       }) {
         Column({ space: 6 }) {
           Column({ space: 2 }) {
@@ -5887,8 +5962,7 @@ struct RustDeskIndex {
       }
     }
     .width(this.wideRailWidth())
-    // 栏体的 96vp 阴影标定需要 33vp 安全区，避免被窗口边缘和右侧主内容覆盖。
-    .height('calc(100% - 66vp)')
+    .height(this.wideRailHeight())
     .borderRadius($r('app.float.radius_24'))
     .clip(false);
   }
@@ -6026,9 +6100,16 @@ struct RustDeskIndex {
         .hitTestBehavior(HitTestMode.None)
     }
     .width('100%')
-    .height(42)
-    .backgroundColor($r('app.color.neu_base'))
+    .height(FREE_WINDOW_TITLE_BAR_HEIGHT_VP)
+    .backgroundColor($r('app.color.transparent'))
     .zIndex(1000)
+  }
+
+  @Builder
+  private FreeWindowTitleBarStack() {
+    if (this.freeMultiWindow) {
+      this.FreeWindowTitleBar();
+    }
   }
 
   @Builder
@@ -6111,6 +6192,9 @@ struct RustDeskIndex {
     .barFloatingStyle({
       barWidth: { smallWidth: 264, mediumWidth: 300, largeWidth: 328 },
       barBottomMargin: this.mainTabBottomMargin(),
+      gradientMask: {
+        maskColor: $r('app.color.tabs_gradient_mask'),
+      },
       systemMaterialEffect: {
         materialType: hdsMaterial.MaterialType.ADAPTIVE,
         materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
@@ -6122,41 +6206,85 @@ struct RustDeskIndex {
   }
 
   @Builder
-  private MainNavigationPane() {
-    HdsNavigation() {
-      if (this.isWideMainLayout()) {
-        this.SelectedMainPage();
-      } else {
-        this.CompactMainTabs();
-      }
+  private MainNavigationBody() {
+    if (this.isWideMainLayout()) {
+      this.SelectedMainPage();
+    } else {
+      this.CompactMainTabs();
     }
-    .mode(NavigationMode.Stack)
-    .titleMode(HdsNavigationTitleMode.MINI)
-    .hideBackButton(true)
-    .titleBar({
-      enableComponentSafeArea: false,
-      avoidLayoutSafeArea: true,
-      content: {
-        title: {
-          mainTitle: this.mainNavigationTitle(),
-          subTitle: this.mainNavigationSubtitle(),
+  }
+
+  @Builder
+  private MainNavigationPane() {
+    if (this.shouldShowPhoneMainTitleBar()) {
+      HdsNavigation() {
+        this.MainNavigationBody();
+      }
+      .mode(NavigationMode.Stack)
+      .titleMode(HdsNavigationTitleMode.MINI)
+      .hideBackButton(true)
+      .titleBar({
+        enableComponentSafeArea: true,
+        avoidLayoutSafeArea: true,
+        content: {
+          title: {
+            mainTitle: this.mainNavigationTitle(),
+            subTitle: this.mainNavigationSubtitle(),
+          },
         },
-      },
-      style: {
-        scrollEffectOpts: {
-          enableScrollEffect: false,
-          scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
+        style: {
+          scrollEffectOpts: {
+            enableScrollEffect: true,
+            scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
+          },
+          originalStyle: {
+            backgroundStyle: {
+              backgroundColor: $r('app.color.transparent'),
+              maskExtraHeight: 0,
+              blurRadius: 0,
+            },
+            contentStyle: {
+              titleStyle: {
+                mainTitleColor: $r('app.color.text_primary'),
+                subTitleColor: $r('app.color.text_secondary'),
+              },
+              dividerStyle: {
+                dividerColor: $r('app.color.transparent'),
+              },
+            },
+          },
+          scrollEffectStyle: {
+            backgroundStyle: {
+              backgroundColor: $r('app.color.title_gradient_mask'),
+              maskExtraHeight: 0,
+              blurRadius: 16,
+            },
+            contentStyle: {
+              titleStyle: {
+                mainTitleColor: $r('app.color.text_primary'),
+                subTitleColor: $r('app.color.text_secondary'),
+              },
+              dividerStyle: {
+                dividerColor: $r('app.color.transparent'),
+              },
+            },
+          },
         },
-        systemMaterialEffect: {
-          materialType: hdsMaterial.MaterialType.ADAPTIVE,
-          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
-        },
-      },
-    })
-    .bindToScrollable(this.activeMainScrollers())
-    .width('100%')
-    .height('100%')
-    .backgroundColor($r('app.color.transparent'));
+      })
+      .bindToScrollable(this.activeMainScrollers())
+      .width('100%')
+      .height('100%')
+      .backgroundColor($r('app.color.transparent'));
+    } else {
+      HdsNavigation() {
+        this.MainNavigationBody();
+      }
+      .mode(NavigationMode.Stack)
+      .hideTitleBar(true)
+      .width('100%')
+      .height('100%')
+      .backgroundColor($r('app.color.transparent'));
+    }
   }
 
   @Builder
@@ -6166,46 +6294,60 @@ struct RustDeskIndex {
     } else if (this.showPreviewModal) {
       this.previewModalBuilder();
     } else if (this.isWideMainLayout()) {
-      Row() {
-        Stack({ alignContent: Alignment.Center }) {
-          this.WideNavigationRail();
-        }
-        .width(this.wideRailFrameWidth())
-        .height('100%')
-        .clip(false)
-        .zIndex(10);
+      Stack({ alignContent: Alignment.Top }) {
+        Row() {
+          Stack({ alignContent: Alignment.Center }) {
+            this.WideNavigationRail();
+          }
+          .width(this.wideRailFrameWidth())
+          .height(this.wideRailHeight())
+          .margin({ top: this.wideRailTopInset() })
+          .clip(false)
+          .zIndex(10);
 
-        Stack() {
-          this.MainNavigationPane();
+          Stack({ alignContent: Alignment.Top }) {
+            this.MainNavigationPane();
+          }
+          .layoutWeight(1)
+          .height('100%')
+          .zIndex(1);
         }
-        .layoutWeight(1)
+        .width('100%')
         .height('100%')
-        .zIndex(1);
+        .alignItems(VerticalAlign.Top)
+        .backgroundColor($r('app.color.transparent'));
+
+        if (this.freeMultiWindow) {
+          this.FreeWindowTitleBar();
+        }
       }
       .width('100%')
       .height('100%')
       .backgroundColor($r('app.color.transparent'));
     } else {
-      this.MainNavigationPane();
+      Stack({ alignContent: Alignment.Top }) {
+        this.MainNavigationPane();
+        if (this.freeMultiWindow) {
+          this.FreeWindowTitleBar();
+        }
+      }
+      .width('100%')
+      .height('100%');
     }
   }
 
   build() {
     Stack() {
-      Column() {
-        if (this.freeMultiWindow) {
+      Stack({ alignContent: Alignment.Top }) {
+        this.MainContent();
+        if (this.freeMultiWindow && this.showPreviewModal) {
           this.FreeWindowTitleBar();
         }
-        Stack() {
-          this.MainContent();
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .opacity(this.rotationTransitionOpacity)
-        .scale({ x: this.rotationTransitionScale, y: this.rotationTransitionScale })
       }
       .width('100%')
       .height('100%')
+      .opacity(this.rotationTransitionOpacity)
+      .scale({ x: this.rotationTransitionScale, y: this.rotationTransitionScale })
       .zIndex(1)
 
       ConnectionAttemptOverlay({

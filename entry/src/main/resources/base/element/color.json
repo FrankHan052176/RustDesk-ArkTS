@@ -77,6 +77,14 @@
       "value": "#00000000"
     },
     {
+      "name": "tabs_gradient_mask",
+      "value": "#CCF3F4F6"
+    },
+    {
+      "name": "title_gradient_mask",
+      "value": "#40F3F4F6"
+    },
+    {
       "name": "surface_inverse",
       "value": "#17202E"
     },

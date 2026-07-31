@@ -19,6 +19,8 @@
     { "name": "field_border", "value": "#354253" },
     { "name": "overlay", "value": "#99000000" },
     { "name": "transparent", "value": "#00000000" },
+    { "name": "tabs_gradient_mask", "value": "#CC252A31" },
+    { "name": "title_gradient_mask", "value": "#40252A31" },
     { "name": "surface_inverse", "value": "#F5F7FB" },
     { "name": "brand_primary", "value": "#58CDD6" },
     { "name": "brand_primary_pressed", "value": "#75D9E0" },
