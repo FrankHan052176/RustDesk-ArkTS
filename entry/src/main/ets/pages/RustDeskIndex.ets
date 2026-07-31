@@ -25,6 +25,11 @@ import { ConnectionAttemptOverlay } from './rustdesk/components/ConnectionAttemp
 import { SettingsTab } from './rustdesk/components/SettingsTab';
 import { SessionToolbar } from './rustdesk/components/SessionToolbar';
 import {
+  ANDROID_NAVIGATION_BAR_HEIGHT,
+  ANDROID_NAVIGATION_BAR_WIDTH,
+  AndroidNavigationBar,
+} from './rustdesk/components/AndroidNavigationBar';
+import {
   REMOTE_SOFT_KEYBOARD_PANEL_HEIGHT,
   RemoteSoftKeyboard,
 } from './rustdesk/components/RemoteSoftKeyboard';
@@ -58,6 +63,10 @@ import {
   RustDeskSize,
 } from './rustdesk/RustDeskInputMapper';
 import { RustDeskViewportModel } from './rustdesk/RustDeskViewportModel';
+import {
+  RemoteSessionOrientationMode,
+  RemoteSessionOrientationPolicy,
+} from './rustdesk/RemoteSessionOrientationPolicy';
 import { RustDeskNativeSessionBridge } from './rustdesk/NativeSessionBridge';
 import { DownloadRootManager } from './rustdesk/DownloadRootManager';
 import { TransferManager } from './rustdesk/TransferManager';
@@ -126,6 +135,9 @@ const PREVIEW_MIN_USER_SCALE = 0.5;
 const PREVIEW_MAX_USER_SCALE = 4.0;
 const PREVIEW_SURFACE_WAIT_ATTEMPTS = 100;
 const PREVIEW_SURFACE_WAIT_INTERVAL_MS = 50;
+const ANDROID_NAVIGATION_BOTTOM_OFFSET = 80;
+const ANDROID_NAVIGATION_EDGE_MARGIN = 12;
+const ANDROID_RECENT_PRESS_DURATION_MS = 500;
 
 type PrimarySessionKind = 'remote_control' | 'view_only' | 'view_camera';
 type PasswordSessionKind = 'primary' | 'file_transfer';
@@ -302,10 +314,14 @@ struct RustDeskIndex {
   private previewGestureStartOffsetX: number = 0;
   private previewGestureStartOffsetY: number = 0;
   private previewGestureStartRotation: number = 0;
+  private androidNavigationPositionInitialized: boolean = false;
+  private androidNavigationDragStartX: number = 0;
+  private androidNavigationDragStartY: number = 0;
   private lastAppliedDisplay: number = -1;
   private lastAppliedVideoWidth: number = 0;
   private lastAppliedVideoHeight: number = 0;
   private peerPlatform: string = '';
+  private peerVersion: string = '';
   private peerDisplays: PeerDisplayInfo[] = [];
   private supportedResolutions: ResolutionInfo[] = [];
   private qualityTelemetry: QualityTelemetry = {
@@ -321,6 +337,9 @@ struct RustDeskIndex {
   @Local passwordDialogVisible: boolean = false;
   private passwordSessionKind: PasswordSessionKind = 'primary';
   private sessionFullscreenApplied: boolean = false;
+  private sessionOrientationMode: RemoteSessionOrientationMode = RemoteSessionOrientationMode.FOLLOW_DESKTOP;
+  private landscapeMultiWindowEnabled: boolean = false;
+  private sessionWindowUpdatePromise: Promise<void> = Promise.resolve();
   private immersiveWindow?: window.Window;
   private avoidAreaChangeRegistered: boolean = false;
   private onWindowAvoidAreaChange: Callback<window.AvoidAreaOptions> = (options: window.AvoidAreaOptions) => {
@@ -341,9 +360,16 @@ struct RustDeskIndex {
   private onPreviewWindowSizeChange: Callback<window.Size> = (_size: window.Size) => {
     this.refreshFoldHoverMode();
   };
-  private pcWindow?: window.Window;
-  private pcWindowDragExpected: boolean = false;
+  private freeWindow?: window.Window;
+  private freeWindowDragExpected: boolean = false;
+  private freeWindowStatusChangeRegistered: boolean = false;
+  private freeWindowChromeSupported: boolean = false;
+  private onFreeWindowStatusChange: Callback<window.WindowStatusType> = (status: window.WindowStatusType) => {
+    this.applyFreeMultiWindowChrome(status);
+  };
+  @Local freeMultiWindow: boolean = false;
   private pcSessionWindowStatusBeforeImmersive: window.WindowStatusType = window.WindowStatusType.UNDEFINED;
+  private pcSessionImmersiveRequested: boolean = false;
   private pcSessionImmersiveApplied: boolean = false;
   @Local remoteCursorVisible: boolean = false;
   @Local remoteCursorLeft: number = 0;
@@ -354,6 +380,10 @@ struct RustDeskIndex {
   @Local remoteCursorHotX: number = 0;
   @Local remoteCursorHotY: number = 0;
   @Local isMiniBarExpanded: boolean = false;
+  @Local androidNavigationVisible: boolean = true;
+  @Local androidNavigationX: number = 0;
+  @Local androidNavigationY: number = 0;
+  @Local remoteKeyboardPermissionAllowed: boolean = true;
   private overlayState: SessionOverlayState = new SessionOverlayState();
   @Local activeOverlayPanel: SessionOverlayPanel = 'home';
   @Local chatDraft: string = '';
@@ -400,7 +430,7 @@ struct RustDeskIndex {
     this.initializeRuntime();
     this.registerWindowAvoidAreaListener();
     this.applySessionFullscreen(false, true);
-    this.registerPcWindowDrag();
+    this.registerFreeWindowChrome();
     this.publishDataTransferBinding();
   }
 
@@ -430,14 +460,17 @@ struct RustDeskIndex {
     this.closeTransferSession();
     this.closeRemoteAudio();
     this.publishDataTransferUnbind();
-    this.unregisterPcWindowDrag();
-    this.applySessionFullscreen(false);
+    void this.applySessionFullscreen(false)
+      .finally((): void => {
+        this.unregisterFreeWindowChrome();
+      });
   }
 
   onPageShow(): void {
     this.pageVisible = true;
     this.syncClipboardController();
     this.syncInputInterceptor();
+    this.refreshSessionOrientation();
     if (this.accountOidcActive) {
       this.scheduleAccountPoll(200);
     }
@@ -473,6 +506,130 @@ struct RustDeskIndex {
     return normalized === 'macos' || normalized === 'macosx' || normalized === 'darwin' || normalized === 'mac';
   }
 
+  private isPeerAndroid(): boolean {
+    return this.peerPlatform.toLowerCase().replace(/[\s_-]/g, '') === 'android';
+  }
+
+  private isPeerVersionAtLeast(major: number, minor: number, patch: number): boolean {
+    if (this.peerVersion.length === 0) {
+      return false;
+    }
+    const parts = this.peerVersion.split('.');
+    const currentMajor = Number.parseInt(parts.length > 0 ? parts[0] : '0', 10);
+    const currentMinor = Number.parseInt(parts.length > 1 ? parts[1] : '0', 10);
+    const currentPatch = Number.parseInt(parts.length > 2 ? parts[2] : '0', 10);
+    const normalizedMajor = Number.isFinite(currentMajor) ? currentMajor : 0;
+    const normalizedMinor = Number.isFinite(currentMinor) ? currentMinor : 0;
+    const normalizedPatch = Number.isFinite(currentPatch) ? currentPatch : 0;
+    if (normalizedMajor !== major) {
+      return normalizedMajor > major;
+    }
+    if (normalizedMinor !== minor) {
+      return normalizedMinor > minor;
+    }
+    return normalizedPatch >= patch;
+  }
+
+  private androidNavigationAvailable(): boolean {
+    return this.isRemoteControlSessionActive()
+      && this.isPeerAndroid()
+      && this.isPeerVersionAtLeast(1, 2, 7)
+      && this.remoteKeyboardPermissionAllowed;
+  }
+
+  private clampAndroidNavigationX(value: number, viewportWidth: number = this.previewViewWidth): number {
+    const maxX = Math.max(
+      ANDROID_NAVIGATION_EDGE_MARGIN,
+      viewportWidth - ANDROID_NAVIGATION_BAR_WIDTH - ANDROID_NAVIGATION_EDGE_MARGIN,
+    );
+    return Math.min(Math.max(value, ANDROID_NAVIGATION_EDGE_MARGIN), maxX);
+  }
+
+  private clampAndroidNavigationY(value: number, viewportHeight: number = this.previewViewHeight): number {
+    const maxY = Math.max(
+      ANDROID_NAVIGATION_EDGE_MARGIN,
+      viewportHeight - ANDROID_NAVIGATION_BAR_HEIGHT - ANDROID_NAVIGATION_EDGE_MARGIN,
+    );
+    return Math.min(Math.max(value, ANDROID_NAVIGATION_EDGE_MARGIN), maxY);
+  }
+
+  private updateAndroidNavigationViewport(width: number, height: number): void {
+    if (width <= 0 || height <= 0) {
+      return;
+    }
+    if (!this.androidNavigationPositionInitialized) {
+      this.androidNavigationX = this.clampAndroidNavigationX(
+        (width - ANDROID_NAVIGATION_BAR_WIDTH) / 2,
+        width,
+      );
+      this.androidNavigationY = this.clampAndroidNavigationY(
+        height - ANDROID_NAVIGATION_BAR_HEIGHT - ANDROID_NAVIGATION_BOTTOM_OFFSET,
+        height,
+      );
+      this.androidNavigationPositionInitialized = true;
+      this.saveAndroidNavigationPosition();
+      return;
+    }
+    const nextX = this.clampAndroidNavigationX(this.androidNavigationX, width);
+    const nextY = this.clampAndroidNavigationY(this.androidNavigationY, height);
+    if (nextX !== this.androidNavigationX || nextY !== this.androidNavigationY) {
+      this.androidNavigationX = nextX;
+      this.androidNavigationY = nextY;
+      this.saveAndroidNavigationPosition();
+    }
+  }
+
+  private saveAndroidNavigationPosition(): void {
+    this.preferences?.saveAndroidNavigationPosition(
+      this.androidNavigationX,
+      this.androidNavigationY,
+    );
+  }
+
+  private sendAndroidNavigationButton(button: string, down: boolean): void {
+    if (!this.androidNavigationAvailable()) {
+      return;
+    }
+    this.sendAndroidNavigationButtonToSession(this.activeSessionId, button, down, true);
+  }
+
+  private sendAndroidNavigationButtonToSession(
+    sessionId: string,
+    button: string,
+    down: boolean,
+    reportFailure: boolean,
+  ): void {
+    const payload = new RustDeskMousePayload();
+    payload.type = down ? 'down' : 'up';
+    payload.buttons = button;
+    this.sendMousePayloadToSession(sessionId, payload, reportFailure);
+  }
+
+  private tapAndroidNavigationButton(button: string): void {
+    this.sendAndroidNavigationButton(button, true);
+    this.sendAndroidNavigationButton(button, false);
+  }
+
+  private sendAndroidBack(): void {
+    const button = this.isPeerVersionAtLeast(1, 3, 8) ? 'back' : 'right';
+    this.tapAndroidNavigationButton(button);
+  }
+
+  private sendAndroidHome(): void {
+    this.tapAndroidNavigationButton('wheel');
+  }
+
+  private sendAndroidRecentApps(): void {
+    if (!this.androidNavigationAvailable()) {
+      return;
+    }
+    const sessionId = this.activeSessionId;
+    this.sendAndroidNavigationButtonToSession(sessionId, 'wheel', true, true);
+    setTimeout((): void => {
+      this.sendAndroidNavigationButtonToSession(sessionId, 'wheel', false, false);
+    }, ANDROID_RECENT_PRESS_DURATION_MS);
+  }
+
   private initializeRuntime(): void {
     if (this.runtimeInitialized) {
       this.refreshNativeState();
@@ -491,6 +648,11 @@ struct RustDeskIndex {
       });
       this.applySavedSettings(this.preferences.load());
       this.sessionDefaults = this.preferences.loadSessionDefaults();
+      const androidNavigationState = this.preferences.loadAndroidNavigationState();
+      this.androidNavigationVisible = androidNavigationState.visible;
+      this.androidNavigationPositionInitialized = androidNavigationState.positionInitialized;
+      this.androidNavigationX = androidNavigationState.x;
+      this.androidNavigationY = androidNavigationState.y;
       this.activeSessionDefaults = this.copySessionDefaults(this.sessionDefaults);
       this.clipboardSyncEnabled = this.sessionDefaults.clipboardEnabled;
 
@@ -1675,6 +1837,9 @@ struct RustDeskIndex {
     this.previewGestureStartOffsetX = 0;
     this.previewGestureStartOffsetY = 0;
     this.previewGestureStartRotation = 0;
+    this.androidNavigationDragStartX = 0;
+    this.androidNavigationDragStartY = 0;
+    this.remoteKeyboardPermissionAllowed = true;
     this.isFoldHoverMode = false;
     this.foldHoverUpperHeight = 0;
     this.foldHoverCreaseHeight = 0;
@@ -1682,6 +1847,7 @@ struct RustDeskIndex {
     this.lastAppliedVideoWidth = 0;
     this.lastAppliedVideoHeight = 0;
     this.peerPlatform = '';
+    this.peerVersion = '';
     this.peerDisplays = [];
     this.supportedResolutions = [];
     this.previewSurfaceVisible = false;
@@ -2546,16 +2712,72 @@ struct RustDeskIndex {
     return deviceInfo.deviceType === '2in1';
   }
 
-  private registerPcWindowDrag(): void {
-    if (!this.isPcDevice()) {
+  private detectFreeWindowChrome(currentWindow: window.Window): boolean {
+    if (this.freeWindowChromeSupported) {
+      return true;
+    }
+    try {
+      const titleButtons = currentWindow.getTitleButtonRect();
+      this.freeWindowChromeSupported = titleButtons.width > 0 && titleButtons.height > 0;
+    } catch (error) {
+      hilog.info(DOMAIN, TAG, 'Window has no title button area: %{public}s', String(error));
+    }
+    return this.freeWindowChromeSupported;
+  }
+
+  private applyFreeMultiWindowChrome(status: window.WindowStatusType): void {
+    const currentWindow = this.freeWindow;
+    if (!currentWindow) {
+      this.freeMultiWindow = false;
       return;
     }
-    this.pcWindowDragExpected = true;
+    const hasFreeWindowChrome = this.detectFreeWindowChrome(currentWindow);
+    const isFreeMultiWindow = hasFreeWindowChrome && status === window.WindowStatusType.FLOATING;
+    const hideForPcSession = this.isPcDevice() && this.pcSessionImmersiveRequested;
+    if (!hasFreeWindowChrome && !hideForPcSession) {
+      this.freeMultiWindow = false;
+      return;
+    }
+    try {
+      currentWindow.setWindowDecorVisible(!(isFreeMultiWindow || hideForPcSession));
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'Failed to update free-window decor: %{public}s', String(error));
+      return;
+    }
+    this.freeMultiWindow = isFreeMultiWindow;
+    if (isFreeMultiWindow || hideForPcSession) {
+      currentWindow.setTitleAndDockHoverShown(false, false)
+        .catch((error: BusinessError) => {
+          hilog.error(DOMAIN, TAG, 'Failed to disable free-window title and dock hover: %{public}s',
+            JSON.stringify(error) ?? '');
+        });
+    } else {
+      currentWindow.setTitleAndDockHoverShown(true, true)
+        .catch((error: BusinessError) => {
+          hilog.error(DOMAIN, TAG, 'Failed to restore free-window title and dock hover: %{public}s',
+            JSON.stringify(error) ?? '');
+        });
+    }
+  }
+
+  private registerFreeWindowChrome(): void {
+    this.freeWindowDragExpected = true;
     const hostContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
     window.getLastWindow(hostContext)
       .then((currentWindow: window.Window) => {
-        if (this.pcWindowDragExpected) {
-          this.pcWindow = currentWindow;
+        if (this.freeWindowDragExpected) {
+          this.freeWindow = currentWindow;
+          try {
+            currentWindow.on('windowStatusDidChange', this.onFreeWindowStatusChange);
+            this.freeWindowStatusChangeRegistered = true;
+          } catch (error) {
+            hilog.info(DOMAIN, TAG, 'Window status listener is unavailable: %{public}s', String(error));
+          }
+          try {
+            this.applyFreeMultiWindowChrome(currentWindow.getWindowStatus());
+          } catch (error) {
+            hilog.error(DOMAIN, TAG, 'Read initial free-window status failed: %{public}s', String(error));
+          }
         }
       })
       .catch((error: BusinessError) => {
@@ -2563,27 +2785,49 @@ struct RustDeskIndex {
       });
   }
 
-  private unregisterPcWindowDrag(): void {
-    this.pcWindowDragExpected = false;
-    this.pcWindow = undefined;
+  private unregisterFreeWindowChrome(): void {
+    this.freeWindowDragExpected = false;
+    if (this.freeWindowStatusChangeRegistered && this.freeWindow) {
+      try {
+        this.freeWindow.off('windowStatusDidChange', this.onFreeWindowStatusChange);
+      } catch (error) {
+        hilog.error(DOMAIN, TAG, 'unregister free-window status failed: %{public}s', String(error));
+      }
+    }
+    if (this.freeWindow && this.freeWindowChromeSupported) {
+      try {
+        this.freeWindow.setWindowDecorVisible(true);
+      } catch (error) {
+        hilog.error(DOMAIN, TAG, 'restore system window decor failed: %{public}s', String(error));
+      }
+      this.freeWindow.setTitleAndDockHoverShown(true, true)
+        .catch((error: BusinessError) => {
+          hilog.error(DOMAIN, TAG, 'restore system title and dock hover failed: %{public}s',
+            JSON.stringify(error) ?? '');
+        });
+    }
+    this.freeWindowStatusChangeRegistered = false;
+    this.freeWindowChromeSupported = false;
+    this.freeMultiWindow = false;
+    this.freeWindow = undefined;
   }
 
-  private startMovingPcWindow(event: TouchEvent): void {
+  private startMovingFreeWindow(event: TouchEvent): void {
     if (event.type === TouchType.Down) {
-      this.beginMovingPcWindow();
+      this.beginMovingFreeWindow();
     }
   }
 
-  private startMovingPcWindowByMouse(event: MouseEvent): void {
+  private startMovingFreeWindowByMouse(event: MouseEvent): void {
     if (event.action !== MouseAction.Press || event.button !== MouseButton.Left) {
       return;
     }
-    this.beginMovingPcWindow();
+    this.beginMovingFreeWindow();
     event.stopPropagation();
   }
 
-  private beginMovingPcWindow(): void {
-    const currentWindow = this.pcWindow;
+  private beginMovingFreeWindow(): void {
+    const currentWindow = this.freeWindow;
     if (!currentWindow) {
       return;
     }
@@ -2593,7 +2837,7 @@ struct RustDeskIndex {
         return;
       }
     } catch (error) {
-      hilog.error(DOMAIN, TAG, 'get PC window status before moving failed: %{public}s', String(error));
+      hilog.error(DOMAIN, TAG, 'get free-window status before moving failed: %{public}s', String(error));
       return;
     }
     currentWindow.startMoving()
@@ -2777,25 +3021,61 @@ struct RustDeskIndex {
     this.remoteCursorVisible = false;
   }
 
-  private async applyLandscapeMultiWindow(currentWindow: window.Window, active: boolean): Promise<void> {
+  private resolveSessionOrientationMode(active: boolean): RemoteSessionOrientationMode {
+    if (!active) {
+      return RemoteSessionOrientationMode.FOLLOW_DESKTOP;
+    }
+    const remoteDisplay = this.viewportModel.getCurrentDisplay();
+    if (!remoteDisplay) {
+      return RemoteSessionOrientationMode.FOLLOW_DESKTOP;
+    }
+    return RemoteSessionOrientationPolicy.resolve(
+      deviceInfo.deviceType,
+      remoteDisplay.width,
+      remoteDisplay.height,
+    );
+  }
+
+  private toWindowOrientation(mode: RemoteSessionOrientationMode): window.Orientation {
+    if (mode === RemoteSessionOrientationMode.PORTRAIT) {
+      return window.Orientation.PORTRAIT;
+    }
+    if (mode === RemoteSessionOrientationMode.LANDSCAPE) {
+      return window.Orientation.LANDSCAPE;
+    }
+    return window.Orientation.FOLLOW_DESKTOP;
+  }
+
+  private shouldEnableLandscapeMultiWindow(mode: RemoteSessionOrientationMode, active: boolean): boolean {
+    return active && deviceInfo.deviceType === 'phone' && mode === RemoteSessionOrientationMode.LANDSCAPE;
+  }
+
+  private async applyLandscapeMultiWindow(
+    currentWindow: window.Window,
+    enabled: boolean,
+    force: boolean,
+  ): Promise<void> {
+    if (!force && this.landscapeMultiWindowEnabled === enabled) {
+      return;
+    }
     try {
-      if (active) {
+      if (enabled) {
         await currentWindow.enableLandscapeMultiWindow();
       } else {
         await currentWindow.disableLandscapeMultiWindow();
       }
+      this.landscapeMultiWindowEnabled = enabled;
       hilog.info(
         DOMAIN,
         TAG,
         'Landscape multi-window %{public}s for remote session',
-        active ? 'enabled' : 'disabled',
+        enabled ? 'enabled' : 'disabled',
       );
     } catch (error) {
       hilog.warn(
         DOMAIN,
         TAG,
-        'Failed to %{public}s landscape multi-window: %{public}s',
-        active ? 'enable' : 'disable',
+        'Failed to update landscape multi-window: %{public}s',
         String(error),
       );
     }
@@ -2806,6 +3086,7 @@ struct RustDeskIndex {
       return;
     }
     if (active) {
+      this.pcSessionImmersiveRequested = true;
       let previousStatus = window.WindowStatusType.UNDEFINED;
       try {
         previousStatus = currentWindow.getWindowStatus();
@@ -2815,8 +3096,19 @@ struct RustDeskIndex {
       this.pcSessionWindowStatusBeforeImmersive = previousStatus;
       if (previousStatus === window.WindowStatusType.FULL_SCREEN) {
         try {
+          currentWindow.setWindowDecorVisible(false);
           await currentWindow.setTitleAndDockHoverShown(false, false);
+          this.pcSessionImmersiveApplied = true;
         } catch (error) {
+          this.pcSessionWindowStatusBeforeImmersive = window.WindowStatusType.UNDEFINED;
+          this.pcSessionImmersiveRequested = false;
+          this.pcSessionImmersiveApplied = false;
+          try {
+            this.applyFreeMultiWindowChrome(currentWindow.getWindowStatus());
+          } catch (chromeError) {
+            hilog.warn(DOMAIN, TAG, 'Failed to restore window chrome after immersive error: %{public}s',
+              String(chromeError));
+          }
           hilog.warn(DOMAIN, TAG, 'Failed to disable title and dock hover: %{public}s', String(error));
         }
         return;
@@ -2825,62 +3117,105 @@ struct RustDeskIndex {
         await currentWindow.maximize(
           window.MaximizePresentation.ENTER_IMMERSIVE_DISABLE_TITLE_AND_DOCK_HOVER,
         );
+        currentWindow.setWindowDecorVisible(false);
+        await currentWindow.setTitleAndDockHoverShown(false, false);
         this.pcSessionImmersiveApplied = true;
       } catch (error) {
         this.pcSessionWindowStatusBeforeImmersive = window.WindowStatusType.UNDEFINED;
+        this.pcSessionImmersiveRequested = false;
         this.pcSessionImmersiveApplied = false;
+        try {
+          this.applyFreeMultiWindowChrome(currentWindow.getWindowStatus());
+        } catch (chromeError) {
+          hilog.warn(DOMAIN, TAG, 'Failed to restore window chrome after immersive error: %{public}s',
+            String(chromeError));
+        }
         hilog.warn(DOMAIN, TAG, 'Failed to enter PC session immersive mode: %{public}s', String(error));
       }
       return;
     }
     if (!this.pcSessionImmersiveApplied) {
+      this.pcSessionImmersiveRequested = false;
       return;
     }
     const previousStatus = this.pcSessionWindowStatusBeforeImmersive;
     try {
-      if (previousStatus === window.WindowStatusType.MAXIMIZE) {
+      if (previousStatus === window.WindowStatusType.FULL_SCREEN) {
+        await currentWindow.setTitleAndDockHoverShown(true, true);
+      } else if (previousStatus === window.WindowStatusType.MAXIMIZE) {
         await currentWindow.maximize(window.MaximizePresentation.EXIT_IMMERSIVE);
-      } else if (previousStatus !== window.WindowStatusType.FULL_SCREEN) {
+      } else {
         await currentWindow.recover();
       }
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'Failed to restore PC window after session: %{public}s', String(error));
     } finally {
       this.pcSessionWindowStatusBeforeImmersive = window.WindowStatusType.UNDEFINED;
+      this.pcSessionImmersiveRequested = false;
       this.pcSessionImmersiveApplied = false;
+      try {
+        this.applyFreeMultiWindowChrome(currentWindow.getWindowStatus());
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'Failed to restore PC window chrome after session: %{public}s', String(error));
+      }
     }
   }
 
   private applySessionFullscreen(active: boolean, force: boolean = false): Promise<void> {
-    if (!force && this.sessionFullscreenApplied === active) {
+    const nextUpdate = this.sessionWindowUpdatePromise.then((): Promise<void> => {
+      return this.applySessionFullscreenNow(active, force);
+    });
+    this.sessionWindowUpdatePromise = nextUpdate;
+    return nextUpdate;
+  }
+
+  private applySessionFullscreenNow(active: boolean, force: boolean): Promise<void> {
+    const orientationMode = this.resolveSessionOrientationMode(active);
+    const fullscreenChanged = force || this.sessionFullscreenApplied !== active;
+    const orientationChanged = force || this.sessionOrientationMode !== orientationMode;
+    const landscapeMultiWindowEnabled = this.shouldEnableLandscapeMultiWindow(orientationMode, active);
+    const landscapeMultiWindowChanged = force
+      || this.landscapeMultiWindowEnabled !== landscapeMultiWindowEnabled;
+    if (!fullscreenChanged && !orientationChanged && !landscapeMultiWindowChanged) {
       return Promise.resolve();
     }
     const hostContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
     return window.getLastWindow(hostContext)
       .then(async (currentWindow: window.Window) => {
-        await this.applyLandscapeMultiWindow(currentWindow, active);
-        await currentWindow.setPreferredOrientation(
-          active
-            ? window.Orientation.LANDSCAPE
-            : window.Orientation.FOLLOW_DESKTOP,
-        );
-        if (active) {
-          await this.applyPcSessionImmersive(currentWindow, true);
-          await currentWindow.setWindowLayoutFullScreen(true);
-          await currentWindow.setSpecificSystemBarEnabled('status', false, true);
-          await currentWindow.setSpecificSystemBarEnabled('navigationIndicator', false, true);
-        } else {
-          await currentWindow.setSpecificSystemBarEnabled('status', true, true);
-          await currentWindow.setSpecificSystemBarEnabled('navigationIndicator', true, true);
-          await currentWindow.setWindowLayoutFullScreen(true);
-          await this.applyPcSessionImmersive(currentWindow, false);
+        if (landscapeMultiWindowChanged) {
+          await this.applyLandscapeMultiWindow(currentWindow, landscapeMultiWindowEnabled, force);
+        }
+        if (orientationChanged) {
+          await currentWindow.setPreferredOrientation(this.toWindowOrientation(orientationMode));
+          this.sessionOrientationMode = orientationMode;
+        }
+        if (fullscreenChanged) {
+          if (active) {
+            await this.applyPcSessionImmersive(currentWindow, true);
+            await currentWindow.setWindowLayoutFullScreen(true);
+            await currentWindow.setSpecificSystemBarEnabled('status', false, true);
+            await currentWindow.setSpecificSystemBarEnabled('navigationIndicator', false, true);
+          } else {
+            await currentWindow.setSpecificSystemBarEnabled('status', true, true);
+            await currentWindow.setSpecificSystemBarEnabled('navigationIndicator', true, true);
+            await currentWindow.setWindowLayoutFullScreen(true);
+            await this.applyPcSessionImmersive(currentWindow, false);
+          }
+          this.sessionFullscreenApplied = active;
         }
         this.refreshWindowAvoidAreas(currentWindow);
-        this.sessionFullscreenApplied = active;
       })
       .catch((error: BusinessError) => {
         hilog.error(DOMAIN, TAG, 'applySessionFullscreen failed: %{public}s', JSON.stringify(error) ?? '');
       });
+  }
+
+  private refreshSessionOrientation(): void {
+    if (!this.pageVisible || this.sessionCloseInFlight || !this.activeSessionId
+      || !this.sessionFullscreenApplied) {
+      return;
+    }
+    void this.applySessionFullscreen(true);
   }
 
   private registerWindowAvoidAreaListener(): void {
@@ -3049,7 +3384,7 @@ struct RustDeskIndex {
       return;
     }
     await this.applySessionFullscreen(true);
-    await this.waitForPreviewWindowReady(true);
+    await this.waitForPreviewWindowReady();
     if (connectionGeneration !== undefined && connectionGeneration !== this.connectionGeneration) {
       return;
     }
@@ -3105,6 +3440,10 @@ struct RustDeskIndex {
 
   private async preparePreviewSurfaceForPendingEvent(setupGeneration: number): Promise<void> {
     try {
+      const initialPeerInfo = this.pendingPreviewPeerInfo;
+      if (initialPeerInfo) {
+        this.configureDisplayFromPeerInfo(initialPeerInfo);
+      }
       await this.preparePreviewSurface(setupGeneration);
       if (setupGeneration !== this.connectionGeneration || !this.activeSessionId) {
         return;
@@ -3130,8 +3469,13 @@ struct RustDeskIndex {
     }
   }
 
-  private async waitForPreviewWindowReady(expectLandscape: boolean): Promise<void> {
-    for (let index = 0; index < 8; index++) {
+  private async waitForPreviewWindowReady(): Promise<void> {
+    if (this.sessionOrientationMode === RemoteSessionOrientationMode.FOLLOW_DESKTOP) {
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), 80));
+      return;
+    }
+    const expectLandscape = this.sessionOrientationMode === RemoteSessionOrientationMode.LANDSCAPE;
+    for (let index = 0; index < 8; index += 1) {
       try {
         const displayInfo = display.getDefaultDisplaySync();
         const isLandscape = displayInfo.width >= displayInfo.height;
@@ -3140,7 +3484,7 @@ struct RustDeskIndex {
           return;
         }
       } catch (_error) {
-        // ignore and retry
+        // The window manager may still be applying the requested direction.
       }
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 80));
     }
@@ -3407,13 +3751,26 @@ struct RustDeskIndex {
     if (!this.isRemoteControlSessionActive()) {
       return;
     }
+    this.sendMousePayloadToSession(this.activeSessionId, payload, true);
+  }
+
+  private sendMousePayloadToSession(
+    sessionId: string,
+    payload: RustDeskMousePayload,
+    reportFailure: boolean,
+  ): void {
+    if (sessionId.length === 0) {
+      return;
+    }
     try {
-      const response = this.parseResponse(native.sessionSendMouse(this.activeSessionId, JSON.stringify(payload)));
-      if (!response.ok) {
+      const response = this.parseResponse(native.sessionSendMouse(sessionId, JSON.stringify(payload)));
+      if (!response.ok && reportFailure && this.activeSessionId === sessionId) {
         this.errorText = response.message ?? 'Mouse input failed';
       }
     } catch (error) {
-      this.errorText = `Mouse input failed: ${String(error)}`;
+      if (reportFailure && this.activeSessionId === sessionId) {
+        this.errorText = `Mouse input failed: ${String(error)}`;
+      }
     }
   }
 
@@ -3786,6 +4143,9 @@ struct RustDeskIndex {
     if (event.platform && event.platform.length > 0) {
       this.peerPlatform = String(event.platform);
     }
+    if (event.version && event.version.length > 0) {
+      this.peerVersion = String(event.version);
+    }
     if (!event.displays) {
       return;
     }
@@ -3810,6 +4170,7 @@ struct RustDeskIndex {
         this.peerPlatform,
       );
       const currentDisplay = this.sessionDisplayController.getCurrentDisplayIndex();
+      this.refreshSessionOrientation();
       this.ensureRemoteCursorEnabled();
       hilog.info(
         DOMAIN,
@@ -3821,6 +4182,7 @@ struct RustDeskIndex {
         JSON.stringify(this.supportedResolutions),
       );
       this.applyDisplayConfiguration();
+      this.reprojectVirtualCursorOverlay();
     } catch (error) {
       this.errorText = `Display setup failed: ${String(error)}`;
     }
@@ -3855,6 +4217,7 @@ struct RustDeskIndex {
       this.supportedResolutions,
       this.peerPlatform,
     );
+    this.refreshSessionOrientation();
     if (this.pendingDisplayIndex === display) {
       this.pendingDisplayIndex = -1;
       this.sessionMessage = `显示器 ${display + 1} 已确认切换`;
@@ -4187,6 +4550,17 @@ struct RustDeskIndex {
       this.handleRemoteDisconnect('远端连接已结束');
       return;
     }
+    if (event.name === 'permission') {
+      if (event.keyboard !== undefined) {
+        const keyboardPermission = String(event.keyboard).trim().toLowerCase();
+        if (keyboardPermission === 'false') {
+          this.remoteKeyboardPermissionAllowed = false;
+        } else if (keyboardPermission === 'true') {
+          this.remoteKeyboardPermissionAllowed = true;
+        }
+      }
+      return;
+    }
     if (event.name === 'connection_ready') {
       this.connectionSummary = `secure=${String(event.secure)}, direct=${String(event.direct)}, stream=${String(event.stream_type)}`;
       if (this.connectionUiPhase === 'connecting' || this.connectionUiPhase === 'authenticating') {
@@ -4206,6 +4580,9 @@ struct RustDeskIndex {
       if (event.name === 'peer_info') {
         if (event.platform && event.platform.length > 0) {
           this.peerPlatform = String(event.platform);
+        }
+        if (event.version && event.version.length > 0) {
+          this.peerVersion = String(event.version);
         }
         this.connectionSummary = `peer=${String(event.hostname)}, platform=${String(event.platform)}, version=${String(event.version)}`;
       }
@@ -4356,6 +4733,7 @@ struct RustDeskIndex {
     }
     if (this.pendingDisplayIndex === display) {
       this.pendingDisplayIndex = -1;
+      this.refreshSessionOrientation();
       if (this.previewSurfaceId.length > 0) {
         this.syncSurfaceBinding(false);
       }
@@ -4531,6 +4909,50 @@ struct RustDeskIndex {
   }
 
   @Builder
+  private androidNavigationOverlay() {
+    if (this.androidNavigationAvailable() && this.androidNavigationVisible) {
+      Stack() {
+        AndroidNavigationBar({
+          onBack: () => this.sendAndroidBack(),
+          onHome: () => this.sendAndroidHome(),
+          onRecent: () => this.sendAndroidRecentApps(),
+          onHide: () => {
+            this.androidNavigationVisible = false;
+            this.preferences?.saveAndroidNavigationVisible(false);
+          },
+        });
+      }
+      .width(ANDROID_NAVIGATION_BAR_WIDTH)
+      .height(ANDROID_NAVIGATION_BAR_HEIGHT)
+      .position({ x: this.androidNavigationX, y: this.androidNavigationY })
+      .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY)
+      .gesture(
+        PanGesture({ fingers: 1, direction: PanDirection.All, distance: 4 })
+          .onActionStart((_event: GestureEvent): void => {
+            this.androidNavigationDragStartX = this.androidNavigationX;
+            this.androidNavigationDragStartY = this.androidNavigationY;
+          })
+          .onActionUpdate((event: GestureEvent): void => {
+            this.androidNavigationX = this.clampAndroidNavigationX(
+              this.androidNavigationDragStartX + event.offsetX,
+            );
+            this.androidNavigationY = this.clampAndroidNavigationY(
+              this.androidNavigationDragStartY + event.offsetY,
+            );
+          })
+          .onActionEnd((_event: GestureEvent): void => {
+            this.saveAndroidNavigationPosition();
+          })
+          .onActionCancel((): void => {
+            this.saveAndroidNavigationPosition();
+          }),
+      )
+      .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.94, y: 0.94 })))
+      .zIndex(28);
+    }
+  }
+
+  @Builder
   remotePreviewPane() {
     Stack({ alignContent: Alignment.Top }) {
       Stack({ alignContent: Alignment.Center }) {
@@ -4612,6 +5034,7 @@ struct RustDeskIndex {
             this.previewViewHeight = height;
           }
           this.viewportModel.setViewportSize(width, height);
+          this.updateAndroidNavigationViewport(width, height);
           this.applyDisplayConfiguration();
           this.reprojectVirtualCursorOverlay();
         })
@@ -4677,6 +5100,7 @@ struct RustDeskIndex {
         .height('100%')
         .backgroundColor($r('app.color.black'));
 
+      this.androidNavigationOverlay();
       this.previewMiniBar();
     }
     .width('100%')
@@ -4699,11 +5123,13 @@ struct RustDeskIndex {
             unreadCount: this.chatRevision >= 0 ? this.chatStore.unreadCount() : 0,
             cameraSession: this.activeSessionKind === 'view_camera',
             viewOnlySession: this.activeSessionKind === 'view_only',
+            androidNavigationAvailable: this.androidNavigationAvailable(),
+            androidNavigationVisible: this.androidNavigationVisible,
             softKeyboardAvailable: this.softKeyboardAvailable(),
             softKeyboardVisible: this.softKeyboardVisible,
             audioAvailable: this.remoteAudioState.available,
             audioMuted: this.remoteAudioState.muted,
-            wideLayout: this.previewViewWidth >= 700,
+            wideLayout: this.activeSessionKind === 'remote_control' && this.previewViewWidth >= 700,
             transformSummary: this.previewTransformSummary(),
             transformMode: this.previewTransformMode,
             canResetTransform: this.hasPreviewViewTransform(),
@@ -4716,6 +5142,10 @@ struct RustDeskIndex {
             onOpenDisplay: () => this.openDisplaySheet(),
             onOpenQuality: () => this.openQualitySheet(),
             onToggleSoftKeyboard: () => this.toggleSoftKeyboard(),
+            onToggleAndroidNavigation: () => {
+              this.androidNavigationVisible = !this.androidNavigationVisible;
+              this.preferences?.saveAndroidNavigationVisible(this.androidNavigationVisible);
+            },
             onDisconnect: () => this.closeSession('已手动断开连接'),
             onMinimize: () => {
               this.getUIContext()?.animateTo({ duration: 300, curve: Curve.FastOutSlowIn }, () => {
@@ -5555,7 +5985,7 @@ struct RustDeskIndex {
   }
 
   @Builder
-  private PcTitleBar() {
+  private FreeWindowTitleBar() {
     Row() {
       Row({ space: 9 }) {
         Image($r('app.media.resk'))
@@ -5566,7 +5996,7 @@ struct RustDeskIndex {
           .fontSize(14)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.text_primary'))
-        Text('PC')
+        Text('多窗')
           .fontSize(9)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.text_secondary'))
@@ -5587,8 +6017,8 @@ struct RustDeskIndex {
         .height('100%')
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
-        .onTouch((event: TouchEvent) => this.startMovingPcWindow(event))
-        .onMouse((event: MouseEvent) => this.startMovingPcWindowByMouse(event))
+        .onTouch((event: TouchEvent) => this.startMovingFreeWindow(event))
+        .onMouse((event: MouseEvent) => this.startMovingFreeWindowByMouse(event))
 
       Row()
         .width(138)
@@ -5763,8 +6193,8 @@ struct RustDeskIndex {
   build() {
     Stack() {
       Column() {
-        if (this.isPcDevice() && !this.showPreviewModal) {
-          this.PcTitleBar();
+        if (this.freeMultiWindow) {
+          this.FreeWindowTitleBar();
         }
         Stack() {
           this.MainContent();

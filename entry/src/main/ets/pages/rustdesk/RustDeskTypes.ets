@@ -52,6 +52,7 @@ export interface NativeEvent {
   hostname?: string;
   platform?: string;
   version?: string;
+  keyboard?: string;
   displays?: string;
   resolutions?: string;
   current_display?: string;

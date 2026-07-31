@@ -13,6 +13,8 @@ export interface SessionToolbarProps {
   unreadCount: number;
   cameraSession: boolean;
   viewOnlySession: boolean;
+  androidNavigationAvailable: boolean;
+  androidNavigationVisible: boolean;
   softKeyboardAvailable: boolean;
   softKeyboardVisible: boolean;
   audioAvailable: boolean;
@@ -29,6 +31,7 @@ export interface SessionToolbarProps {
   onOpenDisplay: () => void;
   onOpenQuality: () => void;
   onToggleSoftKeyboard: () => void;
+  onToggleAndroidNavigation: () => void;
   onAudioChange: (enabled: boolean) => void;
   onDisconnect: () => void;
   onMinimize: () => void;
@@ -53,6 +56,8 @@ export struct SessionToolbar {
   @Param unreadCount: number = 0;
   @Param cameraSession: boolean = false;
   @Param viewOnlySession: boolean = false;
+  @Param androidNavigationAvailable: boolean = false;
+  @Param androidNavigationVisible: boolean = false;
   @Param softKeyboardAvailable: boolean = false;
   @Param softKeyboardVisible: boolean = false;
   @Param audioAvailable: boolean = false;
@@ -70,6 +75,7 @@ export struct SessionToolbar {
   @Event onOpenDisplay: () => void = () => {};
   @Event onOpenQuality: () => void = () => {};
   @Event onToggleSoftKeyboard: () => void = () => {};
+  @Event onToggleAndroidNavigation: () => void = () => {};
   @Event onAudioChange: (enabled: boolean) => void = (_enabled: boolean) => {};
   @Event onDisconnect: () => void = () => {};
   @Event onMinimize: () => void = () => {};
@@ -280,11 +286,13 @@ export struct SessionToolbar {
   @Builder
   private TransformControls() {
     Row({ space: $r('app.float.space_6') }) {
-      Text(this.transformSummary)
-        .fontSize($r('app.float.font_caption'))
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.neu_text_secondary'))
-        .maxLines(1);
+      if (this.wideLayout) {
+        Text(this.transformSummary)
+          .fontSize($r('app.float.font_caption'))
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.neu_text_secondary'))
+          .maxLines(1);
+      }
 
       this.TransformModeAction()
 
@@ -338,6 +346,21 @@ export struct SessionToolbar {
       this.TransformControls()
       this.CompactAction('collapse', '收起', false, false, true, () => this.onMinimize())
     }
+    .alignItems(VerticalAlign.Center);
+  }
+
+  @Builder
+  private NarrowToolbarUtilityActions() {
+    Row({ space: $r('app.float.space_6') }) {
+      Row() {
+        this.TransformControls()
+      }
+      .layoutWeight(1)
+      .clip(true);
+
+      this.CompactAction('collapse', '收起', false, false, true, () => this.onMinimize())
+    }
+    .width('100%')
     .alignItems(VerticalAlign.Center);
   }
 
@@ -443,15 +466,30 @@ export struct SessionToolbar {
 
       if (!this.wideLayout) {
         Row() {
-          this.ToolbarUtilityActions();
+          this.NarrowToolbarUtilityActions();
         }
         .width('100%')
         .justifyContent(FlexAlign.End);
       }
 
       if (this.activeOverlayPanel === 'home') {
-        Stack() {
+        Column({ space: $r('app.float.space_8') }) {
           this.FunctionHome();
+
+          if (this.androidNavigationAvailable) {
+            Row() {
+              this.CompactAction(
+                'android-navigation',
+                this.androidNavigationVisible ? '隐藏导航' : '显示导航',
+                this.androidNavigationVisible,
+                false,
+                true,
+                () => this.onToggleAndroidNavigation(),
+              )
+            }
+            .width('100%')
+            .justifyContent(FlexAlign.End);
+          }
         }
         .width('100%');
       } else {

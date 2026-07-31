@@ -25,6 +25,30 @@
       "value": "用于在远程控制会话中同步文本剪贴板。"
     },
     {
+      "name": "remote_android_navigation_back",
+      "value": "返回"
+    },
+    {
+      "name": "remote_android_navigation_home",
+      "value": "主页"
+    },
+    {
+      "name": "remote_android_navigation_recent",
+      "value": "最近任务"
+    },
+    {
+      "name": "remote_android_navigation_recent_symbol",
+      "value": "•••"
+    },
+    {
+      "name": "remote_android_navigation_hide",
+      "value": "收起安卓导航"
+    },
+    {
+      "name": "remote_android_navigation_show",
+      "value": "显示安卓导航"
+    },
+    {
       "name": "device_directory_title",
       "value": "设备中心"
     },

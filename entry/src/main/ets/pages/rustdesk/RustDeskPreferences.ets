@@ -21,6 +21,17 @@ const DEFAULT_CODEC_PRIORITY_VERSION_KEY = 'default_codec_priority_version';
 const DEFAULT_CODEC_PRIORITY_VERSION = 1;
 const DEFAULT_GESTURES_ENABLED_KEY = 'default_gestures_enabled';
 const DEFAULT_TOOLBAR_EXPANDED_KEY = 'default_toolbar_expanded';
+const ANDROID_NAVIGATION_VISIBLE_KEY = 'android_navigation_visible';
+const ANDROID_NAVIGATION_POSITION_INITIALIZED_KEY = 'android_navigation_position_initialized';
+const ANDROID_NAVIGATION_X_KEY = 'android_navigation_x';
+const ANDROID_NAVIGATION_Y_KEY = 'android_navigation_y';
+
+export class AndroidNavigationPreferenceState {
+  visible: boolean = true;
+  positionInitialized: boolean = false;
+  x: number = 0;
+  y: number = 0;
+}
 
 export class RustDeskPreferences {
   private context: common.UIAbilityContext;
@@ -155,6 +166,64 @@ export class RustDeskPreferences {
       store.putSync(DEFAULT_PREFERRED_CODEC_KEY, defaults.preferredCodec.trim());
       store.putSync(DEFAULT_GESTURES_ENABLED_KEY, defaults.gesturesEnabled);
       store.putSync(DEFAULT_TOOLBAR_EXPANDED_KEY, defaults.toolbarExpanded);
+      store.flushSync();
+    } catch (_) {
+    }
+  }
+
+  loadAndroidNavigationState(): AndroidNavigationPreferenceState {
+    const state = new AndroidNavigationPreferenceState();
+    const store = this.getStore();
+    if (!store) {
+      return state;
+    }
+    try {
+      state.visible = store.getSync(ANDROID_NAVIGATION_VISIBLE_KEY, true) as boolean;
+      state.positionInitialized = store.getSync(
+        ANDROID_NAVIGATION_POSITION_INITIALIZED_KEY,
+        false,
+      ) as boolean;
+      if (!state.positionInitialized) {
+        return state;
+      }
+      const x = store.getSync(ANDROID_NAVIGATION_X_KEY, 0) as number;
+      const y = store.getSync(ANDROID_NAVIGATION_Y_KEY, 0) as number;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        state.positionInitialized = false;
+        return state;
+      }
+      state.x = x;
+      state.y = y;
+      return state;
+    } catch (_) {
+      return new AndroidNavigationPreferenceState();
+    }
+  }
+
+  saveAndroidNavigationVisible(visible: boolean): void {
+    const store = this.getStore();
+    if (!store) {
+      return;
+    }
+    try {
+      store.putSync(ANDROID_NAVIGATION_VISIBLE_KEY, visible);
+      store.flushSync();
+    } catch (_) {
+    }
+  }
+
+  saveAndroidNavigationPosition(x: number, y: number): void {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return;
+    }
+    const store = this.getStore();
+    if (!store) {
+      return;
+    }
+    try {
+      store.putSync(ANDROID_NAVIGATION_X_KEY, x);
+      store.putSync(ANDROID_NAVIGATION_Y_KEY, y);
+      store.putSync(ANDROID_NAVIGATION_POSITION_INITIALIZED_KEY, true);
       store.flushSync();
     } catch (_) {
     }

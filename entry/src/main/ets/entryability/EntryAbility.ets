@@ -1,5 +1,5 @@
 import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
-import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import {
@@ -45,18 +45,6 @@ export default class EntryAbility extends UIAbility {
         if (windowError.code) {
           hilog.error(DOMAIN, TAG, 'Failed to obtain main window: %{public}s', JSON.stringify(windowError) ?? '');
           return;
-        }
-        if (deviceInfo.deviceType === '2in1') {
-          try {
-            mainWindow.setWindowDecorVisible(false);
-          } catch (decorError) {
-            hilog.error(DOMAIN, TAG, 'Failed to hide system window decor: %{public}s', String(decorError));
-          }
-          mainWindow.setTitleAndDockHoverShown(false, false)
-            .catch((hoverError: BusinessError) => {
-              hilog.error(DOMAIN, TAG, 'Failed to disable title and dock hover: %{public}s',
-                JSON.stringify(hoverError) ?? '');
-            });
         }
         mainWindow.setWindowLayoutFullScreen(true).then(() => {
           hilog.info(DOMAIN, TAG, 'Succeeded in setting the initial window layout mode.');
