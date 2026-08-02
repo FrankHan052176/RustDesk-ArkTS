@@ -25,12 +25,21 @@ const ANDROID_NAVIGATION_VISIBLE_KEY = 'android_navigation_visible';
 const ANDROID_NAVIGATION_POSITION_INITIALIZED_KEY = 'android_navigation_position_initialized';
 const ANDROID_NAVIGATION_X_KEY = 'android_navigation_x';
 const ANDROID_NAVIGATION_Y_KEY = 'android_navigation_y';
+const EASYTIER_PRECONNECT_ENABLED_KEY = 'easytier_preconnect_enabled';
+const EASYTIER_INSTANCE_ID_KEY = 'easytier_instance_id';
+const EASYTIER_INSTANCE_NAME_KEY = 'easytier_instance_name';
 
 export class AndroidNavigationPreferenceState {
   visible: boolean = true;
   positionInitialized: boolean = false;
   x: number = 0;
   y: number = 0;
+}
+
+export class EasyTierPreferenceState {
+  enabled: boolean = false;
+  instanceId: string = '';
+  instanceName: string = '';
 }
 
 export class RustDeskPreferences {
@@ -83,6 +92,67 @@ export class RustDeskPreferences {
     try {
       store.putSync(TARGET_KEY, target.trim());
       store.putSync(TARGET_RECORDED_KEY, true);
+      store.flushSync();
+    } catch (_) {
+    }
+  }
+
+  loadEasyTier(): EasyTierPreferenceState {
+    const state = new EasyTierPreferenceState();
+    const store = this.getStore();
+    if (!store) {
+      return state;
+    }
+    try {
+      state.enabled = store.getSync(EASYTIER_PRECONNECT_ENABLED_KEY, false) as boolean;
+      state.instanceId = (store.getSync(EASYTIER_INSTANCE_ID_KEY, '') as string).trim();
+      state.instanceName = (store.getSync(EASYTIER_INSTANCE_NAME_KEY, '') as string).trim();
+      if (state.instanceId.length === 0) {
+        state.instanceName = '';
+      }
+      return state;
+    } catch (_) {
+      return new EasyTierPreferenceState();
+    }
+  }
+
+  saveEasyTierEnabled(enabled: boolean): void {
+    const store = this.getStore();
+    if (!store) {
+      return;
+    }
+    try {
+      store.putSync(EASYTIER_PRECONNECT_ENABLED_KEY, enabled);
+      store.flushSync();
+    } catch (_) {
+    }
+  }
+
+  saveEasyTierInstance(instanceId: string, instanceName: string): void {
+    const store = this.getStore();
+    if (!store) {
+      return;
+    }
+    try {
+      store.putSync(EASYTIER_INSTANCE_ID_KEY, instanceId.trim());
+      store.putSync(EASYTIER_INSTANCE_NAME_KEY, instanceName.trim());
+      store.flushSync();
+    } catch (_) {
+    }
+  }
+
+  clearEasyTierInstance(): void {
+    const store = this.getStore();
+    if (!store) {
+      return;
+    }
+    try {
+      if (store.hasSync(EASYTIER_INSTANCE_ID_KEY)) {
+        store.deleteSync(EASYTIER_INSTANCE_ID_KEY);
+      }
+      if (store.hasSync(EASYTIER_INSTANCE_NAME_KEY)) {
+        store.deleteSync(EASYTIER_INSTANCE_NAME_KEY);
+      }
       store.flushSync();
     } catch (_) {
     }

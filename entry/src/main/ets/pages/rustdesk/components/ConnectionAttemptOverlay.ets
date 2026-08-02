@@ -25,6 +25,9 @@ export struct ConnectionAttemptOverlay {
   }
 
   private title(): string {
+    if (this.phase === 'waiting_for_easytier') {
+      return '正在准备 EasyTier 网络';
+    }
     if (this.phase === 'awaiting_password') {
       return '等待密码验证';
     }
@@ -46,6 +49,9 @@ export struct ConnectionAttemptOverlay {
     }
     if (this.isFailed()) {
       return '请检查设备状态、网络或密码后重试。';
+    }
+    if (this.phase === 'waiting_for_easytier') {
+      return 'RustDesk 尚未创建会话；EasyTier 确认实例运行后才会继续。';
     }
     return '仍停留在当前页面，连接成功后再进入会话。';
   }

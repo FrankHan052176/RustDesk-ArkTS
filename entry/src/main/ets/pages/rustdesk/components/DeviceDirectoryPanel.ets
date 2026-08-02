@@ -1,5 +1,4 @@
 import {
-  LuminousNeoTokens,
   LuminousSearchField,
   LuminousSegmentedControl,
   LuminousSelectionItem,
@@ -93,6 +92,18 @@ export struct DeviceDirectoryPanel {
     return Math.max(280, this.pageFrameWidth() - this.horizontalPadding() * 2);
   }
 
+  private sourceSwitcherTitleBarHeight(): number {
+    return 50;
+  }
+
+  private sourceSwitcherContentInset(): number {
+    return 14;
+  }
+
+  private pageContentTopPadding(): number {
+    return this.wideLayout ? RustDeskLayoutTokens.PAGE_CONTENT_TOP_PADDING : 8;
+  }
+
   private bottomPadding(): number {
     return (this.wideLayout ? 48 : 120) + this.bottomAvoidInset;
   }
@@ -119,26 +130,6 @@ export struct DeviceDirectoryPanel {
 
   private compactPeerCard(): boolean {
     return this.viewportWidth < 600 || this.columnCount() > 1;
-  }
-
-  private sourceTitle(source: PeerSource): ResourceStr {
-    if (source === 'addressBook') {
-      return '通讯录设备';
-    }
-    if (source === 'lan') {
-      return '局域网设备';
-    }
-    return '最近使用';
-  }
-
-  private sourceDescription(source: PeerSource): ResourceStr {
-    if (source === 'addressBook') {
-      return '来自已登录账户的设备通讯录';
-    }
-    if (source === 'lan') {
-      return '与本机位于同一网络的可发现设备';
-    }
-    return '按最近连接时间排列';
   }
 
   private sourceIndex(source: PeerSource): number {
@@ -171,15 +162,11 @@ export struct DeviceDirectoryPanel {
     return this.snapshot.recent;
   }
 
-  private sourceCount(source: PeerSource): number {
-    return this.sourcePeers(source).length;
-  }
-
   private sourceItems(): LuminousSelectionItem[] {
     return [
-      new LuminousSelectionItem('recent', `最近 ${this.sourceCount('recent')}`, '最近连接的设备'),
-      new LuminousSelectionItem('address-book', `通讯录 ${this.sourceCount('addressBook')}`, '通讯录中的设备'),
-      new LuminousSelectionItem('lan', `局域网 ${this.sourceCount('lan')}`, '局域网发现的设备'),
+      new LuminousSelectionItem('recent', '最近', '最近连接的设备'),
+      new LuminousSelectionItem('address-book', '通讯录', '通讯录中的设备'),
+      new LuminousSelectionItem('lan', '局域网', '局域网发现的设备'),
     ];
   }
 
@@ -308,8 +295,8 @@ export struct DeviceDirectoryPanel {
   }
 
   @Builder
-  private DirectoryHeader() {
-    Column({ space: 10 }) {
+  private DirectorySearch() {
+    Column() {
       LuminousSearchField({
         value: this.query,
         placeholder: $r('app.string.device_search_placeholder'),
@@ -319,53 +306,36 @@ export struct DeviceDirectoryPanel {
         onChange: (value: string): void => {
           this.query = value;
         },
-      })
-
-      LuminousSegmentedControl({
-        items: this.sourceItems(),
-        selectedIndex: this.sourceIndex(this.activeSource),
-        controlWidth: this.controlWidth(),
-        controlHeight: 50,
-        motionEnabled: true,
-        onChange: (index: number): void => this.changeSource(index),
-      })
-        .margin({
-          left: -LuminousNeoTokens.shadowPaddingFor(50),
-          top: -32,
-        })
+      });
     }
     .width(this.controlWidth())
     .alignItems(HorizontalAlign.Center);
   }
 
   @Builder
-  private MessageBanner() {
-    if (this.snapshot.message.trim().length > 0) {
-      LuminousSurface({
-        depth: -1,
-        surfaceWidth: this.controlWidth(),
-        surfaceHeight: 60,
-        cornerRadius: 20,
-        motionEnabled: true,
-      }) {
-        Row({ space: 12 }) {
-          SymbolGlyph($r('sys.symbol.info_circle'))
-            .fontSize(20)
-            .fontColor([$r('app.color.neu_accent')]);
-          Text(this.snapshot.message)
-            .layoutWeight(1)
-            .fontSize(12)
-            .lineHeight(17)
-            .fontColor($r('app.color.neu_text_secondary'))
-            .maxLines(2)
-            .textOverflow({ overflow: TextOverflow.Ellipsis });
-        }
-        .width(this.controlWidth())
-        .height('100%')
-        .padding({ left: 16, right: 16 })
-        .alignItems(VerticalAlign.Center);
+  private DirectorySourceSwitcherTitleBar() {
+    Row() {
+      Stack({ alignContent: Alignment.Center }) {
+        LuminousSegmentedControl({
+          items: this.sourceItems(),
+          selectedIndex: this.sourceIndex(this.activeSource),
+          controlWidth: this.controlWidth(),
+          controlHeight: this.sourceSwitcherTitleBarHeight(),
+          motionEnabled: true,
+          onChange: (index: number): void => this.changeSource(index),
+        });
       }
+      .width(this.controlWidth())
+      .height(this.sourceSwitcherTitleBarHeight())
+      .clip(false);
     }
+    .width('100%')
+    .height(this.sourceSwitcherTitleBarHeight())
+    .padding({ left: this.useWideContentAnchor() ? RustDeskLayoutTokens.WIDE_CONTENT_EDGE : 0 })
+    .justifyContent(this.useWideContentAnchor() ? FlexAlign.Start : FlexAlign.Center)
+    .alignItems(VerticalAlign.Center)
+    .clip(false)
+    .zIndex(2);
   }
 
   @Builder
@@ -444,33 +414,9 @@ export struct DeviceDirectoryPanel {
         this.activateEmptyAction(source);
       });
     }
-    .width(this.controlWidth() + 16)
+    .width(this.controlWidth())
     .height(122)
     .clip(false);
-  }
-
-  @Builder
-  private SourceHeader(source: PeerSource) {
-    Row() {
-      Column({ space: 3 }) {
-        Text(this.sourceTitle(source))
-          .fontSize(18)
-          .fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.neu_text_primary'));
-        Text(this.sourceDescription(source))
-          .fontSize(12)
-          .fontColor($r('app.color.neu_text_secondary'));
-      }
-      .alignItems(HorizontalAlign.Start);
-      Blank();
-      Text(`${this.visiblePeers(source).length}`)
-        .fontSize(14)
-        .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.neu_accent'));
-    }
-    .width('100%')
-    .padding({ left: 8, right: 8, bottom: 4 })
-    .alignItems(VerticalAlign.Center);
   }
 
   @Builder
@@ -478,7 +424,6 @@ export struct DeviceDirectoryPanel {
     if (this.visiblePeers(source).length === 0) {
       Row() {
         Column() {
-          this.SourceHeader(source);
           this.EmptyState(source);
         }
         .width('100%')
@@ -488,7 +433,6 @@ export struct DeviceDirectoryPanel {
       .justifyContent(FlexAlign.Center);
     } else if (this.columnCount() === 1) {
       Column({ space: 18 }) {
-        this.SourceHeader(source);
         ForEach(this.visiblePeers(source), (peer: PeerRecord) => {
           PeerCard({
             peer: peer,
@@ -503,14 +447,10 @@ export struct DeviceDirectoryPanel {
           });
         }, (peer: PeerRecord) => `${peer.source}-${peer.addressBookName}-${peer.id}`);
       }
-      .width('100%')
+      .width(this.controlWidth())
       .alignItems(HorizontalAlign.Start);
     } else {
       Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween }) {
-        Row() {
-          this.SourceHeader(source);
-        }
-        .width('100%')
         ForEach(this.visiblePeers(source), (peer: PeerRecord) => {
           PeerCard({
             peer: peer,
@@ -527,34 +467,43 @@ export struct DeviceDirectoryPanel {
             .margin({ bottom: 18 });
         }, (peer: PeerRecord) => `${peer.source}-${peer.addressBookName}-${peer.id}`);
       }
-      .width('100%');
+      .width(this.controlWidth());
     }
   }
 
   @Builder
-  private SourceScroll(source: PeerSource, scroller: Scroller) {
-    Scroll(scroller) {
-      Row() {
-        Column() {
-          this.PeerList(source);
+  private SourceList(source: PeerSource, scroller: Scroller) {
+    List({ scroller: scroller }) {
+      ListItem() {
+        Row() {
+          Column() {
+            Blank()
+              .width('100%')
+              .height(this.sourceSwitcherContentInset())
+              .flexShrink(0);
+
+            this.PeerList(source);
+          }
+          .width(this.controlWidth())
+          .padding({
+            bottom: this.bottomPadding(),
+          })
+          .alignItems(HorizontalAlign.Center)
+          .clip(false);
         }
-        .width(this.controlWidth())
-        .padding({
-          top: 4,
-          bottom: this.bottomPadding(),
-        })
-        .alignItems(HorizontalAlign.Start);
+        .width('100%')
+        .constraintSize({ minHeight: '100%' })
+        .padding({ left: this.useWideContentAnchor() ? RustDeskLayoutTokens.WIDE_CONTENT_EDGE : 0 })
+        .justifyContent(this.useWideContentAnchor() ? FlexAlign.Start : FlexAlign.Center)
+        .alignItems(VerticalAlign.Top)
+        .clip(false);
       }
-      .width('100%')
-      .constraintSize({ minHeight: '100%' })
-      .padding({ left: this.useWideContentAnchor() ? RustDeskLayoutTokens.WIDE_CONTENT_EDGE : 0 })
-      .justifyContent(this.useWideContentAnchor() ? FlexAlign.Start : FlexAlign.Center)
-      .alignItems(VerticalAlign.Top);
     }
     .width('100%')
     .height('100%')
     .scrollBar(BarState.Off)
-    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true });
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+    .clip(false);
   }
 
   @Builder
@@ -585,7 +534,7 @@ export struct DeviceDirectoryPanel {
         refreshing: this.lanRefreshing!!,
         builder: this.LanRefreshIndicator(),
       }) {
-        this.SourceScroll(source, scroller);
+        this.SourceList(source, scroller);
       }
       .width('100%')
       .height('100%')
@@ -594,7 +543,7 @@ export struct DeviceDirectoryPanel {
       .onStateChange((status: RefreshStatus) => this.lanRefreshStatus = status)
       .onRefreshing(() => this.startLanRefresh());
     } else {
-      this.SourceScroll(source, scroller);
+      this.SourceList(source, scroller);
     }
   }
 
@@ -606,9 +555,8 @@ export struct DeviceDirectoryPanel {
         .flexShrink(0);
 
       Row() {
-        Column({ space: 10 }) {
-          this.DirectoryHeader();
-          this.MessageBanner();
+        Column() {
+          this.DirectorySearch();
         }
         .width(this.controlWidth())
         .alignItems(HorizontalAlign.Center);
@@ -616,25 +564,32 @@ export struct DeviceDirectoryPanel {
       .width('100%')
       .padding({
         left: this.useWideContentAnchor() ? RustDeskLayoutTokens.WIDE_CONTENT_EDGE : 0,
-        top: RustDeskLayoutTokens.PAGE_CONTENT_TOP_PADDING,
+        top: this.pageContentTopPadding(),
         bottom: 0,
       })
       .justifyContent(this.useWideContentAnchor() ? FlexAlign.Start : FlexAlign.Center)
       .alignItems(VerticalAlign.Top);
 
-      Swiper(this.swiperController) {
-        this.SourcePage('recent', this.recentScroller);
-        this.SourcePage('addressBook', this.addressBookScroller);
-        this.SourcePage('lan', this.lanScroller);
+      Column() {
+        this.DirectorySourceSwitcherTitleBar();
+
+        Swiper(this.swiperController) {
+          this.SourcePage('recent', this.recentScroller);
+          this.SourcePage('addressBook', this.addressBookScroller);
+          this.SourcePage('lan', this.lanScroller);
+        }
+        .layoutWeight(1)
+        .width('100%')
+        .indicator(false)
+        .loop(false)
+        .duration(280)
+        .onChange((index: number) => {
+          this.activeSource = this.sourceFromIndex(index);
+        });
       }
       .layoutWeight(1)
       .width('100%')
-      .indicator(false)
-      .loop(false)
-      .duration(280)
-      .onChange((index: number) => {
-        this.activeSource = this.sourceFromIndex(index);
-      });
+      .clip(false);
     }
     .width('100%')
     .height('100%')

@@ -1,0 +1,11 @@
+{
+  "crossAppSharedConfig": [
+    {
+      "uri": "datashareproxy://top.frankhan.resk/easytier_api/v2/start_request",
+      "value": "{\"schemaVersion\":2,\"requestId\":\"\",\"operation\":\"start_instance\",\"issuedAt\":0,\"instanceId\":\"\"}",
+      "allowList": [
+        "6917581172490635834"
+      ]
+    }
+  ]
+}

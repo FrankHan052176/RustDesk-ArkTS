@@ -95,6 +95,19 @@ import {
   DataTransferBackgroundBinding,
 } from '../services/DataTransferBackgroundService';
 import {
+  EASYTIER_API_RESULT_EVENT,
+  EASYTIER_OPERATION_START_INSTANCE,
+  EASYTIER_SNAPSHOT_EVENT,
+  EASYTIER_STATE_RUNNING,
+  EasyTierApiRequestOutcome,
+  EasyTierApiResultEvent,
+  EasyTierApiService,
+  EasyTierConnectionIntent,
+  EasyTierConnectionKind,
+  EasyTierInstanceSummary,
+  EasyTierSnapshotEvent,
+} from '../services/EasyTierApiService';
+import {
   ActionResponse,
   BridgeSummary,
   DecoderCapability,
@@ -143,8 +156,9 @@ const ANDROID_RECENT_PRESS_DURATION_MS = 500;
 
 type PrimarySessionKind = 'remote_control' | 'view_only' | 'view_camera';
 type PasswordSessionKind = 'primary' | 'file_transfer';
-type PeerLaunchKind = 'remote_control' | 'view_only' | 'view_camera' | 'file_transfer';
-type ConnectionUiPhase = 'idle' | 'connecting' | 'awaiting_password' | 'authenticating' | 'connected' | 'failed';
+type PeerLaunchKind = EasyTierConnectionKind;
+type ConnectionUiPhase = 'idle' | 'waiting_for_easytier' | 'connecting'
+  | 'awaiting_password' | 'authenticating' | 'connected' | 'failed';
 
 interface RuntimeDirectoryResponse {
   ok: boolean;
@@ -423,6 +437,23 @@ struct RustDeskIndex {
   private pendingResolutionWidth: number = 0;
   private pendingResolutionHeight: number = 0;
   private hdsTabsController: HdsTabsController = new HdsTabsController();
+  @Local easyTierDataAvailable: boolean = false;
+  @Local easyTierPreconnectEnabled: boolean = false;
+  @Local easyTierSelectedInstanceId: string = '';
+  @Local easyTierSelectedInstanceName: string = '';
+  @Local easyTierSelectedInstanceState: string = '';
+  @Local easyTierStatusText: string = '';
+  @Local easyTierRequestPending: boolean = false;
+  @Local easyTierInstances: EasyTierInstanceSummary[] = [];
+  private easyTierSnapshotFresh: boolean = false;
+  private easyTierResultListenerRegistered: boolean = false;
+  private onEasyTierApiResult = (result: EasyTierApiResultEvent): void => {
+    EasyTierApiService.clearBufferedResult(result.requestId);
+    void this.applyEasyTierApiResult(result);
+  };
+  private onEasyTierSnapshot = (snapshot: EasyTierSnapshotEvent): void => {
+    this.applyEasyTierSnapshot(snapshot);
+  };
   aboutToAppear(): void {
     this.pageVisible = true;
     this.previewController.onCreated = (surfaceId: string) => this.handlePreviewSurfaceCreated(surfaceId);
@@ -430,6 +461,7 @@ struct RustDeskIndex {
       this.handlePreviewSurfaceChanged(surfaceId, rect);
     this.previewController.onDestroyed = (surfaceId: string) => this.handlePreviewSurfaceDestroyed(surfaceId);
     this.initializeRuntime();
+    this.registerEasyTierResultListener();
     this.registerWindowAvoidAreaListener();
     this.applySessionFullscreen(false, true);
     this.registerFreeWindowChrome();
@@ -461,6 +493,7 @@ struct RustDeskIndex {
     this.stopPolling();
     this.closeTransferSession();
     this.closeRemoteAudio();
+    this.unregisterEasyTierResultListener();
     this.publishDataTransferUnbind();
     void this.applySessionFullscreen(false)
       .finally((): void => {
@@ -483,6 +516,35 @@ struct RustDeskIndex {
     this.pageVisible = false;
     this.clipboardController?.stop();
     this.stopInputInterceptor();
+  }
+
+  private registerEasyTierResultListener(): void {
+    if (this.easyTierResultListenerRegistered) {
+      return;
+    }
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    context.eventHub.on(EASYTIER_API_RESULT_EVENT, this.onEasyTierApiResult);
+    context.eventHub.on(EASYTIER_SNAPSHOT_EVENT, this.onEasyTierSnapshot);
+    this.easyTierResultListenerRegistered = true;
+    const buffered = EasyTierApiService.takeBufferedResult();
+    if (buffered !== undefined) {
+      void this.applyEasyTierApiResult(buffered);
+    }
+    const bufferedSnapshot = EasyTierApiService.takeBufferedSnapshot();
+    if (bufferedSnapshot !== undefined) {
+      this.applyEasyTierSnapshot(bufferedSnapshot);
+    }
+    void this.refreshEasyTierSnapshot(false);
+  }
+
+  private unregisterEasyTierResultListener(): void {
+    if (!this.easyTierResultListenerRegistered) {
+      return;
+    }
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    context.eventHub.off(EASYTIER_API_RESULT_EVENT, this.onEasyTierApiResult);
+    context.eventHub.off(EASYTIER_SNAPSHOT_EVENT, this.onEasyTierSnapshot);
+    this.easyTierResultListenerRegistered = false;
   }
 
   private getInputController(): RustDeskInputController {
@@ -650,6 +712,13 @@ struct RustDeskIndex {
         log: (label: string, payload: string) => this.logRelativeDebug(label, payload),
       });
       this.applySavedSettings(this.preferences.load());
+      const easyTierSettings = this.preferences.loadEasyTier();
+      this.easyTierPreconnectEnabled = easyTierSettings.enabled;
+      this.easyTierSelectedInstanceId = easyTierSettings.instanceId;
+      this.easyTierSelectedInstanceName = easyTierSettings.instanceName;
+      this.easyTierSelectedInstanceState = '';
+      this.easyTierStatusText = easyTierSettings.instanceId.length > 0
+        ? '已保存实例；可刷新状态或直接连接' : '';
       this.sessionDefaults = this.preferences.loadSessionDefaults();
       const androidNavigationState = this.preferences.loadAndroidNavigationState();
       this.androidNavigationVisible = androidNavigationState.visible;
@@ -1349,21 +1418,309 @@ struct RustDeskIndex {
   }
 
   private launchPeer(peerId: string, kind: PeerLaunchKind): void {
-    this.updatePeerTarget(peerId);
-    this.preferences?.saveTarget(peerId);
-    if (kind === 'view_camera') {
-      this.connectCameraSession();
+    void this.preparePeerLaunch(peerId, kind);
+  }
+
+  private abilityContext(): common.UIAbilityContext {
+    return this.getUIContext().getHostContext() as common.UIAbilityContext;
+  }
+
+  private setEasyTierPreconnectEnabled(enabled: boolean): void {
+    this.easyTierPreconnectEnabled = enabled;
+    this.preferences?.saveEasyTierEnabled(enabled);
+    if (!enabled) {
+      EasyTierApiService.cancelPending(this.abilityContext());
+      this.easyTierRequestPending = false;
+      this.easyTierStatusText = 'EasyTier 预组网已关闭';
+      if (this.connectionUiPhase === 'waiting_for_easytier') {
+        this.connectionUiPhase = 'idle';
+        this.connectionUiMessage = '';
+      }
       return;
     }
-    if (kind === 'view_only') {
-      this.connectViewOnlySession();
+    this.easyTierStatusText = this.easyTierSelectedInstanceId.length > 0
+      ? '已保存实例；正在同步运行状态' : '请先选择 EasyTier 实例';
+  }
+
+  private setEasyTierMode(instanceId: string): void {
+    if (instanceId.length === 0) {
+      this.setEasyTierPreconnectEnabled(false);
       return;
     }
+    const instance = this.findEasyTierInstance(this.easyTierInstances, instanceId);
+    if (instance === undefined) {
+      return;
+    }
+    this.updateSelectedEasyTierInstance(instance);
+    if (!this.easyTierPreconnectEnabled) {
+      this.easyTierPreconnectEnabled = true;
+      this.preferences?.saveEasyTierEnabled(true);
+    }
+    this.easyTierStatusText = this.easyTierInstanceStatus(instance, this.easyTierSnapshotFresh);
+  }
+
+  private async preparePeerLaunch(targetValue: string, kind: PeerLaunchKind): Promise<void> {
+    if (this.sessionCloseInFlight) {
+      return;
+    }
+    const target = targetValue.trim();
+    if (target.length === 0) {
+      this.errorText = '请输入目标地址';
+      return;
+    }
+    this.updatePeerTarget(target);
+    this.preferences?.saveTarget(target);
+    if (!this.easyTierPreconnectEnabled || !this.easyTierDataAvailable) {
+      await this.launchPeerDirect(target, kind);
+      return;
+    }
+    if (this.easyTierRequestPending) {
+      this.showEasyTierToast('已有 EasyTier 请求正在处理，请稍候或取消当前请求');
+      return;
+    }
+
+    const context = this.abilityContext();
+    this.beginEasyTierPreconnect(target, kind, '正在读取 EasyTier 实例状态');
+    const snapshot = await EasyTierApiService.readSnapshot(context);
+    this.easyTierRequestPending = false;
+    this.applyEasyTierSnapshot(snapshot);
+    if (!snapshot.ok) {
+      this.connectionUiPhase = 'idle';
+      this.connectionUiMessage = '';
+      EasyTierApiService.clearConnectionIntent(context);
+      await this.launchPeerDirect(target, kind);
+      return;
+    }
+    if (this.easyTierSelectedInstanceId.length === 0) {
+      if (snapshot.instances.length === 0) {
+        this.failEasyTierPreconnect(target, kind, 'EasyTier 中没有可用实例，请先创建配置');
+        return;
+      }
+      this.failEasyTierPreconnect(target, kind, '请先在 EasyTier 下拉栏中选择实例');
+      return;
+    }
+    const instance = this.findEasyTierInstance(snapshot.instances, this.easyTierSelectedInstanceId);
+    if (instance === undefined) {
+      this.failEasyTierPreconnect(target, kind, '已选择的 EasyTier 实例不在当前快照中，请重新选择');
+      return;
+    }
+    if (!EasyTierApiService.saveConnectionIntent(context, target, kind)) {
+      this.failEasyTierPreconnect(target, kind, '无法保存待恢复的 RustDesk 连接');
+      return;
+    }
+    await this.continueEasyTierLaunch(instance, snapshot.fresh, new EasyTierConnectionIntent(target, kind, Date.now()));
+  }
+
+  private async launchPeerDirect(target: string, kind: PeerLaunchKind): Promise<void> {
+    this.updatePeerTarget(target);
+    this.preferences?.saveTarget(target);
     if (kind === 'file_transfer') {
-      this.openTransferWorkspace();
+      await this.openTransferWorkspaceDirect();
       return;
     }
-    this.connectRemoteSession();
+    await this.connectSessionDirect(kind as PrimarySessionKind);
+  }
+
+  private beginEasyTierPreconnect(target: string, kind: PeerLaunchKind, message: string): void {
+    this.clearConnectionTimeout();
+    this.connectionAttemptKind = kind === 'file_transfer' ? 'file_transfer' : 'primary';
+    if (kind !== 'file_transfer') {
+      this.lastConnectionKind = kind as PrimarySessionKind;
+    }
+    this.connectionUiTarget = target;
+    this.connectionUiPhase = 'waiting_for_easytier';
+    this.connectionUiMessage = message;
+    this.easyTierRequestPending = true;
+    this.easyTierStatusText = message;
+    this.errorText = '';
+  }
+
+  private failEasyTierPreconnect(target: string, kind: PeerLaunchKind, message: string): void {
+    const normalizedMessage = message.trim().length > 0 ? message.trim() : 'EasyTier 预组网未完成';
+    EasyTierApiService.clearConnectionIntent(this.abilityContext());
+    this.connectionAttemptKind = kind === 'file_transfer' ? 'file_transfer' : 'primary';
+    if (kind !== 'file_transfer') {
+      this.lastConnectionKind = kind as PrimarySessionKind;
+    }
+    this.connectionUiTarget = target;
+    this.connectionUiPhase = 'failed';
+    this.connectionUiMessage = normalizedMessage;
+    this.easyTierRequestPending = false;
+    this.easyTierStatusText = normalizedMessage;
+    this.errorText = normalizedMessage;
+  }
+
+  private async requestEasyTierStart(instanceId: string): Promise<void> {
+    this.easyTierRequestPending = true;
+    const outcome = await EasyTierApiService.request(
+      this.abilityContext(),
+      EASYTIER_OPERATION_START_INSTANCE,
+      instanceId,
+    );
+    this.handleEasyTierRequestOutcome(outcome);
+  }
+
+  private handleEasyTierRequestOutcome(outcome: EasyTierApiRequestOutcome): void {
+    if (outcome.ok) {
+      return;
+    }
+    this.easyTierRequestPending = false;
+    const intent = EasyTierApiService.loadConnectionIntent(this.abilityContext());
+    EasyTierApiService.cancelPending(this.abilityContext());
+    if (intent !== undefined) {
+      this.failEasyTierPreconnect(intent.target, intent.kind, outcome.message);
+      return;
+    }
+    this.connectionUiPhase = 'idle';
+    this.connectionUiMessage = '';
+    this.easyTierStatusText = outcome.message;
+    this.errorText = outcome.message;
+    this.showEasyTierToast(outcome.message);
+  }
+
+  private async applyEasyTierApiResult(result: EasyTierApiResultEvent): Promise<void> {
+    this.easyTierRequestPending = false;
+    this.easyTierStatusText = result.message;
+    if (result.operation === EASYTIER_OPERATION_START_INSTANCE) {
+      if (!result.ok || result.code !== 'OK' || result.instance === undefined
+        || result.instance.state !== EASYTIER_STATE_RUNNING || result.target.length === 0) {
+        this.failEasyTierPreconnect(
+          result.target.length > 0 ? result.target : this.connectionUiTarget,
+          result.kind,
+          result.message,
+        );
+        return;
+      }
+      this.updateSelectedEasyTierInstance(result.instance);
+      this.easyTierStatusText = this.easyTierInstanceStatus(result.instance);
+      this.connectionUiPhase = 'idle';
+      this.connectionUiMessage = '';
+      await this.launchPeerDirect(result.target, result.kind);
+    }
+  }
+
+  private async refreshEasyTierSnapshot(showError: boolean): Promise<EasyTierSnapshotEvent> {
+    const snapshot = await EasyTierApiService.readSnapshot(this.abilityContext());
+    this.applyEasyTierSnapshot(snapshot);
+    if (!snapshot.ok && showError) {
+      this.errorText = snapshot.message;
+      this.showEasyTierToast(snapshot.message);
+    }
+    return snapshot;
+  }
+
+  private applyEasyTierSnapshot(snapshot: EasyTierSnapshotEvent): void {
+    if (!snapshot.ok) {
+      this.easyTierDataAvailable = false;
+      this.easyTierSnapshotFresh = false;
+      this.easyTierInstances = [];
+      this.easyTierSelectedInstanceState = '';
+      if (this.easyTierPreconnectEnabled && !this.easyTierRequestPending) {
+        this.easyTierStatusText = snapshot.message;
+      }
+      return;
+    }
+    this.easyTierDataAvailable = true;
+    this.easyTierSnapshotFresh = snapshot.fresh;
+    this.easyTierInstances = snapshot.instances;
+    if (this.easyTierSelectedInstanceId.length === 0) {
+      if (this.easyTierPreconnectEnabled && !this.easyTierRequestPending) {
+        this.easyTierStatusText = snapshot.instances.length === 0
+          ? 'EasyTier 中暂无可用实例'
+          : (snapshot.fresh ? '请选择 EasyTier 实例' : 'EasyTier 实例状态已过期');
+      }
+      return;
+    }
+    const selected = this.findEasyTierInstance(snapshot.instances, this.easyTierSelectedInstanceId);
+    if (selected === undefined) {
+      this.easyTierSelectedInstanceState = '';
+      if (this.easyTierPreconnectEnabled) {
+        this.easyTierPreconnectEnabled = false;
+        this.preferences?.saveEasyTierEnabled(false);
+      }
+      if (!this.easyTierRequestPending) {
+        this.easyTierStatusText = '已选择的 EasyTier 实例不在当前快照中，已改为不组网';
+      }
+      return;
+    }
+    this.updateSelectedEasyTierInstance(selected);
+    if (!this.easyTierRequestPending) {
+      this.easyTierStatusText = this.easyTierInstanceStatus(selected, snapshot.fresh);
+    }
+  }
+
+  private findEasyTierInstance(instances: EasyTierInstanceSummary[], instanceId: string):
+    EasyTierInstanceSummary | undefined {
+    for (let index = 0; index < instances.length; index += 1) {
+      if (instances[index].instanceId === instanceId) {
+        return instances[index];
+      }
+    }
+    return undefined;
+  }
+
+  private async continueEasyTierLaunch(instance: EasyTierInstanceSummary, snapshotFresh: boolean,
+    intent: EasyTierConnectionIntent): Promise<void> {
+    this.updateSelectedEasyTierInstance(instance);
+    if (snapshotFresh && instance.state === EASYTIER_STATE_RUNNING) {
+      EasyTierApiService.clearConnectionIntent(this.abilityContext());
+      this.easyTierRequestPending = false;
+      this.connectionUiPhase = 'idle';
+      this.connectionUiMessage = '';
+      this.easyTierStatusText = this.easyTierInstanceStatus(instance, true);
+      await this.launchPeerDirect(intent.target, intent.kind);
+      return;
+    }
+    this.beginEasyTierPreconnect(
+      intent.target,
+      intent.kind,
+      snapshotFresh
+        ? `正在请求 EasyTier 启动 ${instance.instanceName}`
+        : `EasyTier 状态已过期，正在请求启动 ${instance.instanceName}`,
+    );
+    await this.requestEasyTierStart(instance.instanceId);
+  }
+
+  private updateSelectedEasyTierInstance(instance: EasyTierInstanceSummary): void {
+    const selectionChanged = this.easyTierSelectedInstanceId !== instance.instanceId
+      || this.easyTierSelectedInstanceName !== instance.instanceName;
+    this.easyTierSelectedInstanceId = instance.instanceId;
+    this.easyTierSelectedInstanceName = instance.instanceName;
+    this.easyTierSelectedInstanceState = instance.state;
+    if (selectionChanged) {
+      this.preferences?.saveEasyTierInstance(instance.instanceId, instance.instanceName);
+    }
+  }
+
+  private easyTierInstanceStatus(instance: EasyTierInstanceSummary, snapshotFresh: boolean = true): string {
+    if (!snapshotFresh) {
+      return `${instance.instanceName} 状态已过期`;
+    }
+    if (instance.state === EASYTIER_STATE_RUNNING) {
+      return instance.peerCount > 0
+        ? `${instance.instanceName} 正在运行 · ${instance.peerCount} 个对端`
+        : `${instance.instanceName} 正在运行`;
+    }
+    if (instance.state === 'starting') {
+      return `${instance.instanceName} 正在启动`;
+    }
+    return `${instance.instanceName} 已停止`;
+  }
+
+  private cancelEasyTierRequest(): void {
+    EasyTierApiService.cancelPending(this.abilityContext());
+    this.easyTierRequestPending = false;
+    this.connectionUiPhase = 'idle';
+    this.connectionUiMessage = '';
+    this.easyTierStatusText = '已取消 EasyTier 预组网';
+  }
+
+  private showEasyTierToast(message: string): void {
+    try {
+      this.getUIContext().getPromptAction().showToast({ message, duration: 5000 });
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'Failed to show EasyTier feedback: %{public}s', String(error));
+    }
   }
 
   private refreshNativeState(): void {
@@ -1467,6 +1824,10 @@ struct RustDeskIndex {
   }
 
   private cancelConnectionAttempt(): void {
+    if (this.connectionUiPhase === 'waiting_for_easytier') {
+      this.cancelEasyTierRequest();
+      return;
+    }
     const attemptKind = this.connectionAttemptKind;
     this.clearConnectionTimeout();
     this.connectionUiPhase = 'idle';
@@ -1490,7 +1851,7 @@ struct RustDeskIndex {
       void this.openTransferWorkspace();
       return;
     }
-    void this.connectSession(this.lastConnectionKind);
+    void this.preparePeerLaunch(target, this.lastConnectionKind);
   }
 
   private dismissConnectionAttempt(): void {
@@ -1501,18 +1862,18 @@ struct RustDeskIndex {
   }
 
   private async connectRemoteSession(): Promise<void> {
-    await this.connectSession('remote_control');
+    await this.preparePeerLaunch(this.peerTarget, 'remote_control');
   }
 
   private async connectCameraSession(): Promise<void> {
-    await this.connectSession('view_camera');
+    await this.preparePeerLaunch(this.peerTarget, 'view_camera');
   }
 
   private async connectViewOnlySession(): Promise<void> {
-    await this.connectSession('view_only');
+    await this.preparePeerLaunch(this.peerTarget, 'view_only');
   }
 
-  private async connectSession(kind: PrimarySessionKind): Promise<void> {
+  private async connectSessionDirect(kind: PrimarySessionKind): Promise<void> {
     if (this.sessionCloseInFlight) {
       return;
     }
@@ -2311,6 +2672,14 @@ struct RustDeskIndex {
   }
 
   private async openTransferWorkspace(): Promise<void> {
+    if (this.transferManager.isReady() && this.transferSessionTarget === this.peerTarget.trim()) {
+      await this.openTransferWorkspaceDirect();
+      return;
+    }
+    await this.preparePeerLaunch(this.peerTarget, 'file_transfer');
+  }
+
+  private async openTransferWorkspaceDirect(): Promise<void> {
     if (!this.runtimeInitialized) {
       this.initializeRuntime();
     }
@@ -5745,19 +6114,6 @@ struct RustDeskIndex {
     return RustDeskLayoutTokens.PAGE_TITLE_SPACER;
   }
 
-  private deviceTitleSpacerHeight(): number {
-    if (this.shouldShowPhoneMainTitleBar()) {
-      return 0;
-    }
-    if (this.freeMultiWindow) {
-      return FREE_WINDOW_TITLE_BAR_HEIGHT_VP + this.wideContentTitleSpacerHeight();
-    }
-    if (this.isWideMainLayout()) {
-      return this.wideContentTitleSpacerHeight();
-    }
-    return RustDeskLayoutTokens.DEVICE_PAGE_TITLE_SPACER;
-  }
-
   private boundMainTitleSpacerHeight(): number {
     if (this.shouldShowPhoneMainTitleBar()) {
       return 0;
@@ -5783,6 +6139,11 @@ struct RustDeskIndex {
       canDisconnect: this.activeSessionId.length > 0,
       transferActive: this.transferSessionReady,
       activeTransferPeerId: this.transferManager.isReady() ? this.transferSessionTarget : '',
+      easyTierAvailable: this.easyTierDataAvailable,
+      easyTierEnabled: this.easyTierPreconnectEnabled,
+      easyTierInstances: this.easyTierInstances,
+      easyTierInstanceId: this.easyTierSelectedInstanceId,
+      easyTierBusy: this.easyTierRequestPending,
       wideLayout: this.isWideMainLayout(),
       directorySnapshot: this.directorySnapshot,
       scroller: this.connectScroller,
@@ -5800,6 +6161,7 @@ struct RustDeskIndex {
       onViewPeerOnly: (peerId: string) => this.launchPeer(peerId, 'view_only'),
       onViewPeerCamera: (peerId: string) => this.launchPeer(peerId, 'view_camera'),
       onOpenPeerTransfer: (peerId: string) => this.launchPeer(peerId, 'file_transfer'),
+      onEasyTierModeChange: (instanceId: string) => this.setEasyTierMode(instanceId),
     })
   }
 
@@ -5812,7 +6174,7 @@ struct RustDeskIndex {
       recentScroller: this.deviceRecentScroller,
       addressBookScroller: this.deviceAddressBookScroller,
       lanScroller: this.deviceLanScroller,
-      titleSpacerHeight: this.deviceTitleSpacerHeight(),
+      titleSpacerHeight: this.mainTitleSpacerHeight(),
       bottomAvoidInset: this.windowBottomAvoidInset,
       onRefresh: () => this.refreshDirectorySnapshot(),
       onScanLan: () => this.scanLanPeers(),
@@ -6268,6 +6630,10 @@ struct RustDeskIndex {
                 dividerColor: $r('app.color.transparent'),
               },
             },
+          },
+          systemMaterialEffect: {
+            materialType: hdsMaterial.MaterialType.ADAPTIVE,
+            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
           },
         },
       })

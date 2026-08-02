@@ -9,12 +9,14 @@ import {
   DataTransferBackgroundBinding,
   DataTransferBackgroundService,
 } from '../services/DataTransferBackgroundService';
+import { EasyTierApiService } from '../services/EasyTierApiService';
 
 const DOMAIN = 0xFF00;
 const TAG = 'RustDeskHMOS';
 
 export default class EntryAbility extends UIAbility {
   private dataTransferBackgroundService: DataTransferBackgroundService | undefined = undefined;
+  private easyTierApiService: EasyTierApiService | undefined = undefined;
   private onDataTransferBind = (binding: DataTransferBackgroundBinding): void => {
     this.dataTransferBackgroundService?.bind(binding.callbacks);
   };
@@ -28,9 +30,21 @@ export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(DOMAIN, TAG, 'Ability onCreate');
     this.dataTransferBackgroundService = new DataTransferBackgroundService(this.context);
+    this.easyTierApiService = new EasyTierApiService(this.context);
+    void this.easyTierApiService.startSnapshotObserver();
     this.context.eventHub.on(DATA_TRANSFER_BACKGROUND_BIND_EVENT, this.onDataTransferBind);
     this.context.eventHub.on(DATA_TRANSFER_BACKGROUND_CHANGE_EVENT, this.onDataTransferChanged);
     this.context.eventHub.on(DATA_TRANSFER_BACKGROUND_UNBIND_EVENT, this.onDataTransferUnbind);
+    this.handleIncomingWant(want);
+  }
+
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    hilog.info(DOMAIN, TAG, 'Ability onNewWant');
+    if (this.easyTierApiService === undefined) {
+      this.easyTierApiService = new EasyTierApiService(this.context);
+      void this.easyTierApiService.startSnapshotObserver();
+    }
+    this.handleIncomingWant(want);
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
@@ -68,15 +82,25 @@ export default class EntryAbility extends UIAbility {
     this.context.eventHub.off(DATA_TRANSFER_BACKGROUND_UNBIND_EVENT, this.onDataTransferUnbind);
     this.dataTransferBackgroundService?.destroy();
     this.dataTransferBackgroundService = undefined;
+    this.easyTierApiService?.stopSnapshotObserver();
+    this.easyTierApiService = undefined;
   }
 
   onForeground(): void {
     hilog.info(DOMAIN, TAG, 'Ability onForeground');
     this.dataTransferBackgroundService?.onForeground();
+    void this.easyTierApiService?.startSnapshotObserver();
   }
 
   onBackground(): void {
     hilog.info(DOMAIN, TAG, 'Ability onBackground');
     this.dataTransferBackgroundService?.onBackground();
+  }
+
+  private handleIncomingWant(want: Want): void {
+    if (!EasyTierApiService.isResultWant(want)) {
+      return;
+    }
+    void this.easyTierApiService?.handleWant(want);
   }
 }

@@ -1,12 +1,15 @@
 import {
   LuminousButton,
   LuminousControlSize,
+  LuminousNeoTokens,
+  LuminousSecondaryMenu,
   LuminousSegmentedControl,
   LuminousSelectionItem,
   LuminousSurface,
   LuminousTextField,
   LuminousTone,
 } from 'luminous_neo';
+import { EasyTierInstanceSummary } from '../../../services/EasyTierApiService';
 import { DirectorySnapshot, PeerRecord } from '../RustDeskDirectoryTypes';
 import { RustDeskLayoutTokens } from '../RustDeskLayoutTokens';
 import { PeerCard } from './PeerCard';
@@ -24,6 +27,11 @@ export interface ConnectTabProps {
   canDisconnect: boolean;
   transferActive: boolean;
   activeTransferPeerId: string;
+  easyTierAvailable: boolean;
+  easyTierEnabled: boolean;
+  easyTierInstances: EasyTierInstanceSummary[];
+  easyTierInstanceId: string;
+  easyTierBusy: boolean;
   wideLayout: boolean;
   titleSpacerHeight: number;
   bottomAvoidInset: number;
@@ -34,6 +42,7 @@ export interface ConnectTabProps {
   onViewPeerOnly: (peerId: string) => void;
   onViewPeerCamera: (peerId: string) => void;
   onOpenPeerTransfer: (peerId: string) => void;
+  onEasyTierModeChange: (instanceId: string) => void;
 }
 
 @ComponentV2
@@ -43,6 +52,11 @@ export struct ConnectTab {
   @Param canDisconnect: boolean = false;
   @Param transferActive: boolean = false;
   @Param activeTransferPeerId: string = '';
+  @Param easyTierAvailable: boolean = false;
+  @Param easyTierEnabled: boolean = false;
+  @Param easyTierInstances: EasyTierInstanceSummary[] = [];
+  @Param easyTierInstanceId: string = '';
+  @Param easyTierBusy: boolean = false;
   @Param wideLayout: boolean = false;
   @Param titleSpacerHeight: number = 56;
   @Param bottomAvoidInset: number = 0;
@@ -62,6 +76,7 @@ export struct ConnectTab {
   @Event onViewPeerOnly: (peerId: string) => void = (_peerId: string) => {};
   @Event onViewPeerCamera: (peerId: string) => void = (_peerId: string) => {};
   @Event onOpenPeerTransfer: (peerId: string) => void = (_peerId: string) => {};
+  @Event onEasyTierModeChange: (instanceId: string) => void = (_instanceId: string) => {};
 
   private useTwoColumnWorkspace(): boolean {
     return this.wideLayout && this.viewportWidth >= RustDeskLayoutTokens.HOME_TWO_COLUMN_MIN_WIDTH;
@@ -88,6 +103,20 @@ export struct ConnectTab {
 
   private stageFrameWidth(): number {
     return this.controlWidth() + 40;
+  }
+
+  private secondaryMenuFrameOverhead(): number {
+    const mainPadding = LuminousNeoTokens.shadowPaddingFor(this.easyTierMenuHeight());
+    const handlePadding = LuminousNeoTokens.shadowPaddingFor(40);
+    return mainPadding + handlePadding + 50;
+  }
+
+  private recentTitleBarHeight(): number {
+    return 56;
+  }
+
+  private recentContentInset(): number {
+    return 14;
   }
 
   private recentFrameWidth(): number {
@@ -169,6 +198,69 @@ export struct ConnectTab {
     return this.canDisconnect ? '建立新连接' : '开始连接';
   }
 
+  private easyTierMenuSelectedIndex(): number {
+    if (!this.easyTierEnabled) {
+      return 0;
+    }
+    for (let index = 0; index < this.easyTierInstances.length; index += 1) {
+      if (this.easyTierInstances[index].instanceId === this.easyTierInstanceId) {
+        return index + 1;
+      }
+    }
+    return 0;
+  }
+
+  private easyTierOptionLabel(instance: EasyTierInstanceSummary): string {
+    let state = '已停止';
+    if (instance.state === 'running') {
+      state = '运行中';
+    } else if (instance.state === 'starting') {
+      state = '启动中';
+    }
+    return instance.peerCount > 0
+      ? `${instance.instanceName} · ${state} · ${instance.peerCount} 个对端`
+      : `${instance.instanceName} · ${state}`;
+  }
+
+  private easyTierMenuItems(): LuminousSelectionItem[] {
+    const items: LuminousSelectionItem[] = [
+      new LuminousSelectionItem('direct', '不组网（RustDesk 直连）', '不使用 EasyTier，直接连接远端设备'),
+    ];
+    for (let index = 0; index < this.easyTierInstances.length; index += 1) {
+      const instance = this.easyTierInstances[index];
+      items.push(new LuminousSelectionItem(
+        `easytier-${instance.instanceId}`,
+        this.easyTierOptionLabel(instance),
+        `使用 EasyTier 实例 ${instance.instanceName}`,
+      ));
+    }
+    return items;
+  }
+
+  private easyTierMenuHeight(): number {
+    return LuminousNeoTokens.REGULAR_HEIGHT;
+  }
+
+  private easyTierMenuControlWidth(): number {
+    return Math.max(280, this.stageFrameWidth() - this.secondaryMenuFrameOverhead());
+  }
+
+  private easyTierMenuFrameHeight(): number {
+    const mainPadding = LuminousNeoTokens.shadowPaddingFor(this.easyTierMenuHeight());
+    return this.easyTierMenuHeight() + mainPadding * 2;
+  }
+
+  private commitEasyTierMenuIndex(index: number): void {
+    if (index === 0) {
+      this.onEasyTierModeChange('');
+      return;
+    }
+    const instanceIndex = index - 1;
+    if (instanceIndex >= 0 && instanceIndex < this.easyTierInstances.length) {
+      this.onEasyTierModeChange(this.easyTierInstances[instanceIndex].instanceId);
+    }
+  }
+
   private activatePrimaryAction(): void {
     if (this.connectionMode === 1) {
       this.onViewOnly();
@@ -196,15 +288,15 @@ export struct ConnectTab {
 
   @Builder
   private StageHeader() {
-    Row({ space: 14 }) {
+    Row({ space: 12 }) {
       SymbolGlyph(this.modeSymbol())
-        .fontSize(32)
+        .fontSize(30)
         .fontColor([$r('app.color.neu_accent')]);
 
-      Column({ space: 3 }) {
+      Column({ space: 2 }) {
         Text(this.modeTitle())
           .width('100%')
-          .fontSize(20)
+          .fontSize(19)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.neu_text_primary'));
         Text(this.modeDescription())
@@ -224,7 +316,7 @@ export struct ConnectTab {
 
   @Builder
   private ConnectionStage() {
-    Column({ space: 2 }) {
+    Column() {
       this.StageHeader();
 
       LuminousSegmentedControl({
@@ -237,6 +329,7 @@ export struct ConnectTab {
           this.connectionMode = index;
         },
       })
+        .margin({ top: -6 })
 
       LuminousTextField({
         value: this.target,
@@ -246,37 +339,60 @@ export struct ConnectTab {
         motionEnabled: true,
         onChange: (value: string): void => this.onTargetChange(value),
       })
-        .margin({ top: -18 })
-
-      Row({ space: 8 }) {
-        Circle()
-          .width(7)
-          .height(7)
-          .fill(this.canDisconnect ? $r('app.color.success') : $r('app.color.neu_text_disabled'));
-        Text(this.canDisconnect
-          ? '当前会话仍在运行，可同时准备下一台设备'
-          : (this.rememberPassword ? '已启用本机会话密码记忆' : '密码会在远端需要时单独请求'))
-          .layoutWeight(1)
-          .fontSize(11)
-          .fontColor($r('app.color.neu_text_secondary'))
-          .maxLines(2)
-          .textOverflow({ overflow: TextOverflow.Ellipsis });
-      }
-      .width(this.controlWidth())
-      .padding({ left: 4, right: 4 })
-      .margin({ top: -6 })
-      .alignItems(VerticalAlign.Center);
+        .margin({ top: -26 })
 
       LuminousButton({
         label: this.primaryActionLabel(),
         controlWidth: this.controlWidth(),
         controlSizeMode: LuminousControlSize.Regular,
         tone: LuminousTone.Accent,
-        isEnabled: this.targetReady() || (this.connectionMode === 3 && this.transferActive),
+        isEnabled: (!this.easyTierBusy || !this.easyTierAvailable || !this.easyTierEnabled)
+          && (this.targetReady() || (this.connectionMode === 3 && this.transferActive)),
         motionEnabled: true,
         onAction: (): void => this.activatePrimaryAction(),
       })
-        .margin({ top: -8 })
+        .margin({ top: -28 })
+
+      if (this.easyTierAvailable) {
+        Row({ space: 6 }) {
+          SymbolGlyph($r('sys.symbol.link'))
+            .fontSize(13)
+            .fontColor([$r('app.color.neu_accent')]);
+          Text('联动 EasyTier 预组网；实例未运行时将先请求启动')
+            .layoutWeight(1)
+            .fontSize(11)
+            .lineHeight(17)
+            .fontColor($r('app.color.neu_text_secondary'))
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
+        }
+        .width(this.controlWidth())
+        .padding({ left: 4, right: 4 })
+        .alignItems(VerticalAlign.Center)
+        .margin({ top: -16 })
+
+        Row() {
+          LuminousSecondaryMenu({
+            items: this.easyTierMenuItems(),
+            selectedIndex: this.easyTierMenuSelectedIndex(),
+            controlWidth: this.easyTierMenuControlWidth(),
+            mainHeight: this.easyTierMenuHeight(),
+            itemHeight: 52,
+            accessibilityLabel: 'EasyTier 预组网方式',
+            handleAccessibilityLabel: '展开 EasyTier 预组网方式',
+            isEnabled: !this.easyTierBusy,
+            motionEnabled: true,
+            onChange: (index: number): void => this.commitEasyTierMenuIndex(index),
+          })
+        }
+        .width(this.stageFrameWidth())
+        .height(this.easyTierMenuFrameHeight())
+        .justifyContent(FlexAlign.Start)
+        .alignItems(VerticalAlign.Center)
+        .clip(false)
+        .zIndex(200)
+        .margin({ top: -22 })
+      }
 
       if (this.canDisconnect) {
         LuminousButton({
@@ -291,6 +407,8 @@ export struct ConnectTab {
       }
     }
     .width(this.stageFrameWidth())
+    .flexShrink(0)
+    .zIndex(200)
     .alignItems(HorizontalAlign.Center);
   }
 
@@ -315,6 +433,19 @@ export struct ConnectTab {
     }
     .width(this.recentContentWidth())
     .alignItems(VerticalAlign.Center);
+  }
+
+  @Builder
+  private RecentTitleBar() {
+    Row() {
+      this.RecentHeader();
+    }
+    .width('100%')
+    .height(this.recentTitleBarHeight())
+    .justifyContent(FlexAlign.Center)
+    .alignItems(VerticalAlign.Center)
+    .backgroundColor($r('app.color.neu_base'))
+    .zIndex(2);
   }
 
   @Builder
@@ -360,47 +491,85 @@ export struct ConnectTab {
 
   @Builder
   private RecentWorkspace() {
-    Column({ space: 16 }) {
-      this.RecentHeader();
-      if (this.recentPreview().length === 0) {
-        this.EmptyRecent();
-      } else {
-        ForEach(this.recentPreview(), (peer: PeerRecord) => {
-          PeerCard({
-            peer: peer,
-            compact: true,
-            cardWidth: this.recentContentWidth(),
-            transferActive: this.activeTransferPeerId === peer.id,
-            onSetFavorite: (peerId: string, favorite: boolean) => this.onSetPeerFavorite(peerId, favorite),
-            onRemoveRecent: (peerId: string) => this.onRemoveRecentPeer(peerId),
-            onConnectRemote: (peerId: string) => this.onConnectPeerRemote(peerId),
-            onViewOnly: (peerId: string) => this.onViewPeerOnly(peerId),
-            onViewCamera: (peerId: string) => this.onViewPeerCamera(peerId),
-            onOpenTransfer: (peerId: string) => this.onOpenPeerTransfer(peerId),
+    Column() {
+      this.RecentTitleBar();
+
+      List({ scroller: this.scroller }) {
+        ListItem() {
+          Column({ space: 16 }) {
+            Blank()
+              .width('100%')
+              .height(this.recentContentInset())
+              .flexShrink(0);
+
+            if (this.recentPreview().length === 0) {
+              this.EmptyRecent();
+            } else {
+              ForEach(this.recentPreview(), (peer: PeerRecord) => {
+                PeerCard({
+                  peer: peer,
+                  compact: true,
+                  cardWidth: this.recentContentWidth(),
+                  transferActive: this.activeTransferPeerId === peer.id,
+                  onSetFavorite: (peerId: string, favorite: boolean) => this.onSetPeerFavorite(peerId, favorite),
+                  onRemoveRecent: (peerId: string) => this.onRemoveRecentPeer(peerId),
+                  onConnectRemote: (peerId: string) => this.onConnectPeerRemote(peerId),
+                  onViewOnly: (peerId: string) => this.onViewPeerOnly(peerId),
+                  onViewCamera: (peerId: string) => this.onViewPeerCamera(peerId),
+                  onOpenTransfer: (peerId: string) => this.onOpenPeerTransfer(peerId),
+                })
+                  .width(this.recentContentWidth());
+              }, (peer: PeerRecord) => `recent-${peer.id}`);
+            }
+          }
+          .width(this.recentFrameWidth())
+          .padding({
+            bottom: (this.wideLayout ? 52 : 132) + this.bottomAvoidInset,
           })
-            .width(this.recentContentWidth());
-        }, (peer: PeerRecord) => `recent-${peer.id}`);
+          .alignItems(HorizontalAlign.Center);
+        }
       }
+      .layoutWeight(1)
+      .width('100%')
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+      .clip(true)
+      .zIndex(0);
     }
-    .width(this.recentFrameWidth())
-    .alignItems(HorizontalAlign.Center);
+    .width('100%')
+    .height('100%')
+    .clip(true);
   }
 
   @Builder
   private Workspace() {
     if (this.isCompact()) {
-      Column({ space: 12 }) {
+      Column({ space: 4 }) {
         this.ConnectionStage();
-        this.RecentWorkspace();
+        Stack() {
+          this.RecentWorkspace();
+        }
+        .layoutWeight(1)
+        .width(this.recentFrameWidth())
+        .clip(false)
+        .zIndex(0)
       }
+      .layoutWeight(1)
       .width('100%')
       .padding({ left: this.useWideContentAnchor() ? this.wideWorkspaceLeftInset() : 0 })
       .alignItems(this.useWideContentAnchor() ? HorizontalAlign.Start : HorizontalAlign.Center);
     } else {
       Row({ space: 44 }) {
         this.ConnectionStage();
-        this.RecentWorkspace();
+        Stack() {
+          this.RecentWorkspace();
+        }
+        .width(this.recentFrameWidth())
+        .height('100%')
+        .clip(false)
+        .zIndex(0)
       }
+      .layoutWeight(1)
       .width('100%')
       .padding({ left: this.useWideContentAnchor() ? this.wideWorkspaceLeftInset() : 0 })
       .justifyContent(this.useWideContentAnchor() ? FlexAlign.Start : FlexAlign.Center)
@@ -409,26 +578,17 @@ export struct ConnectTab {
   }
 
   build() {
-    Scroll(this.scroller) {
-      Column() {
-        Blank()
-          .width('100%')
-          .height(this.titleSpacerHeight)
-          .flexShrink(0);
-        this.Workspace();
-      }
-      .width('100%')
-      .padding({
-        top: RustDeskLayoutTokens.PAGE_CONTENT_TOP_PADDING,
-        bottom: (this.wideLayout ? 52 : 132) + this.bottomAvoidInset,
-      })
-      .constraintSize({ minHeight: '100%' })
-      .alignItems(HorizontalAlign.Center);
+    Column() {
+      Blank()
+        .width('100%')
+        .height(this.titleSpacerHeight)
+        .flexShrink(0);
+      this.Workspace();
     }
     .width('100%')
     .height('100%')
-    .scrollBar(BarState.Off)
-    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+    .padding({ top: RustDeskLayoutTokens.PAGE_CONTENT_TOP_PADDING })
+    .alignItems(HorizontalAlign.Center)
     .backgroundColor($r('app.color.neu_base'))
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       const width = Number(newArea.width);

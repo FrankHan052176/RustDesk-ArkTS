@@ -12,6 +12,7 @@
     "deliveryWithInstall": true,
     "installationFree": false,
     "pages": "$profile:main_pages",
+    "crossAppSharedConfig": "$profile:easytier_api_shared_config",
     "metadata": [
       {
         "name": "configColorModeChangePerformanceInArkUI",

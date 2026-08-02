@@ -922,7 +922,7 @@ export struct SettingsTab {
           .padding({
             left: this.sheetHorizontalPadding(),
             right: this.sheetHorizontalPadding(),
-            top: $r('app.float.space_8'),
+            top: $r('app.float.space_24'),
             bottom: $r('app.float.space_24'),
           });
         }
