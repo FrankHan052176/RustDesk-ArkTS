@@ -1,13 +1,21 @@
 import { common, wantAgent, WantAgent } from '@kit.AbilityKit';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { notificationManager } from '@kit.NotificationKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { TransferProgress } from '../pages/rustdesk/TransferProgress';
 import { TransferItem } from '../pages/rustdesk/RustDeskSessionTypes';
 import { DataTransferNotification } from './DataTransferNotification';
 
-const DATA_TRANSFER_REQUEST_CODE = 6101;
+const DATA_TRANSFER_REQUEST_CODE = 0;
+const DATA_TRANSFER_BACKGROUND_MODE = 'dataTransfer';
 const FILE_NOTIFICATION_UPDATE_INTERVAL_MS = 1000;
-const SESSION_NOTIFICATION_UPDATE_INTERVAL_MS = 30000;
+const SESSION_NOTIFICATION_UPDATE_INTERVAL_MS = 5000;
+const SESSION_PROGRESS_STEP = 0.1;
+const SESSION_PROGRESS_FLOOR = 12;
+const SESSION_PROGRESS_CEILING = 88;
+const DOMAIN = 0xFF00;
+const TAG = 'RustDeskDataTransfer';
 
 export const DATA_TRANSFER_BACKGROUND_BIND_EVENT = 'rustdesk.data_transfer.bind';
 export const DATA_TRANSFER_BACKGROUND_CHANGE_EVENT = 'rustdesk.data_transfer.changed';
@@ -39,7 +47,7 @@ export class DataTransferBackgroundService {
   private notificationId: number = -1;
   private notificationTimer: number = -1;
   private lastNotificationAt: number = 0;
-  private heartbeatProgress: number = 0;
+  private heartbeatProgress: number = SESSION_PROGRESS_FLOOR;
   private notificationInFlight: boolean = false;
   private cancellationRegistered: boolean = false;
   private taskStartInFlight: boolean = false;
@@ -122,57 +130,54 @@ export class DataTransferBackgroundService {
   private start(callbacks: DataTransferBackgroundCallbacks): void {
     const generation = this.lifecycleGeneration;
     this.taskStartInFlight = true;
-    this.createWantAgent().then((agent: WantAgent) => {
+    void this.startContinuousTask(generation, callbacks);
+  }
+
+  private async startContinuousTask(generation: number, callbacks: DataTransferBackgroundCallbacks): Promise<void> {
+    try {
+      const agent = await this.createWantAgent();
       if (!this.ownsLifecycle(generation, callbacks)) {
         this.ensureRunning();
         return;
       }
-      const request = new backgroundTaskManager.ContinuousTaskRequest();
-      request.backgroundTaskModes = [backgroundTaskManager.BackgroundTaskMode.MODE_DATA_TRANSFER];
-      request.wantAgent = agent;
-      backgroundTaskManager.startBackgroundRunning(this.context, request)
-        .then((notification: backgroundTaskManager.ContinuousTaskNotification) => {
-          const taskId = notification.continuousTaskId;
-          if (!this.ownsLifecycle(generation, callbacks)) {
-            if (taskId !== undefined && taskId >= 0) {
-              backgroundTaskManager.stopBackgroundRunning(this.context, taskId)
-                .catch(() => {});
-            }
-            this.ensureRunning();
-            return;
-          }
-          this.taskStartInFlight = false;
-          if (taskId === undefined || taskId < 0) {
-            this.handleStartFailure(generation, callbacks, '系统未返回数据传输后台任务 ID');
-            return;
-          }
-          if (!this.hasActiveSession(callbacks)) {
-            backgroundTaskManager.stopBackgroundRunning(this.context, taskId)
-              .catch(() => {});
-            return;
-          }
-          this.taskId = taskId;
-          this.notificationId = notification.notificationId;
-          this.registerCancellation();
-          this.startNotificationTimer();
-          this.publishProgress(true);
-        })
-        .catch(() => {
-          if (!this.ownsLifecycle(generation, callbacks)) {
-            this.ensureRunning();
-            return;
-          }
-          this.taskStartInFlight = false;
-          this.handleStartFailure(generation, callbacks, '无法启动数据传输后台任务');
-        });
-    }).catch(() => {
+      const modes: string[] = [DATA_TRANSFER_BACKGROUND_MODE];
+      const notification = await backgroundTaskManager.startBackgroundRunning(this.context, modes, agent);
+      const taskId = notification.continuousTaskId;
+      if (!this.ownsLifecycle(generation, callbacks)) {
+        if (taskId !== undefined && taskId >= 0) {
+          await backgroundTaskManager.stopBackgroundRunning(this.context, taskId).catch(() => {});
+        }
+        this.ensureRunning();
+        return;
+      }
+      this.taskStartInFlight = false;
+      if (taskId === undefined || taskId < 0) {
+        this.handleStartFailure(generation, callbacks, '系统未返回数据传输后台任务 ID');
+        return;
+      }
+      if (!this.hasActiveSession(callbacks)) {
+        await backgroundTaskManager.stopBackgroundRunning(this.context, taskId).catch(() => {});
+        return;
+      }
+      this.taskId = taskId;
+      this.notificationId = notification.notificationId;
+      hilog.info(DOMAIN, TAG,
+        'Data-transfer keep-alive started taskId=%{public}d notificationId=%{public}d',
+        taskId, this.notificationId);
+      this.registerCancellation();
+      this.startNotificationTimer();
+      this.publishProgress(true);
+    } catch (error) {
       if (!this.ownsLifecycle(generation, callbacks)) {
         this.ensureRunning();
         return;
       }
       this.taskStartInFlight = false;
-      this.handleStartFailure(generation, callbacks, '无法创建数据传输通知操作');
-    });
+      const businessError = error as BusinessError;
+      hilog.error(DOMAIN, TAG, 'startBackgroundRunning dataTransfer failed code=%{public}d message=%{public}s',
+        businessError.code, businessError.message);
+      this.handleStartFailure(generation, callbacks, '无法启动数据传输后台任务');
+    }
   }
 
   private ownsLifecycle(generation: number, callbacks: DataTransferBackgroundCallbacks): boolean {
@@ -198,11 +203,15 @@ export class DataTransferBackgroundService {
       }],
       actionType: wantAgent.OperationType.START_ABILITY,
       requestCode: DATA_TRANSFER_REQUEST_CODE,
-      wantAgentFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG],
+      actionFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG],
     };
     try {
       return await wantAgent.getWantAgent(info);
     } catch (error) {
+      hilog.error(DOMAIN, TAG,
+        'WantAgent creation failed error=%{public}s bundle=%{public}s ability=%{public}s',
+        String(error),
+        this.context.abilityInfo.bundleName, this.context.abilityInfo.name);
       throw new Error(String(error));
     }
   }
@@ -236,6 +245,8 @@ export class DataTransferBackgroundService {
     }
     const callbacks = this.callbacks;
     const taskId = this.taskId;
+    hilog.warn(DOMAIN, TAG, 'Data-transfer keep-alive cancelled taskId=%{public}d reason=%{public}s',
+      taskId, String(info.reason));
     this.cancellationInProgress = true;
     this.invalidateLifecycle();
     this.taskId = -1;
@@ -283,7 +294,7 @@ export class DataTransferBackgroundService {
       return;
     }
     if (!hasActiveTransfer) {
-      this.heartbeatProgress = (this.heartbeatProgress + 1) % 100;
+      this.advanceSessionProgress();
     }
     const generation = this.lifecycleGeneration;
     this.notificationInFlight = true;
@@ -300,6 +311,9 @@ export class DataTransferBackgroundService {
       }
       this.lastNotificationAt = now;
       this.notificationInFlight = false;
+      if (force) {
+        hilog.info(DOMAIN, TAG, 'Data-transfer live-view notification published id=%{public}d', notificationId);
+      }
     }).catch(() => {
       if (!this.ownsNotification(generation, callbacks, notificationId)) {
         this.cancelStaleNotification(notificationId);
@@ -307,8 +321,19 @@ export class DataTransferBackgroundService {
       }
       this.lastNotificationAt = now;
       this.notificationInFlight = false;
+      hilog.error(DOMAIN, TAG, 'Data-transfer live-view notification publish failed id=%{public}d', notificationId);
       callbacks.reportFailure('无法更新数据传输实况窗');
     });
+  }
+
+  private advanceSessionProgress(): void {
+    if (this.heartbeatProgress >= SESSION_PROGRESS_CEILING) {
+      this.heartbeatProgress = SESSION_PROGRESS_FLOOR;
+      return;
+    }
+    this.heartbeatProgress = Math.round(
+      (this.heartbeatProgress + SESSION_PROGRESS_STEP) * 10,
+    ) / 10;
   }
 
   private cancelNotification(): void {
@@ -346,6 +371,7 @@ export class DataTransferBackgroundService {
         .catch(() => {});
     }
     this.cancelNotification();
+    hilog.error(DOMAIN, TAG, '%{public}s', message);
     callbacks.reportFailure(message);
   }
 

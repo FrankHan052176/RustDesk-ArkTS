@@ -44,17 +44,21 @@
             ]
           }
         ]
+      },
+      {
+        "name": "StatusBarBackgroundAbility",
+        "srcEntry": "./ets/backgroundability/StatusBarBackgroundAbility.ets",
+        "description": "$string:EntryAbility_desc",
+        "label": "$string:EntryAbility_label",
+        "icon": "$media:resk",
+        "startWindowIcon": "$media:startIcon",
+        "startWindowBackground": "$color:start_window_background",
+        "exported": true
       }
     ],
     "requestPermissions": [
       {
-        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING",
-        "usedScene": {
-          "abilities": [
-            "EntryAbility"
-          ],
-          "when": "inuse"
-        }
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
       },
       {
         "name": "ohos.permission.INTERNET",

@@ -10,14 +10,25 @@ import {
   DataTransferBackgroundService,
 } from '../services/DataTransferBackgroundService';
 import { EasyTierApiService } from '../services/EasyTierApiService';
+import {
+  shouldUseStatusBarKeepAlive,
+  StatusBarKeepAliveService,
+} from '../services/desktop/StatusBarKeepAliveService';
 
 const DOMAIN = 0xFF00;
 const TAG = 'RustDeskHMOS';
 
 export default class EntryAbility extends UIAbility {
   private dataTransferBackgroundService: DataTransferBackgroundService | undefined = undefined;
+  private dataTransferBinding: DataTransferBackgroundBinding | undefined = undefined;
   private easyTierApiService: EasyTierApiService | undefined = undefined;
+  private statusBarKeepAliveService: StatusBarKeepAliveService | undefined = undefined;
+  private mainWindow: window.Window | undefined = undefined;
+  private desktopKeepAliveActive: boolean = false;
+  private windowWillCloseCallback: (() => Promise<boolean>) | undefined = undefined;
+  private windowStageCloseCallback: (() => boolean) | undefined = undefined;
   private onDataTransferBind = (binding: DataTransferBackgroundBinding): void => {
+    this.dataTransferBinding = binding;
     this.dataTransferBackgroundService?.bind(binding.callbacks);
   };
   private onDataTransferChanged = (): void => {
@@ -25,11 +36,12 @@ export default class EntryAbility extends UIAbility {
   };
   private onDataTransferUnbind = (): void => {
     this.dataTransferBackgroundService?.unbind();
+    this.dataTransferBinding = undefined;
   };
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(DOMAIN, TAG, 'Ability onCreate');
-    this.dataTransferBackgroundService = new DataTransferBackgroundService(this.context);
+    this.statusBarKeepAliveService = new StatusBarKeepAliveService(this.context, () => this.restoreMainWindow());
     this.easyTierApiService = new EasyTierApiService(this.context);
     void this.easyTierApiService.startSnapshotObserver();
     this.context.eventHub.on(DATA_TRANSFER_BACKGROUND_BIND_EVENT, this.onDataTransferBind);
@@ -40,6 +52,7 @@ export default class EntryAbility extends UIAbility {
 
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(DOMAIN, TAG, 'Ability onNewWant');
+    this.restoreMainWindow();
     if (this.easyTierApiService === undefined) {
       this.easyTierApiService = new EasyTierApiService(this.context);
       void this.easyTierApiService.startSnapshotObserver();
@@ -58,8 +71,11 @@ export default class EntryAbility extends UIAbility {
       windowStage.getMainWindow((windowError: BusinessError, mainWindow: window.Window) => {
         if (windowError.code) {
           hilog.error(DOMAIN, TAG, 'Failed to obtain main window: %{public}s', JSON.stringify(windowError) ?? '');
+          this.enableDataTransferKeepAlive();
           return;
         }
+        this.mainWindow = mainWindow;
+        this.startBackgroundKeepAlive(windowStage, mainWindow);
         mainWindow.setWindowLayoutFullScreen(true).then(() => {
           hilog.info(DOMAIN, TAG, 'Succeeded in setting the initial window layout mode.');
         }).catch((err: BusinessError) => {
@@ -73,6 +89,9 @@ export default class EntryAbility extends UIAbility {
 
   onWindowStageDestroy(): void {
     hilog.info(DOMAIN, TAG, 'Ability onWindowStageDestroy');
+    this.mainWindow = undefined;
+    this.windowWillCloseCallback = undefined;
+    this.windowStageCloseCallback = undefined;
   }
 
   onDestroy(): void {
@@ -82,6 +101,10 @@ export default class EntryAbility extends UIAbility {
     this.context.eventHub.off(DATA_TRANSFER_BACKGROUND_UNBIND_EVENT, this.onDataTransferUnbind);
     this.dataTransferBackgroundService?.destroy();
     this.dataTransferBackgroundService = undefined;
+    this.dataTransferBinding = undefined;
+    this.statusBarKeepAliveService?.close();
+    this.statusBarKeepAliveService = undefined;
+    this.desktopKeepAliveActive = false;
     this.easyTierApiService?.stopSnapshotObserver();
     this.easyTierApiService = undefined;
   }
@@ -95,6 +118,95 @@ export default class EntryAbility extends UIAbility {
   onBackground(): void {
     hilog.info(DOMAIN, TAG, 'Ability onBackground');
     this.dataTransferBackgroundService?.onBackground();
+  }
+
+  private enableDataTransferKeepAlive(): void {
+    if (this.dataTransferBackgroundService !== undefined) {
+      return;
+    }
+    this.dataTransferBackgroundService = new DataTransferBackgroundService(this.context);
+    const binding = this.dataTransferBinding;
+    if (binding !== undefined) {
+      this.dataTransferBackgroundService.bind(binding.callbacks);
+    }
+  }
+
+  private startDesktopKeepAlive(): void {
+    const service = this.statusBarKeepAliveService;
+    if (service === undefined) {
+      return;
+    }
+    service.start().then((active: boolean): void => {
+      this.desktopKeepAliveActive = active;
+      if (!active) {
+        hilog.warn(DOMAIN, TAG, 'Status bar keep-alive unavailable; falling back to data transfer task');
+        this.enableDataTransferKeepAlive();
+      }
+    }).catch((error: Error): void => {
+      this.desktopKeepAliveActive = false;
+      hilog.error(DOMAIN, TAG, 'Status bar keep-alive start failed: %{public}s', error.message);
+      this.enableDataTransferKeepAlive();
+    });
+  }
+
+  private startBackgroundKeepAlive(windowStage: window.WindowStage, mainWindow: window.Window): void {
+    if (!shouldUseStatusBarKeepAlive(mainWindow)) {
+      hilog.info(DOMAIN, TAG, 'Using data-transfer keep-alive for the current window mode');
+      this.enableDataTransferKeepAlive();
+      return;
+    }
+    hilog.info(DOMAIN, TAG, 'Using status-bar keep-alive for the current window mode');
+    this.registerWindowCloseToBackground(windowStage, mainWindow);
+    this.startDesktopKeepAlive();
+  }
+
+  private restoreMainWindow(): void {
+    if (!this.desktopKeepAliveActive) {
+      return;
+    }
+    this.context.showAbility().catch((error: BusinessError): void => {
+      hilog.warn(DOMAIN, TAG, 'showAbility ignored: %{public}d %{public}s', error.code, error.message);
+    });
+    const currentWindow = this.mainWindow;
+    if (currentWindow !== undefined) {
+      currentWindow.restore().catch((error: BusinessError): void => {
+        hilog.warn(DOMAIN, TAG, 'Window restore ignored: %{public}d %{public}s', error.code, error.message);
+      });
+    }
+  }
+
+  private hideMainWindow(): Promise<boolean> {
+    if (!this.desktopKeepAliveActive) {
+      return Promise.resolve(false);
+    }
+    return this.context.hideAbility().then((): boolean => {
+      hilog.info(DOMAIN, TAG, 'Main window hidden to status bar');
+      return true;
+    }).catch((error: BusinessError): boolean => {
+      hilog.error(DOMAIN, TAG, 'hideAbility failed: %{public}d %{public}s', error.code, error.message);
+      return false;
+    });
+  }
+
+  private registerWindowCloseToBackground(windowStage: window.WindowStage, mainWindow: window.Window): void {
+    this.windowWillCloseCallback = (): Promise<boolean> => this.hideMainWindow();
+    try {
+      mainWindow.on('windowWillClose', this.windowWillCloseCallback);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'windowWillClose registration ignored: %{public}s', String(error));
+    }
+    this.windowStageCloseCallback = (): boolean => {
+      if (!this.desktopKeepAliveActive) {
+        return false;
+      }
+      void this.hideMainWindow();
+      return true;
+    };
+    try {
+      windowStage.on('windowStageClose', this.windowStageCloseCallback);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'windowStageClose registration ignored: %{public}s', String(error));
+    }
   }
 
   private handleIncomingWant(want: Want): void {
