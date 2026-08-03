@@ -36,6 +36,7 @@ jobs:
       - name: Setup
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Setup Java
@@ -113,26 +114,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          today=$(date -u +%F)
-          year_short=$(date -u +%y)
-          day_of_year=$(date -u +%j)
-          workflow_runs=$(curl --fail --silent --show-error --location \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header 'X-GitHub-Api-Version: 2022-11-28' \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/build-private-har.yml/runs?per_page=100")
-          first_run_number=$(jq -er --arg today "$today" \
-            '[.workflow_runs[] | select(.created_at | startswith($today)) | .run_number] | min' \
-            <<<"$workflow_runs")
-          build_number=$((10#$GITHUB_RUN_NUMBER - 10#$first_run_number + 1))
-          if (( build_number < 1 || build_number > 99 )); then
-            echo "Daily build number is outside the supported range: $build_number" >&2
-            exit 1
-          fi
-          if (( GITHUB_RUN_ATTEMPT < 1 || GITHUB_RUN_ATTEMPT > 9 )); then
-            echo "Run attempt is outside the supported range: $GITHUB_RUN_ATTEMPT" >&2
-            exit 1
-          fi
-
           base_version_name=$(jq -er '.app.versionName' AppScope/app.json5)
           if [[ "$base_version_name" =~ ^([0-9]+\.[0-9]+\.[0-9]+)(\.[0-9]+)?$ ]]; then
             base_version_name="${BASH_REMATCH[1]}"
@@ -140,9 +121,61 @@ jobs:
             echo "Unsupported base versionName: $base_version_name" >&2
             exit 1
           fi
-          revision=$(printf '%02d%d' "$build_number" "$GITHUB_RUN_ATTEMPT")
-          app_version_name="${base_version_name}.${revision}"
-          app_version_code="${year_short}${day_of_year}$(printf '%02d' "$build_number")${GITHUB_RUN_ATTEMPT}"
+
+          version_start_sha=$(git log \
+            -S "\"versionName\": \"$base_version_name\"" \
+            --format=%H \
+            -1 \
+            -- AppScope/app.json5)
+          if [[ -z "$version_start_sha" ]]; then
+            echo "Unable to locate the commit that introduced versionName $base_version_name." >&2
+            exit 1
+          fi
+          version_start_epoch=$(git show -s --format=%ct "$version_start_sha")
+
+          workflow_runs='[]'
+          page=1
+          while :; do
+            runs_response=$(curl --fail --silent --show-error --location \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/build-private-har.yml/runs?per_page=100&page=$page")
+            page_runs=$(jq -c '.workflow_runs' <<<"$runs_response")
+            workflow_runs=$(jq -cn \
+              --argjson accumulated "$workflow_runs" \
+              --argjson current "$page_runs" \
+              '$accumulated + $current')
+            page_count=$(jq -r 'length' <<<"$page_runs")
+            if (( page_count < 100 )); then
+              break
+            fi
+            oldest_epoch=$(jq -er '.[-1].created_at | fromdateiso8601' <<<"$page_runs")
+            if (( oldest_epoch < version_start_epoch )); then
+              break
+            fi
+            ((page += 1))
+          done
+
+          today=$(date -u +%F)
+          day_of_year=$(date -u +%j)
+          version_build_number=$(jq -er --argjson start "$version_start_epoch" \
+            '[.[] | select((.created_at | fromdateiso8601) >= $start) | (.run_attempt // 1)] | add' \
+            <<<"$workflow_runs")
+          daily_build_number=$(jq -er --arg today "$today" \
+            '[.[] | select(.created_at | startswith($today)) | (.run_attempt // 1)] | add' \
+            <<<"$workflow_runs")
+          if (( version_build_number < 1 )); then
+            echo "Current-version build number must be positive: $version_build_number" >&2
+            exit 1
+          fi
+          if (( daily_build_number < 1 || daily_build_number > 99 )); then
+            echo "Daily build number is outside the supported range: $daily_build_number" >&2
+            exit 1
+          fi
+
+          version_code_prefix=${base_version_name//./}
+          app_version_name="${base_version_name}.${version_build_number}"
+          app_version_code="${version_code_prefix}${day_of_year}$(printf '%02d' "$daily_build_number")"
           app_version_code=$((10#$app_version_code))
           app_json=$(mktemp)
           jq --arg version_name "$app_version_name" --argjson version_code "$app_version_code" \
@@ -150,10 +183,11 @@ jobs:
             AppScope/app.json5 > "$app_json"
           mv "$app_json" AppScope/app.json5
 
-          echo "App version: $app_version_name ($app_version_code), daily build: $build_number, attempt: $GITHUB_RUN_ATTEMPT"
+          echo "App version: $app_version_name ($app_version_code), version build: $version_build_number, UTC daily build: $daily_build_number"
           echo "app_version_name=$app_version_name" >> "$GITHUB_OUTPUT"
           echo "app_version_code=$app_version_code" >> "$GITHUB_OUTPUT"
-          echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
+          echo "build_number=$version_build_number" >> "$GITHUB_OUTPUT"
+          echo "daily_build_number=$daily_build_number" >> "$GITHUB_OUTPUT"
 
       - name: Build
         shell: bash

@@ -21,7 +21,14 @@ The update request refuses to proceed without at least one group. It writes ever
 
 After AGC finishes processing the uploaded package, the workflow updates the app file information and attaches the SVID introduction video for `ohos.permission.INTERCEPT_INPUT_EVENT` on phone (`deviceType=4`), tablet (`deviceType=5`), and PC/2-in-1 (`deviceType=19`). It passes the same three records to the invitation-test version. The PC/2-in-1 value follows the Publishing API's `PackagePermissionIntroVideo` contract and matches the app manifest's supported device types.
 
-Before the signed `publish/release` App is built, CI derives a UTC daily build number from the workflow's first run of the day. It rewrites only the runner checkout to `versionName=<base major.minor.patch>.<daily build><run attempt>` and `versionCode=<UTC yy><UTC day-of-year><daily build><run attempt>`. The daily build supports `01..99`, and the run attempt supports `1..9`, so a rerun cannot register the same AGC package version. Local builds continue to use the committed `AppScope/app.json5` values.
+Before the signed `publish/release` App is built, CI counts Action build attempts since the commit that introduced the current base version and counts Action build attempts created on the current UTC date. It rewrites only the runner checkout using these formulas:
+
+```text
+versionName = <base major.minor.patch>.<current-version build count>
+versionCode = <base major/minor/patch digits><UTC day-of-year><two-digit UTC daily build count>
+```
+
+For example, the seventh `1.0.3` build and the fourth build on UTC day 215 produce `1.0.3.7 / 10321504`. A rerun increments both counters through `run_attempt`, and the UTC daily count supports `01..99`. Local builds continue to use the committed `AppScope/app.json5` values.
 
 The same web-configurable test description is used when creating and updating a test version, and is truncated to 30 characters: `同步上游 <HAR version>` for a Core dispatch, the push commit message for a push, and the current SHA for a manual run. The script does not print the Client Secret or access token. When the three required Secrets are absent, the AGC step is skipped and the signed GitHub artifact is still produced.
 
