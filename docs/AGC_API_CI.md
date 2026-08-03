@@ -19,7 +19,9 @@ The workflow only creates HarmonyOS invitation testing versions: `testType=3` an
 
 The update request refuses to proceed without at least one group. It writes every `groupId`, a start time one hour after the current UTC time, an end time after `AGC_TEST_DURATION_DAYS`, `displayArea="1"`, and `needShareLink=0`. It sends a test notification only for the first attempt of an ArkTS `push` run; dispatches, manual runs, and retries do not notify testers.
 
-The update attaches the SVID introduction video for `ohos.permission.INTERCEPT_INPUT_EVENT` on phone (`deviceType=4`) and tablet (`deviceType=5`). The Testing API does not define a 2-in-1 device type, so the app's 2-in-1 manifest declaration is not sent with a guessed value.
+After AGC finishes processing the uploaded package, the workflow updates the app file information and attaches the SVID introduction video for `ohos.permission.INTERCEPT_INPUT_EVENT` on phone (`deviceType=4`), tablet (`deviceType=5`), and PC/2-in-1 (`deviceType=19`). It passes the same three records to the invitation-test version. The PC/2-in-1 value follows the Publishing API's `PackagePermissionIntroVideo` contract and matches the app manifest's supported device types.
+
+Before the signed `publish/release` App is built, CI derives a UTC daily build number from the workflow's first run of the day. It rewrites only the runner checkout to `versionName=<base major.minor.patch>.<daily build><run attempt>` and `versionCode=<UTC yy><UTC day-of-year><daily build><run attempt>`. The daily build supports `01..99`, and the run attempt supports `1..9`, so a rerun cannot register the same AGC package version. Local builds continue to use the committed `AppScope/app.json5` values.
 
 The same web-configurable test description is used when creating and updating a test version, and is truncated to 30 characters: `同步上游 <HAR version>` for a Core dispatch, the push commit message for a push, and the current SHA for a manual run. The script does not print the Client Secret or access token. When the three required Secrets are absent, the AGC step is skipped and the signed GitHub artifact is still produced.
 
@@ -36,3 +38,4 @@ Official API references:
 - [Add test package](https://developer.huawei.com/consumer/cn/doc/app/agc-help-test-api-add-test-package-0000002236201330)
 - [Modify test version](https://developer.huawei.com/consumer/cn/doc/app/agc-help-test-api-modify-test-version-0000002271160657)
 - [Package permission introduction video](https://developer.huawei.com/consumer/cn/doc/app/agc-help-test-api-data-packagepermissionintrovideo-0000002237496316)
+- [Update application file information](https://developer.huawei.com/consumer/cn/doc/app/agc-help-publish-api-app-file-info-update-0000002236041430)

@@ -298,6 +298,14 @@ fetch_group_infos >/dev/null
 app_name=$(basename "$AGC_APP_FILE")
 app_object_id=$(upload_file "$AGC_APP_FILE")
 video_object_id=$(upload_file "$AGC_PERMISSION_VIDEO_FILE")
+permission_intro_videos=$(jq -cn \
+  --arg permission_name 'ohos.permission.INTERCEPT_INPUT_EVENT' \
+  --arg video_object_id "$video_object_id" \
+  '[
+    {lang: "zh-CN", permissionName: $permission_name, deviceType: 4, objectId: $video_object_id},
+    {lang: "zh-CN", permissionName: $permission_name, deviceType: 5, objectId: $video_object_id},
+    {lang: "zh-CN", permissionName: $permission_name, deviceType: 19, objectId: $video_object_id}
+  ]')
 write_output agc_app_object_id "$app_object_id"
 write_output agc_video_object_id "$video_object_id"
 write_result
@@ -310,6 +318,14 @@ write_result
 poll_attempts="${AGC_POLL_ATTEMPTS:-30}"
 poll_seconds="${AGC_POLL_SECONDS:-20}"
 wait_for_package "$release_package_id"
+
+file_info_response=$(curl --silent --show-error --fail-with-body \
+  --request PUT "$api_base/publish/v3/app-file-info?appId=$app_id_q" \
+  "${api_headers[@]}" \
+  --data "$(jq -cn \
+    --argjson permission_intro_videos "$permission_intro_videos" \
+    '{packagePermissionIntroVideoList: $permission_intro_videos}')")
+check_ret "$file_info_response"
 
 group_infos=$(fetch_group_infos)
 group_count=$(jq -er 'length' <<<"$group_infos")
@@ -333,8 +349,7 @@ update_response=$(curl --silent --show-error --fail-with-body \
     --arg version_id "$version_id" \
     --arg package_id "$release_package_id" \
     --arg desc "$test_desc" \
-    --arg permission_name 'ohos.permission.INTERCEPT_INPUT_EVENT' \
-    --arg video_object_id "$video_object_id" \
+    --argjson permission_intro_videos "$permission_intro_videos" \
     --argjson start_time "$start_time" \
     --argjson end_time "$end_time" \
     --argjson group_infos "$group_infos" \
@@ -342,10 +357,7 @@ update_response=$(curl --silent --show-error --fail-with-body \
     '{
       versionId: $version_id,
       pkgId: $package_id,
-      packagePermissionIntroVideoList: [
-        {lang: "zh-CN", permissionName: $permission_name, deviceType: 4, objectId: $video_object_id},
-        {lang: "zh-CN", permissionName: $permission_name, deviceType: 5, objectId: $video_object_id}
-      ],
+      packagePermissionIntroVideoList: $permission_intro_videos,
       openTestInfo: {
         startTime: $start_time,
         endTime: $end_time,
