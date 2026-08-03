@@ -387,6 +387,10 @@ struct RustDeskIndex {
   private pcSessionWindowStatusBeforeImmersive: window.WindowStatusType = window.WindowStatusType.UNDEFINED;
   private pcSessionImmersiveRequested: boolean = false;
   private pcSessionImmersiveApplied: boolean = false;
+  private manualSessionWindowImmersiveApplied: boolean = false;
+  @Local sessionWindowControlCapable: boolean = false;
+  @Local sessionWindowFullscreen: boolean = false;
+  @Local sessionWindowControlBusy: boolean = false;
   @Local remoteCursorVisible: boolean = false;
   @Local remoteCursorLeft: number = 0;
   @Local remoteCursorTop: number = 0;
@@ -3090,8 +3094,14 @@ struct RustDeskIndex {
       this.freeMultiWindow = false;
       return;
     }
+    this.sessionWindowFullscreen = status === window.WindowStatusType.FULL_SCREEN
+      || status === window.WindowStatusType.MAXIMIZE;
     const isFreeMultiWindow = status === window.WindowStatusType.FLOATING;
-    const hideForPcSession = this.isPcDevice() && this.pcSessionImmersiveRequested;
+    if (this.isPcDevice() || deviceInfo.deviceType === 'tablet' || isFreeMultiWindow) {
+      this.sessionWindowControlCapable = true;
+    }
+    const hideForRemoteSession = status !== window.WindowStatusType.MINIMIZE
+      && (this.showPreviewModal || this.pcSessionImmersiveRequested || this.manualSessionWindowImmersiveApplied);
 
     if (isFreeMultiWindow) {
       try {
@@ -3112,16 +3122,17 @@ struct RustDeskIndex {
     }
 
     this.freeMultiWindow = false;
-    if (hideForPcSession) {
+    if (hideForRemoteSession) {
       try {
         currentWindow.setWindowDecorVisible(false);
       } catch (error) {
-        hilog.error(DOMAIN, TAG, 'Failed to keep PC session decor hidden: %{public}s', String(error));
+        hilog.error(DOMAIN, TAG, 'Failed to keep remote session decor hidden: %{public}s', String(error));
         return;
       }
+      this.freeWindowChromeOwned = true;
       currentWindow.setTitleAndDockHoverShown(false, false)
         .catch((error: BusinessError) => {
-          hilog.error(DOMAIN, TAG, 'Failed to keep PC session title and dock hover hidden: %{public}s',
+          hilog.error(DOMAIN, TAG, 'Failed to keep remote session title and dock hover hidden: %{public}s',
             JSON.stringify(error) ?? '');
         });
       return;
@@ -3205,6 +3216,8 @@ struct RustDeskIndex {
     this.freeWindowStatusChangeRegistered = false;
     this.freeWindowChromeOwned = false;
     this.freeMultiWindow = false;
+    this.sessionWindowControlCapable = false;
+    this.sessionWindowFullscreen = false;
     this.freeWindow = undefined;
   }
 
@@ -3240,6 +3253,115 @@ struct RustDeskIndex {
       .catch((error: BusinessError) => {
         hilog.error(DOMAIN, TAG, 'start moving PC window failed: %{public}s', JSON.stringify(error) ?? '');
       });
+  }
+
+  private sessionWindowControlsAvailable(): boolean {
+    return this.freeWindow !== undefined && this.sessionWindowControlCapable;
+  }
+
+  private reportSessionWindowControlFailure(action: string, error: Error | BusinessError): void {
+    const message = `${action}失败：${String(error)}`;
+    this.errorText = message;
+    this.sessionMessage = message;
+    hilog.error(DOMAIN, TAG, '%{public}s', message);
+  }
+
+  private minimizeSessionWindow(): void {
+    const currentWindow = this.freeWindow;
+    if (!currentWindow || this.sessionWindowControlBusy) {
+      return;
+    }
+    this.sessionWindowControlBusy = true;
+    currentWindow.minimize()
+      .catch((error: BusinessError) => {
+        this.reportSessionWindowControlFailure('最小化窗口', error);
+      })
+      .finally((): void => {
+        this.sessionWindowControlBusy = false;
+      });
+  }
+
+  private toggleSessionWindowFullscreen(): void {
+    const currentWindow = this.freeWindow;
+    if (!currentWindow || this.sessionWindowControlBusy) {
+      return;
+    }
+    let status: window.WindowStatusType;
+    try {
+      status = currentWindow.getWindowStatus();
+    } catch (error) {
+      this.reportSessionWindowControlFailure('读取窗口状态', error as Error);
+      return;
+    }
+    this.sessionWindowControlBusy = true;
+    if (status === window.WindowStatusType.FULL_SCREEN || status === window.WindowStatusType.MAXIMIZE) {
+      currentWindow.recover()
+        .then((): void => {
+          this.manualSessionWindowImmersiveApplied = false;
+          this.pcSessionImmersiveApplied = false;
+          this.pcSessionImmersiveRequested = false;
+          this.pcSessionWindowStatusBeforeImmersive = window.WindowStatusType.UNDEFINED;
+          this.sessionWindowFullscreen = false;
+          this.refreshFreeWindowChrome();
+        })
+        .catch((error: BusinessError) => {
+          this.reportSessionWindowControlFailure('还原窗口', error);
+        })
+        .finally((): void => {
+          this.sessionWindowControlBusy = false;
+        });
+      return;
+    }
+    currentWindow.maximize(window.MaximizePresentation.ENTER_IMMERSIVE_DISABLE_TITLE_AND_DOCK_HOVER)
+      .then((): Promise<void> => {
+        this.manualSessionWindowImmersiveApplied = true;
+        this.sessionWindowFullscreen = true;
+        currentWindow.setWindowDecorVisible(false);
+        this.freeWindowChromeOwned = true;
+        return currentWindow.setTitleAndDockHoverShown(false, false);
+      })
+      .then((): void => {
+        this.refreshFreeWindowChrome();
+      })
+      .catch((error: BusinessError) => {
+        this.manualSessionWindowImmersiveApplied = false;
+        this.reportSessionWindowControlFailure('全屏窗口', error);
+      })
+      .finally((): void => {
+        this.sessionWindowControlBusy = false;
+      });
+  }
+
+  private async restoreManualSessionWindow(currentWindow: window.Window): Promise<void> {
+    if (!this.manualSessionWindowImmersiveApplied) {
+      return;
+    }
+    try {
+      const status = currentWindow.getWindowStatus();
+      if (status === window.WindowStatusType.FULL_SCREEN || status === window.WindowStatusType.MAXIMIZE) {
+        await currentWindow.recover();
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'Failed to restore manually fullscreen window: %{public}s', String(error));
+    } finally {
+      this.manualSessionWindowImmersiveApplied = false;
+      this.sessionWindowFullscreen = false;
+    }
+  }
+
+  private async closeSessionWindow(): Promise<void> {
+    if (this.sessionWindowControlBusy) {
+      return;
+    }
+    this.sessionWindowControlBusy = true;
+    try {
+      await this.closeSession('窗口已关闭');
+      const hostContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      await hostContext.terminateSelf();
+    } catch (error) {
+      this.reportSessionWindowControlFailure('关闭窗口', error as Error);
+      this.sessionWindowControlBusy = false;
+    }
   }
 
   private pcTitleStatusText(): string {
@@ -3595,6 +3717,7 @@ struct RustDeskIndex {
             await currentWindow.setSpecificSystemBarEnabled('status', true, true);
             await currentWindow.setSpecificSystemBarEnabled('navigationIndicator', true, true);
             await currentWindow.setWindowLayoutFullScreen(true);
+            await this.restoreManualSessionWindow(currentWindow);
             await this.applyPcSessionImmersive(currentWindow, false);
           }
           this.sessionFullscreenApplied = active;
@@ -5532,6 +5655,9 @@ struct RustDeskIndex {
             transformMode: this.previewTransformMode,
             canResetTransform: this.hasPreviewViewTransform(),
             panelContentHeight: this.sessionOverlayContentHeight(),
+            windowControlsAvailable: this.sessionWindowControlsAvailable(),
+            windowFullscreen: this.sessionWindowFullscreen,
+            windowControlBusy: this.sessionWindowControlBusy,
             onTogglePointerMode: () => this.toggleRelativeMouseMode(),
             onToggleTransform: () => this.setPreviewTransformMode(!this.previewTransformMode),
             onResetTransform: () => this.resetPreviewViewTransform(),
@@ -5545,11 +5671,13 @@ struct RustDeskIndex {
               this.preferences?.saveAndroidNavigationVisible(this.androidNavigationVisible);
             },
             onDisconnect: () => this.closeSession('已手动断开连接'),
-            onMinimize: () => {
+            onCollapse: () => {
               this.getUIContext()?.animateTo({ duration: 300, curve: Curve.FastOutSlowIn }, () => {
                 this.isMiniBarExpanded = false;
               });
             },
+            onMinimizeWindow: () => this.minimizeSessionWindow(),
+            onToggleWindowFullscreen: () => this.toggleSessionWindowFullscreen(),
             content: () => {
               if (this.isOverlayPanelOpen('chat')) {
                 this.chatOverlayPanel();

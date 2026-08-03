@@ -24,6 +24,9 @@ export interface SessionToolbarProps {
   transformMode: boolean;
   canResetTransform: boolean;
   panelContentHeight: number;
+  windowControlsAvailable: boolean;
+  windowFullscreen: boolean;
+  windowControlBusy: boolean;
   onTogglePointerMode: () => void;
   onToggleTransform: () => void;
   onResetTransform: () => void;
@@ -34,7 +37,9 @@ export interface SessionToolbarProps {
   onToggleAndroidNavigation: () => void;
   onAudioChange: (enabled: boolean) => void;
   onDisconnect: () => void;
-  onMinimize: () => void;
+  onCollapse: () => void;
+  onMinimizeWindow: () => void;
+  onToggleWindowFullscreen: () => void;
   content: () => void;
 }
 
@@ -68,6 +73,9 @@ export struct SessionToolbar {
   @Local displayedTransformMode: boolean = false;
   @Param canResetTransform: boolean = false;
   @Param panelContentHeight: number = 360;
+  @Param windowControlsAvailable: boolean = false;
+  @Param windowFullscreen: boolean = false;
+  @Param windowControlBusy: boolean = false;
   @Event onTogglePointerMode: () => void = () => {};
   @Event onToggleTransform: () => void = () => {};
   @Event onResetTransform: () => void = () => {};
@@ -78,7 +86,9 @@ export struct SessionToolbar {
   @Event onToggleAndroidNavigation: () => void = () => {};
   @Event onAudioChange: (enabled: boolean) => void = (_enabled: boolean) => {};
   @Event onDisconnect: () => void = () => {};
-  @Event onMinimize: () => void = () => {};
+  @Event onCollapse: () => void = () => {};
+  @Event onMinimizeWindow: () => void = () => {};
+  @Event onToggleWindowFullscreen: () => void = () => {};
 
   @BuilderParam content: () => void = this.Empty;
 
@@ -284,6 +294,55 @@ export struct SessionToolbar {
   }
 
   @Builder
+  private WindowControlAction(
+    label: string,
+    selected: boolean,
+    textColor: ResourceColor,
+    onClick: () => void,
+  ) {
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Text(label)
+        .fontSize($r('app.float.font_label'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.windowControlBusy
+          ? $r('app.color.neu_text_disabled')
+          : textColor)
+        .maxLines(1);
+    }
+    .layoutWeight(1)
+    .height(this.actionHeight())
+    .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_8') })
+    .enabled(!this.windowControlBusy)
+    .backgroundColor(selected ? $r('app.color.brand_primary') : $r('app.color.mica_control'))
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
+      adaptiveColor: AdaptiveColor.DEFAULT,
+      scale: 0.56,
+    })
+    .border({ width: 1, color: selected ? $r('app.color.brand_primary') : $r('app.color.mica_border') })
+    .borderRadius($r('app.float.radius_14'))
+    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+    .hoverEffect(HoverEffect.None)
+    .accessibilityText(label)
+    .accessibilitySelected(selected)
+    .onClick((): void => {
+      if (!this.windowControlBusy) {
+        onClick();
+      }
+    });
+  }
+
+  @Builder
+  private WindowControlActions() {
+    this.WindowControlAction(
+      this.windowFullscreen ? '还原窗口' : '全屏',
+      this.windowFullscreen,
+      $r('app.color.success'),
+      () => this.onToggleWindowFullscreen(),
+    )
+    this.WindowControlAction('最小化', false, $r('app.color.warning'), () => this.onMinimizeWindow())
+  }
+
+  @Builder
   private TransformControls() {
     Row({ space: $r('app.float.space_6') }) {
       if (this.wideLayout) {
@@ -344,7 +403,7 @@ export struct SessionToolbar {
   private ToolbarUtilityActions() {
     Row({ space: $r('app.float.space_6') }) {
       this.TransformControls()
-      this.CompactAction('collapse', '收起', false, false, true, () => this.onMinimize())
+      this.CompactAction('collapse', '收起', false, false, true, () => this.onCollapse())
     }
     .alignItems(VerticalAlign.Center);
   }
@@ -358,7 +417,7 @@ export struct SessionToolbar {
       .layoutWeight(1)
       .clip(true);
 
-      this.CompactAction('collapse', '收起', false, false, true, () => this.onMinimize())
+      this.CompactAction('collapse', '收起', false, false, true, () => this.onCollapse())
     }
     .width('100%')
     .alignItems(VerticalAlign.Center);
@@ -367,36 +426,69 @@ export struct SessionToolbar {
   @Builder
   private FunctionHome() {
     if (this.cameraSession) {
-      Row({ space: $r('app.float.space_8') }) {
-        this.ToolbarAction('quality', '画质', this.activeOverlayPanel === 'quality', this.qualityTransitionId,
-          () => this.onOpenQuality())
-        this.DangerAction('断开连接')
+      Column({ space: $r('app.float.space_8') }) {
+        Row({ space: $r('app.float.space_8') }) {
+          this.ToolbarAction('quality', '画质', this.activeOverlayPanel === 'quality', this.qualityTransitionId,
+            () => this.onOpenQuality())
+          this.DangerAction('断开连接')
+        }
+        .width('100%');
+
+        if (this.windowControlsAvailable) {
+          Row({ space: $r('app.float.space_8') }) {
+            this.WindowControlActions();
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.End);
+        }
       }
       .width('100%');
     } else if (this.viewOnlySession) {
-      Row({ space: $r('app.float.space_8') }) {
-        this.ToolbarAction('display', '显示器', this.activeOverlayPanel === 'display', this.displayTransitionId,
-          () => this.onOpenDisplay())
-        this.ToolbarAction('quality', '画质', this.activeOverlayPanel === 'quality', this.qualityTransitionId,
-          () => this.onOpenQuality())
-        this.DangerAction('断开')
+      Column({ space: $r('app.float.space_8') }) {
+        Row({ space: $r('app.float.space_8') }) {
+          this.ToolbarAction('display', '显示器', this.activeOverlayPanel === 'display', this.displayTransitionId,
+            () => this.onOpenDisplay())
+          this.ToolbarAction('quality', '画质', this.activeOverlayPanel === 'quality', this.qualityTransitionId,
+            () => this.onOpenQuality())
+          this.DangerAction('断开')
+        }
+        .width('100%');
+
+        if (this.windowControlsAvailable) {
+          Row({ space: $r('app.float.space_8') }) {
+            this.WindowControlActions();
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.End);
+        }
       }
       .width('100%');
     } else if (this.wideLayout) {
-      Row({ space: $r('app.float.space_8') }) {
-        this.PointerModeAction()
-        if (this.softKeyboardAvailable) {
-          this.ToolbarAction('keyboard', this.softKeyboardVisible ? '键盘开' : '键盘', this.softKeyboardVisible, SOFT_KEYBOARD_TRANSITION_ID,
-            () => this.onToggleSoftKeyboard())
+      Column({ space: $r('app.float.space_8') }) {
+        Row({ space: $r('app.float.space_8') }) {
+          this.PointerModeAction()
+          if (this.softKeyboardAvailable) {
+            this.ToolbarAction('keyboard', this.softKeyboardVisible ? '键盘开' : '键盘', this.softKeyboardVisible,
+              SOFT_KEYBOARD_TRANSITION_ID, () => this.onToggleSoftKeyboard())
+          }
+          this.ToolbarAction('chat', this.unreadCount > 0 ? `聊天 ${this.unreadCount}` : '聊天',
+            this.activeOverlayPanel === 'chat', this.chatTransitionId, () => this.onOpenChat())
+          this.AudioToggle()
         }
-        this.ToolbarAction('chat', this.unreadCount > 0 ? `聊天 ${this.unreadCount}` : '聊天',
-          this.activeOverlayPanel === 'chat', this.chatTransitionId, () => this.onOpenChat())
-        this.ToolbarAction('display', '显示器', this.activeOverlayPanel === 'display', this.displayTransitionId,
-          () => this.onOpenDisplay())
-        this.ToolbarAction('quality', '画质', this.activeOverlayPanel === 'quality', this.qualityTransitionId,
-          () => this.onOpenQuality())
-        this.AudioToggle()
-        this.DangerAction('断开')
+        .width('100%');
+
+        Row({ space: $r('app.float.space_8') }) {
+          this.ToolbarAction('display', '显示器', this.activeOverlayPanel === 'display', this.displayTransitionId,
+            () => this.onOpenDisplay())
+          this.ToolbarAction('quality', '画质', this.activeOverlayPanel === 'quality', this.qualityTransitionId,
+            () => this.onOpenQuality())
+          if (this.windowControlsAvailable) {
+            this.WindowControlActions()
+          }
+          this.DangerAction('断开')
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center);
       }
       .width('100%');
     } else {
@@ -425,6 +517,14 @@ export struct SessionToolbar {
           this.DangerAction('断开连接')
         }
         .width('100%');
+
+        if (this.windowControlsAvailable) {
+          Row({ space: $r('app.float.space_8') }) {
+            this.WindowControlActions();
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.End);
+        }
       }
       .width('100%');
     }
@@ -467,6 +567,15 @@ export struct SessionToolbar {
       if (!this.wideLayout) {
         Row() {
           this.NarrowToolbarUtilityActions();
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.End);
+
+      }
+
+      if (this.windowControlsAvailable && this.activeOverlayPanel !== 'home') {
+        Row({ space: $r('app.float.space_8') }) {
+          this.WindowControlActions();
         }
         .width('100%')
         .justifyContent(FlexAlign.End);
