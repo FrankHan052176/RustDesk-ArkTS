@@ -6706,9 +6706,6 @@ struct RustDeskIndex {
     Stack() {
       Stack({ alignContent: Alignment.Top }) {
         this.MainContent();
-        if (this.freeMultiWindow && this.showPreviewModal) {
-          this.FreeWindowTitleBar();
-        }
       }
       .width('100%')
       .height('100%')

@@ -67,19 +67,18 @@ jobs:
             --retry_interval 3000
           (
             cd entry
-            ohpm uninstall luminous_neo
-            ohpm install luminous_neo@latest \
+            ohpm install \
               --registry "$CORE_HAR_REGISTRY" \
               --retry_times 5 \
               --retry_interval 3000
           )
 
-          rm -f "$private_config"
           ohpm install
           (
             cd entry
             ohpm install
           )
+          rm -f "$private_config"
 
           core_har_version="$(jq -er '.version' "oh_modules/${CORE_HAR_PACKAGE}/oh-package.json5")"
           echo "Core HAR version: $core_har_version"
