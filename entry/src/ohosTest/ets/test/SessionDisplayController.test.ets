@@ -166,6 +166,28 @@ export default function sessionDisplayControllerTest(): void {
       expect(controller.getCurrentDisplayIndex()).assertEqual(1);
     });
 
+    it('sparse sync peer info preserves previously reported resolutions', 0, () => {
+      const bridge = new RecordingNativeSessionBridge();
+      const controller = createController(bridge);
+      controller.updatePeerInfo(displays(), 0, resolutions(), 'Windows');
+
+      controller.updatePeerInfo(displays(), undefined, undefined, 'Windows');
+
+      expect(controller.getResolutions().length).assertEqual(2);
+      expect(controller.getResolutions()[0].width).assertEqual(1280);
+      expect(controller.getResolutions()[1].height).assertEqual(1080);
+    });
+
+    it('explicit empty resolutions clear previously reported resolutions', 0, () => {
+      const bridge = new RecordingNativeSessionBridge();
+      const controller = createController(bridge);
+      controller.updatePeerInfo(displays(), 0, resolutions(), 'Windows');
+
+      controller.updatePeerInfo(displays(), undefined, [], 'Windows');
+
+      expect(controller.getResolutions().length).assertEqual(0);
+    });
+
     it('only requests a resolution change for the selected display', 0, () => {
       const bridge = new RecordingNativeSessionBridge();
       const controller = createController(bridge);

@@ -32,11 +32,13 @@ export class SessionDisplayController {
   updatePeerInfo(
     displays: PeerDisplayInfo[],
     reportedCurrentDisplay: number | undefined,
-    resolutions: ResolutionInfo[],
+    resolutions: ResolutionInfo[] | undefined,
     platform: string,
   ): void {
     this.displays = displays;
-    this.resolutions = resolutions;
+    if (resolutions !== undefined) {
+      this.resolutions = resolutions;
+    }
     this.platform = platform;
     const selection = reportedCurrentDisplay === undefined
       ? this.viewport.getCurrentDisplayIndex()

@@ -4547,7 +4547,9 @@ struct RustDeskIndex {
     }
     try {
       this.peerDisplays = JSON.parse(event.displays) as PeerDisplayInfo[];
-      this.supportedResolutions = this.parseSupportedResolutions(event.resolutions);
+      if (event.resolutions !== undefined) {
+        this.supportedResolutions = this.parseSupportedResolutions(event.resolutions);
+      }
       if (this.peerDisplays.length === 0) {
         return;
       }
@@ -4562,7 +4564,7 @@ struct RustDeskIndex {
       this.sessionDisplayController.updatePeerInfo(
         this.peerDisplays,
         reportedCurrentDisplay,
-        this.supportedResolutions,
+        event.resolutions === undefined ? undefined : this.supportedResolutions,
         this.peerPlatform,
       );
       const currentDisplay = this.sessionDisplayController.getCurrentDisplayIndex();
@@ -4604,13 +4606,13 @@ struct RustDeskIndex {
       original_width: previous.original_width,
       original_height: previous.original_height,
     };
-    if (event.resolutions) {
+    if (event.resolutions !== undefined) {
       this.supportedResolutions = this.parseSupportedResolutions(event.resolutions);
     }
     this.sessionDisplayController.updatePeerInfo(
       this.peerDisplays,
       undefined,
-      this.supportedResolutions,
+      event.resolutions === undefined ? undefined : this.supportedResolutions,
       this.peerPlatform,
     );
     this.refreshSessionOrientation();
