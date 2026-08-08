@@ -1,6 +1,6 @@
 import { FloatingGlassSurface } from './FloatingSurface';
 
-export const REMOTE_SOFT_KEYBOARD_PANEL_HEIGHT: number = 288;
+export const REMOTE_SOFT_KEYBOARD_PANEL_HEIGHT: number = 224;
 
 class RemoteSoftKeySpec {
   label: string;
@@ -13,6 +13,80 @@ class RemoteSoftKeySpec {
     this.name = name;
     this.weight = weight;
     this.modifier = modifier;
+  }
+}
+
+@ComponentV2
+struct RemoteSoftKeyButton {
+  @Param spec: RemoteSoftKeySpec = new RemoteSoftKeySpec('', '');
+  @Param keyHeight: number = 28;
+  @Param altActive: boolean = false;
+  @Param ctrlActive: boolean = false;
+  @Param shiftActive: boolean = false;
+  @Param commandActive: boolean = false;
+  @Event onKeyClick: () => void = () => {};
+
+  private selected(): boolean {
+    if (!this.spec.modifier) {
+      return false;
+    }
+    if (this.spec.name === 'VK_CONTROL') {
+      return this.ctrlActive;
+    }
+    if (this.spec.name === 'VK_MENU') {
+      return this.altActive;
+    }
+    if (this.spec.name === 'VK_SHIFT') {
+      return this.shiftActive;
+    }
+    if (this.spec.name === 'Meta') {
+      return this.commandActive;
+    }
+    return false;
+  }
+
+  private keyAccessibilityText(): string {
+    if (this.selected()) {
+      return `${this.spec.label}，已锁定`;
+    }
+    return this.spec.label;
+  }
+
+  build(): void {
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Text(this.spec.label)
+        .fontSize(this.spec.label.length > 3 ? 11 : 14)
+        .fontWeight(this.selected() ? FontWeight.Bold : FontWeight.Medium)
+        .fontColor(this.selected()
+          ? $r('app.color.white')
+          : $r('app.color.neu_text_primary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis });
+    }
+    .height(this.keyHeight)
+    .layoutWeight(this.spec.weight)
+    .padding({ left: 2, right: 2 })
+    .backgroundColor(this.selected()
+      ? $r('app.color.brand_primary')
+      : $r('app.color.mica_control'))
+    .border({
+      width: 1,
+      color: this.selected()
+        ? $r('app.color.brand_primary')
+        : $r('app.color.mica_border')
+    })
+    .borderRadius(10)
+    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+    .responseRegion({
+      x: 0,
+      y: -(32 - this.keyHeight) / 2,
+      width: '100%',
+      height: 32,
+    })
+    .accessibilityText(this.keyAccessibilityText())
+    .accessibilitySelected(this.selected())
+    .focusable(false)
+    .onClick((): void => this.onKeyClick());
   }
 }
 
@@ -31,26 +105,27 @@ export struct RemoteSoftKeyboard {
     (_name: string, _down: boolean, _alt: boolean, _ctrl: boolean, _shift: boolean, _command: boolean) => {};
   @Event onMoveDock: () => void = () => {};
   @Event onCollapse: () => void = () => {};
+  @Event onKeyboardMoveStart: () => void = () => {};
+  @Event onKeyboardMoveUpdate: (offsetX: number, offsetY: number) => void =
+    (_offsetX: number, _offsetY: number) => {};
+  @Event onKeyboardMoveEnd: () => void = () => {};
 
   @Local layer: number = 0;
   @Local altActive: boolean = false;
   @Local ctrlActive: boolean = false;
   @Local shiftActive: boolean = false;
   @Local commandActive: boolean = false;
-  @Local pressedKey: string = '';
-  @Local touchKeyName: string = '';
-  @Local suppressedClickKey: string = '';
 
   aboutToDisappear(): void {
     this.releaseAllKeys();
   }
 
   private panelWidth(): number {
-    return Math.max(280, Math.min(this.keyboardWidth, 760));
+    return Math.max(280, Math.min(this.keyboardWidth, 560));
   }
 
   private keyVisualHeight(): number {
-    return this.panelWidth() < 520 ? 36 : 38;
+    return this.panelWidth() < 520 ? 28 : 30;
   }
 
   private layerTitle(): string {
@@ -67,51 +142,51 @@ export struct RemoteSoftKeyboard {
     return [
       [
         new RemoteSoftKeySpec('Esc', 'VK_ESCAPE'),
-        new RemoteSoftKeySpec('1', '1'),
-        new RemoteSoftKeySpec('2', '2'),
-        new RemoteSoftKeySpec('3', '3'),
-        new RemoteSoftKeySpec('4', '4'),
-        new RemoteSoftKeySpec('5', '5'),
-        new RemoteSoftKeySpec('6', '6'),
-        new RemoteSoftKeySpec('7', '7'),
-        new RemoteSoftKeySpec('8', '8'),
-        new RemoteSoftKeySpec('9', '9'),
-        new RemoteSoftKeySpec('0', '0'),
+        new RemoteSoftKeySpec('1', 'VK_1'),
+        new RemoteSoftKeySpec('2', 'VK_2'),
+        new RemoteSoftKeySpec('3', 'VK_3'),
+        new RemoteSoftKeySpec('4', 'VK_4'),
+        new RemoteSoftKeySpec('5', 'VK_5'),
+        new RemoteSoftKeySpec('6', 'VK_6'),
+        new RemoteSoftKeySpec('7', 'VK_7'),
+        new RemoteSoftKeySpec('8', 'VK_8'),
+        new RemoteSoftKeySpec('9', 'VK_9'),
+        new RemoteSoftKeySpec('0', 'VK_0'),
         new RemoteSoftKeySpec('⌫', 'VK_BACK', 1.35),
       ],
       [
-        new RemoteSoftKeySpec('Q', 'q'),
-        new RemoteSoftKeySpec('W', 'w'),
-        new RemoteSoftKeySpec('E', 'e'),
-        new RemoteSoftKeySpec('R', 'r'),
-        new RemoteSoftKeySpec('T', 't'),
-        new RemoteSoftKeySpec('Y', 'y'),
-        new RemoteSoftKeySpec('U', 'u'),
-        new RemoteSoftKeySpec('I', 'i'),
-        new RemoteSoftKeySpec('O', 'o'),
-        new RemoteSoftKeySpec('P', 'p'),
+        new RemoteSoftKeySpec('Q', 'VK_Q'),
+        new RemoteSoftKeySpec('W', 'VK_W'),
+        new RemoteSoftKeySpec('E', 'VK_E'),
+        new RemoteSoftKeySpec('R', 'VK_R'),
+        new RemoteSoftKeySpec('T', 'VK_T'),
+        new RemoteSoftKeySpec('Y', 'VK_Y'),
+        new RemoteSoftKeySpec('U', 'VK_U'),
+        new RemoteSoftKeySpec('I', 'VK_I'),
+        new RemoteSoftKeySpec('O', 'VK_O'),
+        new RemoteSoftKeySpec('P', 'VK_P'),
       ],
       [
-        new RemoteSoftKeySpec('A', 'a'),
-        new RemoteSoftKeySpec('S', 's'),
-        new RemoteSoftKeySpec('D', 'd'),
-        new RemoteSoftKeySpec('F', 'f'),
-        new RemoteSoftKeySpec('G', 'g'),
-        new RemoteSoftKeySpec('H', 'h'),
-        new RemoteSoftKeySpec('J', 'j'),
-        new RemoteSoftKeySpec('K', 'k'),
-        new RemoteSoftKeySpec('L', 'l'),
+        new RemoteSoftKeySpec('A', 'VK_A'),
+        new RemoteSoftKeySpec('S', 'VK_S'),
+        new RemoteSoftKeySpec('D', 'VK_D'),
+        new RemoteSoftKeySpec('F', 'VK_F'),
+        new RemoteSoftKeySpec('G', 'VK_G'),
+        new RemoteSoftKeySpec('H', 'VK_H'),
+        new RemoteSoftKeySpec('J', 'VK_J'),
+        new RemoteSoftKeySpec('K', 'VK_K'),
+        new RemoteSoftKeySpec('L', 'VK_L'),
         new RemoteSoftKeySpec('↵', 'VK_RETURN', 1.35),
       ],
       [
         new RemoteSoftKeySpec('⇧', 'VK_SHIFT', 1.35, true),
-        new RemoteSoftKeySpec('Z', 'z'),
-        new RemoteSoftKeySpec('X', 'x'),
-        new RemoteSoftKeySpec('C', 'c'),
-        new RemoteSoftKeySpec('V', 'v'),
-        new RemoteSoftKeySpec('B', 'b'),
-        new RemoteSoftKeySpec('N', 'n'),
-        new RemoteSoftKeySpec('M', 'm'),
+        new RemoteSoftKeySpec('Z', 'VK_Z'),
+        new RemoteSoftKeySpec('X', 'VK_X'),
+        new RemoteSoftKeySpec('C', 'VK_C'),
+        new RemoteSoftKeySpec('V', 'VK_V'),
+        new RemoteSoftKeySpec('B', 'VK_B'),
+        new RemoteSoftKeySpec('N', 'VK_N'),
+        new RemoteSoftKeySpec('M', 'VK_M'),
         new RemoteSoftKeySpec('←', 'VK_LEFT'),
         new RemoteSoftKeySpec('→', 'VK_RIGHT'),
       ],
@@ -266,19 +341,8 @@ export struct RemoteSoftKeyboard {
     }
   }
 
-  private releasePressedKey(): void {
-    if (this.pressedKey.length === 0) {
-      return;
-    }
-    this.emitKey(this.pressedKey, false);
-    this.pressedKey = '';
-  }
-
   private releaseAllKeys(): void {
-    this.releasePressedKey();
     this.releaseModifiers();
-    this.touchKeyName = '';
-    this.suppressedClickKey = '';
   }
 
   private changeLayer(index: number): void {
@@ -307,43 +371,6 @@ export struct RemoteSoftKeyboard {
     this.emitKey(spec.name, false);
   }
 
-  private keyAccessibilityText(spec: RemoteSoftKeySpec): string {
-    if (spec.modifier && this.modifierActive(spec.name)) {
-      return `${spec.label}，已锁定`;
-    }
-    return spec.label;
-  }
-
-  private touchKey(spec: RemoteSoftKeySpec, event: TouchEvent): void {
-    if (event.type === TouchType.Down) {
-      this.suppressedClickKey = '';
-      this.touchKeyName = spec.name;
-      if (spec.modifier) {
-        this.toggleModifier(spec.name);
-        return;
-      }
-      if (spec.name === 'release_modifiers') {
-        this.releaseModifiers();
-        return;
-      }
-      if (this.pressedKey.length === 0) {
-        this.pressedKey = spec.name;
-        this.emitKey(spec.name, true);
-      }
-      return;
-    }
-    if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-      if (!spec.modifier && spec.name === this.pressedKey) {
-        this.emitKey(spec.name, false);
-        this.pressedKey = '';
-      }
-      if (event.type === TouchType.Up && this.touchKeyName === spec.name) {
-        this.suppressedClickKey = spec.name;
-      }
-      this.touchKeyName = '';
-    }
-  }
-
   @Builder
   private LayerButton(label: string, index: number) {
     Button({ type: ButtonType.Normal, stateEffect: true }) {
@@ -352,57 +379,17 @@ export struct RemoteSoftKeyboard {
         .fontWeight(this.layer === index ? FontWeight.Bold : FontWeight.Medium)
         .fontColor(this.layer === index ? $r('app.color.neu_accent') : $r('app.color.neu_text_secondary'));
     }
-    .height(34)
+    .height(28)
     .layoutWeight(1)
     .padding(0)
     .backgroundColor(this.layer === index ? $r('app.color.brand_primary_soft') : $r('app.color.mica_control'))
     .border({ width: 1, color: this.layer === index ? $r('app.color.brand_primary') : $r('app.color.mica_border') })
     .borderRadius(10)
-    .responseRegion({ x: 0, y: -5, width: '100%', height: 44 })
+    .responseRegion({ x: 0, y: -3, width: '100%', height: 34 })
     .accessibilityText(label)
     .accessibilitySelected(this.layer === index)
     .onClick((): void => {
       this.changeLayer(index);
-    });
-  }
-
-  @Builder
-  private KeyButton(spec: RemoteSoftKeySpec) {
-    Button({ type: ButtonType.Normal, stateEffect: true }) {
-      Text(spec.label)
-        .fontSize(spec.label.length > 3 ? 11 : 14)
-        .fontWeight(spec.modifier && this.modifierActive(spec.name) ? FontWeight.Bold : FontWeight.Medium)
-        .fontColor(spec.modifier && this.modifierActive(spec.name) ?
-          $r('app.color.white') : $r('app.color.neu_text_primary'))
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis });
-    }
-    .height(this.keyVisualHeight())
-    .layoutWeight(spec.weight)
-    .padding({ left: 2, right: 2 })
-    .backgroundColor(spec.modifier && this.modifierActive(spec.name) ?
-      $r('app.color.brand_primary') : $r('app.color.mica_control'))
-    .border({
-      width: 1,
-      color: spec.modifier && this.modifierActive(spec.name) ?
-        $r('app.color.brand_primary') : $r('app.color.mica_border')
-    })
-    .borderRadius(10)
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-    .responseRegion({
-      x: 0,
-      y: -(44 - this.keyVisualHeight()) / 2,
-      width: '100%',
-      height: 44,
-    })
-    .accessibilityText(this.keyAccessibilityText(spec))
-    .onTouch((event: TouchEvent): void => this.touchKey(spec, event))
-    .onClick((): void => {
-      if (this.suppressedClickKey === spec.name) {
-        this.suppressedClickKey = '';
-        return;
-      }
-      this.activateKey(spec);
     });
   }
 
@@ -412,15 +399,55 @@ export struct RemoteSoftKeyboard {
       ForEach(this.rows(), (row: RemoteSoftKeySpec[]) => {
         Row({ space: 4 }) {
           ForEach(row, (spec: RemoteSoftKeySpec) => {
-            this.KeyButton(spec);
+            RemoteSoftKeyButton({
+              spec: spec,
+              keyHeight: this.keyVisualHeight(),
+              altActive: this.altActive,
+              ctrlActive: this.ctrlActive,
+              shiftActive: this.shiftActive,
+              commandActive: this.commandActive,
+              onKeyClick: (): void => {
+                this.activateKey(spec);
+              },
+            });
           }, (spec: RemoteSoftKeySpec) => `${this.layer}-${spec.name}-${spec.label}`);
         }
         .width('100%')
-        .height(44)
+        .height(32)
         .alignItems(VerticalAlign.Center);
       }, (_row: RemoteSoftKeySpec[], index: number) => `${this.layer}-row-${index}`);
     }
     .width('100%');
+  }
+
+  @Builder
+  private DragHandle() {
+    Row() {
+      Text(`远端键盘 · ${this.layerTitle()}`)
+        .fontSize(13)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.neu_text_primary'))
+        .maxLines(1);
+    }
+    .layoutWeight(1)
+    .height('100%')
+    .alignItems(VerticalAlign.Center)
+    .accessibilityText('拖动远端键盘')
+    .gesture(
+      PanGesture({ fingers: 1, direction: PanDirection.All, distance: 4 })
+        .onActionStart((_event: GestureEvent): void => {
+          this.onKeyboardMoveStart();
+        })
+        .onActionUpdate((event: GestureEvent): void => {
+          this.onKeyboardMoveUpdate(event.offsetX, event.offsetY);
+        })
+        .onActionEnd((_event: GestureEvent): void => {
+          this.onKeyboardMoveEnd();
+        })
+        .onActionCancel((): void => {
+          this.onKeyboardMoveEnd();
+        }),
+    );
   }
 
   build(): void {
@@ -430,14 +457,9 @@ export struct RemoteSoftKeyboard {
         surfaceHeight: REMOTE_SOFT_KEYBOARD_PANEL_HEIGHT,
         radius: $r('app.float.radius_18'),
       }) {
-        Column({ space: 7 }) {
-          Row({ space: 6 }) {
-            Text(`远端键盘 · ${this.layerTitle()}`)
-              .layoutWeight(1)
-              .fontSize(13)
-              .fontWeight(FontWeight.Bold)
-              .fontColor($r('app.color.neu_text_primary'))
-              .maxLines(1);
+        Column({ space: 4 }) {
+          Row({ space: 4 }) {
+            this.DragHandle();
             this.LayerButton('字母', 0);
             this.LayerButton('导航', 1);
             this.LayerButton('功能', 2);
@@ -446,16 +468,16 @@ export struct RemoteSoftKeyboard {
                 .fontSize(11)
                 .fontColor($r('app.color.neu_text_secondary'));
             }
-              .height(34)
+              .height(28)
               .width(44)
               .padding(0)
               .backgroundColor($r('app.color.mica_control'))
               .border({ width: 1, color: $r('app.color.mica_border') })
               .borderRadius(10)
-              .responseRegion({ x: 0, y: -5, width: '100%', height: 44 })
+              .responseRegion({ x: 0, y: -3, width: '100%', height: 34 })
               .accessibilityText(this.dockTop ? '键盘移到底部' : '键盘移到顶部')
               .onClick((): void => {
-                this.releasePressedKey();
+                this.releaseModifiers();
                 this.onMoveDock();
               });
             Button({ type: ButtonType.Normal, stateEffect: true }) {
@@ -463,29 +485,30 @@ export struct RemoteSoftKeyboard {
                 .fontSize(20)
                 .fontColor($r('app.color.neu_text_secondary'));
             }
-              .height(34)
+              .height(28)
               .width(40)
               .padding(0)
               .backgroundColor($r('app.color.mica_control'))
               .border({ width: 1, color: $r('app.color.mica_border') })
               .borderRadius(10)
-              .responseRegion({ x: 0, y: -5, width: '100%', height: 44 })
+              .responseRegion({ x: 0, y: -3, width: '100%', height: 34 })
               .accessibilityText('收起远端键盘')
               .onClick((): void => this.collapse());
           }
           .width('100%')
-          .height(44)
+          .height(32)
           .alignItems(VerticalAlign.Center);
 
           this.KeyRows();
         }
         .width('100%')
         .height('100%')
-        .padding({ left: 10, right: 10, top: 8, bottom: 8 });
+        .padding({ left: 8, right: 8, top: 6, bottom: 6 });
       }
     }
     .width(this.panelWidth())
     .height(REMOTE_SOFT_KEYBOARD_PANEL_HEIGHT)
+    .opacity(0.84)
     .position({ x: 0, y: 0 });
   }
 }

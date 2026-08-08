@@ -303,6 +303,8 @@ struct RustDeskIndex {
   @Local isFoldHoverMode: boolean = false;
   @Local softKeyboardVisible: boolean = false;
   @Local softKeyboardDockTop: boolean = false;
+  @Local softKeyboardX: number = 0;
+  @Local softKeyboardY: number = 12;
   @Local foldHoverUpperHeight: number = 0;
   @Local foldHoverCreaseHeight: number = 0;
 
@@ -333,13 +335,16 @@ struct RustDeskIndex {
   private androidNavigationPositionInitialized: boolean = false;
   private androidNavigationDragStartX: number = 0;
   private androidNavigationDragStartY: number = 0;
+  private softKeyboardDragStartX: number = 0;
+  private softKeyboardDragStartY: number = 12;
   private lastAppliedDisplay: number = -1;
   private lastAppliedVideoWidth: number = 0;
   private lastAppliedVideoHeight: number = 0;
-  private peerPlatform: string = '';
+  @Local peerPlatform: string = '';
   private peerVersion: string = '';
-  private peerDisplays: PeerDisplayInfo[] = [];
-  private supportedResolutions: ResolutionInfo[] = [];
+  @Local peerDisplays: PeerDisplayInfo[] = [];
+  @Local supportedResolutions: ResolutionInfo[] = [];
+  @Local currentDisplayIndex: number = 0;
   private qualityTelemetry: QualityTelemetry = {
     fps: '--',
     delay: '--',
@@ -436,10 +441,10 @@ struct RustDeskIndex {
   private transferConnectionPending: boolean = false;
   private transferSessionSequence: number = 0;
   private initialDisplayCommandIssued: boolean = false;
-  private pendingDisplayIndex: number = -1;
-  private pendingResolutionDisplay: number = -1;
-  private pendingResolutionWidth: number = 0;
-  private pendingResolutionHeight: number = 0;
+  @Local pendingDisplayIndex: number = -1;
+  @Local pendingResolutionDisplay: number = -1;
+  @Local pendingResolutionWidth: number = 0;
+  @Local pendingResolutionHeight: number = 0;
   private hdsTabsController: HdsTabsController = new HdsTabsController();
   @Local easyTierDataAvailable: boolean = false;
   @Local easyTierPreconnectEnabled: boolean = false;
@@ -936,6 +941,11 @@ struct RustDeskIndex {
       return;
     }
     if (result.ok && result.state === 'ready') {
+      if (result.apiServer.length > 0 && this.accountState.apiServer.length > 0
+        && result.apiServer !== this.accountState.apiServer) {
+        this.loadAccountLoginOptions();
+        return;
+      }
       this.accountLoginProviders = result.providers;
       return;
     }
@@ -955,14 +965,14 @@ struct RustDeskIndex {
     this.accountOptionsPollTimer = -1;
   }
 
-  private isAccountProviderAvailable(provider: string): boolean {
+  private findAccountProvider(provider: string): AccountLoginProvider | undefined {
     const normalizedProvider = provider.trim().toLowerCase();
     for (let index = 0; index < this.accountLoginProviders.length; index += 1) {
       if (this.accountLoginProviders[index].name.trim().toLowerCase() === normalizedProvider) {
-        return true;
+        return this.accountLoginProviders[index];
       }
     }
-    return false;
+    return undefined;
   }
 
   private oidcStateMessage(stateMessage: string, hasUrl: boolean): string {
@@ -1016,13 +1026,13 @@ struct RustDeskIndex {
   }
 
   private startAccountOidc(provider: string): void {
-    const normalizedProvider = provider.trim().toLowerCase();
-    if (this.accountState.busy || this.accountState.syncing ||
-      !this.isAccountProviderAvailable(normalizedProvider)) {
+    const resolvedProvider = this.findAccountProvider(provider);
+    if (this.accountState.busy || this.accountState.syncing || resolvedProvider === undefined) {
       return;
     }
+    const providerName = resolvedProvider.name.trim();
     this.clearAccountPollTimer();
-    const result = this.mainBridge.startAccountOidc(normalizedProvider);
+    const result = this.mainBridge.startAccountOidc(providerName);
     if (!result.ok || result.state !== 'pending') {
       const failed = this.copyAccountState(this.accountState);
       failed.message = result.message || '无法启动浏览器授权';
@@ -1036,7 +1046,7 @@ struct RustDeskIndex {
     state.challengeId = '';
     state.challengeType = '';
     state.emailHint = '';
-    state.oidcProvider = normalizedProvider;
+    state.oidcProvider = providerName;
     state.message = '正在向账户服务申请授权链接…';
     this.accountState = state;
     this.scheduleAccountPoll(500);
@@ -2200,6 +2210,10 @@ struct RustDeskIndex {
     this.previewUserRotation = 0;
     this.softKeyboardVisible = false;
     this.softKeyboardDockTop = false;
+    this.softKeyboardX = 0;
+    this.softKeyboardY = 12;
+    this.softKeyboardDragStartX = 0;
+    this.softKeyboardDragStartY = 12;
     this.clearSoftKeyboardKeyState();
     this.previewGestureStartScale = 1;
     this.previewGestureStartOffsetX = 0;
@@ -2218,6 +2232,7 @@ struct RustDeskIndex {
     this.peerVersion = '';
     this.peerDisplays = [];
     this.supportedResolutions = [];
+    this.currentDisplayIndex = 0;
     this.previewSurfaceVisible = false;
     this.previewSurfaceGeneration = 0;
     this.previewSurfaceSetupInFlight = false;
@@ -2338,13 +2353,19 @@ struct RustDeskIndex {
   private softKeyboardAvailable(): boolean {
     return !this.isPcDevice()
       && this.isRemoteControlSessionActive()
+      && this.remoteKeyboardPermissionAllowed
       && this.showPreviewModal
       && !this.isFoldHoverMode
       && !this.showTransferWorkspace;
   }
 
   private toggleSoftKeyboard(): void {
-    if (!this.softKeyboardAvailable()) {
+    const available = this.softKeyboardAvailable();
+    this.logRelativeDebug(
+      'soft_keyboard_toggle',
+      `available=${available} visible=${this.softKeyboardVisible}`,
+    );
+    if (!available) {
       this.hideSoftKeyboard();
       return;
     }
@@ -2353,11 +2374,108 @@ struct RustDeskIndex {
       setTimeout(() => this.requestPreviewInputFocus(), 80);
       return;
     }
+    this.resetSoftKeyboardPosition();
     this.softKeyboardVisible = true;
+    this.logRelativeDebug('soft_keyboard_toggle', 'visible=true');
   }
 
   private moveSoftKeyboardToOtherEdge(): void {
     this.softKeyboardDockTop = !this.softKeyboardDockTop;
+    this.resetSoftKeyboardPosition();
+  }
+
+  private clampSoftKeyboardX(value: number): number {
+    const maxX = Math.max(0, this.previewViewWidth - this.softKeyboardWidth());
+    return Math.max(0, Math.min(value, maxX));
+  }
+
+  private clampSoftKeyboardY(value: number): number {
+    const maxY = Math.max(0, this.previewViewHeight - REMOTE_SOFT_KEYBOARD_PANEL_HEIGHT);
+    return Math.max(0, Math.min(value, maxY));
+  }
+
+  private resetSoftKeyboardPosition(): void {
+    this.softKeyboardX = this.clampSoftKeyboardX(
+      Math.max(0, (this.previewViewWidth - this.softKeyboardWidth()) / 2),
+    );
+    this.softKeyboardY = this.clampSoftKeyboardY(this.softKeyboardOffsetY());
+    this.softKeyboardDragStartX = this.softKeyboardX;
+    this.softKeyboardDragStartY = this.softKeyboardY;
+  }
+
+  private startSoftKeyboardDrag(): void {
+    this.softKeyboardDragStartX = this.softKeyboardX;
+    this.softKeyboardDragStartY = this.softKeyboardY;
+  }
+
+  private updateSoftKeyboardDrag(offsetX: number, offsetY: number): void {
+    this.softKeyboardX = this.clampSoftKeyboardX(this.softKeyboardDragStartX + offsetX);
+    this.softKeyboardY = this.clampSoftKeyboardY(this.softKeyboardDragStartY + offsetY);
+  }
+
+  private finishSoftKeyboardDrag(): void {
+    this.softKeyboardX = this.clampSoftKeyboardX(this.softKeyboardX);
+    this.softKeyboardY = this.clampSoftKeyboardY(this.softKeyboardY);
+    const maxY = Math.max(0, this.previewViewHeight - REMOTE_SOFT_KEYBOARD_PANEL_HEIGHT);
+    this.softKeyboardDockTop = this.softKeyboardY <= maxY / 2;
+    this.softKeyboardDragStartX = this.softKeyboardX;
+    this.softKeyboardDragStartY = this.softKeyboardY;
+  }
+
+  private reclampSoftKeyboardPosition(): void {
+    if (!this.softKeyboardVisible) {
+      return;
+    }
+    this.finishSoftKeyboardDrag();
+  }
+
+  private softKeyboardCharacter(name: string, shift: boolean): string {
+    if (name === 'VK_SPACE') {
+      return ' ';
+    }
+    if (name.length !== 4 || name.indexOf('VK_') !== 0) {
+      return '';
+    }
+    const key = name.substring(3);
+    if (key.length !== 1) {
+      return '';
+    }
+    const code = key.charCodeAt(0);
+    if (code >= 65 && code <= 90) {
+      return shift ? key : key.toLowerCase();
+    }
+    if (code >= 48 && code <= 57) {
+      if (!shift) {
+        return key;
+      }
+      const shiftedDigits: string = ')!@#$%^&*('.charAt(code - 48);
+      return shiftedDigits;
+    }
+    return '';
+  }
+
+  private softKeyboardUsbHid(name: string): number | undefined {
+    if (name === 'VK_SPACE') {
+      return 0x2C;
+    }
+    if (name.length !== 4 || name.indexOf('VK_') !== 0) {
+      return undefined;
+    }
+    const key = name.substring(3);
+    if (key.length !== 1) {
+      return undefined;
+    }
+    const code = key.charCodeAt(0);
+    if (code >= 65 && code <= 90) {
+      return 0x04 + code - 65;
+    }
+    if (code >= 49 && code <= 57) {
+      return 0x1E + code - 49;
+    }
+    if (code === 48) {
+      return 0x27;
+    }
+    return undefined;
   }
 
   private sendSoftKeyboardKey(
@@ -2372,18 +2490,30 @@ struct RustDeskIndex {
       this.clearSoftKeyboardKeyState();
       return;
     }
-    if (down && !this.remoteInteractionReady) {
+    const modifier = this.isSoftKeyboardModifier(name);
+    if (modifier && !down && this.softKeyboardPressedKeys.indexOf(name) < 0) {
       return;
     }
-    if (!down && this.softKeyboardPressedKeys.indexOf(name) < 0) {
+    if (!modifier && !ctrl && !alt && !command) {
+      const usbHid = this.softKeyboardUsbHid(name);
+      if (usbHid !== undefined) {
+        const character = down ? this.softKeyboardCharacter(name, shift) : '';
+        const payload = new RustDeskFlutterKeyPayload(character, usbHid, 0, down);
+        if (this.sendFlutterKeyPayloadObject(payload)) {
+          return;
+        }
+      }
+    }
+    if (!modifier && !down) {
       return;
     }
-    const payload = new RustDeskKeyPayload(name, down);
+    const payload = new RustDeskKeyPayload(name, modifier ? down : false);
+    payload.press = !modifier;
     payload.alt = alt;
     payload.ctrl = ctrl;
     payload.shift = shift;
     payload.command = command;
-    if (this.sendKeyPayloadObject(payload)) {
+    if (this.sendKeyPayloadObject(payload) && modifier) {
       this.rememberSoftKeyboardKey(name, down, alt, ctrl, shift, command);
     }
   }
@@ -2479,14 +2609,14 @@ struct RustDeskIndex {
     if (this.previewViewWidth <= 0) {
       return 320;
     }
-    return Math.max(280, Math.min(this.previewViewWidth - 16, 760));
+    return Math.max(280, Math.min(this.previewViewWidth - 16, 560));
   }
 
   private softKeyboardOffsetY(): number {
     if (this.softKeyboardDockTop || this.previewViewHeight <= 0) {
       return 12;
     }
-    return Math.max(12, this.previewViewHeight - REMOTE_SOFT_KEYBOARD_PANEL_HEIGHT - 16);
+    return Math.max(12, this.previewViewHeight - REMOTE_SOFT_KEYBOARD_PANEL_HEIGHT - 12);
   }
 
   private sendClipboardText(content: string): boolean {
@@ -2661,6 +2791,10 @@ struct RustDeskIndex {
       this.sessionMessage = '请先建立远程桌面连接';
       return;
     }
+    this.logRelativeDebug(
+      'display_panel',
+      `open current=${this.currentDisplayIndex} displays=${this.peerDisplays.length} resolutions=${this.supportedResolutions.length}`,
+    );
     this.openOverlayPanel('display');
   }
 
@@ -3403,6 +3537,7 @@ struct RustDeskIndex {
       return;
     }
     this.initialDisplayCommandIssued = true;
+    this.currentDisplayIndex = this.sessionDisplayController.getCurrentDisplayIndex();
     this.pendingDisplayIndex = display;
     this.sessionMessage = `已请求显示器 ${display + 1} 画面`;
   }
@@ -3416,14 +3551,17 @@ struct RustDeskIndex {
       return;
     }
     if (!this.sessionDisplayController.selectDisplay(this.activeSessionId, display)) {
+      this.logRelativeDebug('display_select', `rejected target=${display}`);
       return;
     }
     this.initialDisplayCommandIssued = true;
+    this.currentDisplayIndex = this.sessionDisplayController.getCurrentDisplayIndex();
     this.pendingDisplayIndex = display;
     this.lastAppliedDisplay = -1;
     this.lastAppliedVideoWidth = 0;
     this.lastAppliedVideoHeight = 0;
     this.sessionMessage = `已请求切换到显示器 ${display + 1}`;
+    this.logRelativeDebug('display_select', `pending=${display} current=${this.currentDisplayIndex}`);
   }
 
   private requestResolutionChange(resolution: ResolutionInfo): void {
@@ -3438,12 +3576,20 @@ struct RustDeskIndex {
       resolution,
       this.peerPlatform,
     )) {
+      this.logRelativeDebug(
+        'resolution_select',
+        `rejected display=${display} width=${resolution.width} height=${resolution.height}`,
+      );
       return;
     }
     this.pendingResolutionDisplay = display;
     this.pendingResolutionWidth = resolution.width;
     this.pendingResolutionHeight = resolution.height;
     this.sessionMessage = `已请求远端分辨率 ${resolution.width}x${resolution.height}`;
+    this.logRelativeDebug(
+      'resolution_select',
+      `pending display=${display} width=${resolution.width} height=${resolution.height}`,
+    );
   }
 
   private applyQualitySelection(preset: QualityPreset): void {
@@ -4691,6 +4837,7 @@ struct RustDeskIndex {
         this.peerPlatform,
       );
       const currentDisplay = this.sessionDisplayController.getCurrentDisplayIndex();
+      this.currentDisplayIndex = currentDisplay;
       this.refreshSessionOrientation();
       this.ensureRemoteCursorEnabled();
       hilog.info(
@@ -4720,7 +4867,8 @@ struct RustDeskIndex {
     const previous = this.peerDisplays[display];
     const x = Number(event.x ?? `${previous.x}`);
     const y = Number(event.y ?? `${previous.y}`);
-    this.peerDisplays[display] = {
+    const updatedDisplays = this.peerDisplays.slice();
+    updatedDisplays[display] = {
       width: Math.round(width),
       height: Math.round(height),
       x: Number.isFinite(x) ? x : previous.x,
@@ -4729,6 +4877,7 @@ struct RustDeskIndex {
       original_width: previous.original_width,
       original_height: previous.original_height,
     };
+    this.peerDisplays = updatedDisplays;
     if (event.resolutions !== undefined) {
       this.supportedResolutions = this.parseSupportedResolutions(event.resolutions);
     }
@@ -4738,6 +4887,7 @@ struct RustDeskIndex {
       event.resolutions === undefined ? undefined : this.supportedResolutions,
       this.peerPlatform,
     );
+    this.currentDisplayIndex = this.sessionDisplayController.getCurrentDisplayIndex();
     this.refreshSessionOrientation();
     if (this.pendingDisplayIndex === display) {
       this.pendingDisplayIndex = -1;
@@ -5076,6 +5226,7 @@ struct RustDeskIndex {
         const keyboardPermission = String(event.keyboard).trim().toLowerCase();
         if (keyboardPermission === 'false') {
           this.remoteKeyboardPermissionAllowed = false;
+          this.hideSoftKeyboard();
         } else if (keyboardPermission === 'true') {
           this.remoteKeyboardPermissionAllowed = true;
         }
@@ -5377,11 +5528,10 @@ struct RustDeskIndex {
     if (!this.isRemoteControlSessionActive()) {
       return;
     }
-    const downPayload = new RustDeskKeyPayload(name, true);
-    const upPayload = new RustDeskKeyPayload(name, false);
-    const downSent = this.sendKeyPayloadObject(downPayload);
-    const upSent = this.sendKeyPayloadObject(upPayload);
-    this.logRelativeDebug('fold_keyboard_button', `name=${name} down=${downSent} up=${upSent}`);
+    const payload = new RustDeskKeyPayload(name, false);
+    payload.press = true;
+    const sent = this.sendKeyPayloadObject(payload);
+    this.logRelativeDebug('fold_keyboard_button', `name=${name} press=${sent}`);
     this.requestPreviewInputFocus();
   }
 
@@ -5556,6 +5706,7 @@ struct RustDeskIndex {
           }
           this.viewportModel.setViewportSize(width, height);
           this.updateAndroidNavigationViewport(width, height);
+          this.reclampSoftKeyboardPosition();
           this.applyDisplayConfiguration();
           this.reprojectVirtualCursorOverlay();
         })
@@ -5608,12 +5759,16 @@ struct RustDeskIndex {
               ): void => this.sendSoftKeyboardKey(name, down, alt, ctrl, shift, command),
               onMoveDock: (): void => this.moveSoftKeyboardToOtherEdge(),
               onCollapse: (): void => this.toggleSoftKeyboard(),
+              onKeyboardMoveStart: (): void => this.startSoftKeyboardDrag(),
+              onKeyboardMoveUpdate: (offsetX: number, offsetY: number): void =>
+                this.updateSoftKeyboardDrag(offsetX, offsetY),
+              onKeyboardMoveEnd: (): void => this.finishSoftKeyboardDrag(),
             });
           }
-          .width('100%')
-          .justifyContent(FlexAlign.Center)
-          .position({ x: 0, y: this.softKeyboardOffsetY() })
-          .hitTestBehavior(HitTestMode.Block)
+          .width(this.softKeyboardWidth())
+          .height(REMOTE_SOFT_KEYBOARD_PANEL_HEIGHT)
+          .position({ x: this.softKeyboardX, y: this.softKeyboardY })
+          .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY)
           .zIndex(40);
         }
       }
@@ -6052,11 +6207,11 @@ struct RustDeskIndex {
       onBack: () => this.closeOverlayPanel(),
     }) {
       DisplaySelectorSheet({
-        displays: this.sessionDisplayController.getDisplays(),
+        displays: this.peerDisplays,
         currentDisplay: this.pendingDisplayIndex >= 0
           ? this.pendingDisplayIndex
-          : this.sessionDisplayController.getCurrentDisplayIndex(),
-        resolutions: this.sessionDisplayController.getResolutions(),
+          : this.currentDisplayIndex,
+        resolutions: this.supportedResolutions,
         selectedResolution: this.pendingResolutionWidth > 0 && this.pendingResolutionHeight > 0 ? {
           width: this.pendingResolutionWidth,
           height: this.pendingResolutionHeight,

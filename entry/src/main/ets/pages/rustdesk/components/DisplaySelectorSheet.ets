@@ -12,6 +12,13 @@ export interface DisplaySelectorSheetProps {
   onClose: () => void;
 }
 
+interface DisplayChoiceOptions {
+  label: string;
+  badge: string;
+  selected: boolean;
+  onClick: () => void;
+}
+
 @ComponentV2
 export struct DisplaySelectorSheet {
   @Param displays: PeerDisplayInfo[] = [];
@@ -24,8 +31,8 @@ export struct DisplaySelectorSheet {
   @Event onSelectResolution: (resolution: ResolutionInfo) => void = (_resolution: ResolutionInfo) => {};
   @Event onClose: () => void = () => {};
 
-  private displayLabels(): ResourceStr[] {
-    const labels: ResourceStr[] = [];
+  private displayLabels(): string[] {
+    const labels: string[] = [];
     for (let index = 0; index < this.displays.length; index += 1) {
       labels.push(`显示器 ${index + 1}`);
     }
@@ -41,8 +48,8 @@ export struct DisplaySelectorSheet {
     return badges;
   }
 
-  private resolutionLabels(): ResourceStr[] {
-    const labels: ResourceStr[] = [];
+  private resolutionLabels(): string[] {
+    const labels: string[] = [];
     for (let index = 0; index < this.resolutions.length; index += 1) {
       const resolution = this.resolutions[index];
       labels.push(`${resolution.width}×${resolution.height}`);
@@ -77,24 +84,19 @@ export struct DisplaySelectorSheet {
   }
 
   @Builder
-  private ChoiceButton(
-    label: ResourceStr,
-    badge: string,
-    selected: boolean,
-    onClick: () => void,
-  ) {
+  private ChoiceButton(options: DisplayChoiceOptions) {
     Button({ type: ButtonType.Normal, stateEffect: true }) {
       Column({ space: 2 }) {
-        Text(label)
+        Text(options.label)
           .fontSize($r('app.float.font_label'))
           .fontWeight(FontWeight.Medium)
-          .fontColor(selected ? $r('app.color.white') : $r('app.color.neu_text_primary'))
+          .fontColor(options.selected ? $r('app.color.white') : $r('app.color.neu_text_primary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
-        if (badge.length > 0) {
-          Text(badge)
+        if (options.badge.length > 0) {
+          Text(options.badge)
             .fontSize($r('app.float.font_caption'))
-            .fontColor(selected ? $r('app.color.white') : $r('app.color.neu_text_secondary'))
+            .fontColor(options.selected ? $r('app.color.white') : $r('app.color.neu_text_secondary'))
             .maxLines(1);
         }
       }
@@ -102,38 +104,41 @@ export struct DisplaySelectorSheet {
       .alignItems(HorizontalAlign.Center);
     }
     .width(132)
-    .height(badge.length > 0 ? 52 : 44)
+    .height(options.badge.length > 0 ? 52 : 44)
     .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_8') })
-    .backgroundColor(selected ? $r('app.color.brand_primary') : $r('app.color.mica_control'))
+    .backgroundColor(options.selected ? $r('app.color.brand_primary') : $r('app.color.mica_control'))
     .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
       adaptiveColor: AdaptiveColor.DEFAULT,
       scale: 0.56,
     })
     .border({
       width: 1,
-      color: selected ? $r('app.color.brand_primary') : $r('app.color.mica_border'),
+      color: options.selected ? $r('app.color.brand_primary') : $r('app.color.mica_border'),
     })
     .borderRadius($r('app.float.radius_10'))
     .hoverEffect(HoverEffect.None)
+    .accessibilityText(options.label)
+    .accessibilitySelected(options.selected)
     .onClick((): void => {
-      onClick();
+      options.onClick();
     });
   }
 
   @Builder
   private DisplayChoices() {
     Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
-      ForEach(this.displayLabels(), (label: ResourceStr, index: number) => {
+      ForEach(this.displayLabels(), (label: string, index: number) => {
         Stack() {
-          this.ChoiceButton(
-            label,
-            this.displayBadges()[index] ?? '',
-            this.currentDisplay === index,
-            (): void => this.onSelectDisplay(index),
-          )
+          this.ChoiceButton({
+            label: label,
+            badge: this.displayBadges()[index] ?? '',
+            selected: this.currentDisplay === index,
+            onClick: (): void => this.onSelectDisplay(index),
+          })
         }
         .margin({ right: $r('app.float.space_8'), bottom: $r('app.float.space_8') });
-      }, (_label: ResourceStr, index: number) => `display-${index}`)
+      }, (label: string, index: number) =>
+        `display-${index}-${label}-${this.currentDisplay === index ? 'selected' : 'idle'}`)
     }
     .width('100%');
   }
@@ -141,17 +146,18 @@ export struct DisplaySelectorSheet {
   @Builder
   private ResolutionChoices() {
     Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
-      ForEach(this.resolutionLabels(), (label: ResourceStr, index: number) => {
+      ForEach(this.resolutionLabels(), (label: string, index: number) => {
         Stack() {
-          this.ChoiceButton(
-            label,
-            '',
-            this.selectedResolutionIndex() === index,
-            (): void => this.selectResolutionIndex(index),
-          )
+          this.ChoiceButton({
+            label: label,
+            badge: '',
+            selected: this.selectedResolutionIndex() === index,
+            onClick: (): void => this.selectResolutionIndex(index),
+          })
         }
         .margin({ right: $r('app.float.space_8'), bottom: $r('app.float.space_8') });
-      }, (_label: ResourceStr, index: number) => `resolution-${index}`)
+      }, (label: string, index: number) =>
+        `resolution-${index}-${label}-${this.selectedResolutionIndex() === index ? 'selected' : 'idle'}`)
     }
     .width('100%');
   }

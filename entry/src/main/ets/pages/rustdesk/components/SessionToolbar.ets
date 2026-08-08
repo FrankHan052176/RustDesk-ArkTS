@@ -3,6 +3,13 @@ import { SessionToolbarMetrics } from '../SessionToolbarMetrics';
 
 const SOFT_KEYBOARD_TRANSITION_ID = 'rustdesk-session-soft-keyboard';
 
+interface ToolbarActionOptions {
+  label: string;
+  active: boolean;
+  transitionId: string;
+  onClick: () => void;
+}
+
 export interface SessionToolbarProps {
   relativeMouseMode: boolean;
   metrics: SessionToolbarMetrics;
@@ -115,38 +122,36 @@ export struct SessionToolbar {
   }
 
   @Builder
-  private ToolbarAction(
-    _key: string,
-    label: string,
-    active: boolean,
-    transitionId: string,
-    onClick: () => void,
-  ) {
+  private ToolbarAction(options: ToolbarActionOptions) {
     Button({ type: ButtonType.Normal, stateEffect: true }) {
-      Text(label)
+      Text(options.label)
         .fontSize($r('app.float.font_label'))
         .fontWeight(FontWeight.Medium)
-        .fontColor(active ? $r('app.color.white') : $r('app.color.neu_text_primary'))
+        .fontColor(options.active ? $r('app.color.white') : $r('app.color.neu_text_primary'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis });
     }
     .layoutWeight(1)
     .height(this.actionHeight())
     .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_8') })
-    .backgroundColor(active ? $r('app.color.brand_primary') : $r('app.color.mica_control'))
+    .backgroundColor(options.active ? $r('app.color.brand_primary') : $r('app.color.mica_control'))
     .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
       adaptiveColor: AdaptiveColor.DEFAULT,
       scale: 0.56,
     })
-    .border({ width: 1, color: active ? $r('app.color.brand_primary') : $r('app.color.mica_border') })
+    .border({
+      width: 1,
+      color: options.active ? $r('app.color.brand_primary') : $r('app.color.mica_border'),
+    })
     .borderRadius($r('app.float.radius_14'))
     .shadow(ShadowStyle.OUTER_DEFAULT_SM)
     .hoverEffect(HoverEffect.None)
-    .accessibilityText(label)
-    .geometryTransition(transitionId)
+    .accessibilityText(options.label)
+    .accessibilitySelected(options.active)
+    .geometryTransition(options.transitionId)
     .transition(TransitionEffect.OPACITY)
     .onClick((): void => {
-      onClick();
+      options.onClick();
     });
   }
 
@@ -428,8 +433,12 @@ export struct SessionToolbar {
     if (this.cameraSession) {
       Column({ space: $r('app.float.space_8') }) {
         Row({ space: $r('app.float.space_8') }) {
-          this.ToolbarAction('quality', '画质', this.activeOverlayPanel === 'quality', this.qualityTransitionId,
-            () => this.onOpenQuality())
+          this.ToolbarAction({
+            label: '画质',
+            active: this.activeOverlayPanel === 'quality',
+            transitionId: this.qualityTransitionId,
+            onClick: () => this.onOpenQuality(),
+          })
           this.DangerAction('断开连接')
         }
         .width('100%');
@@ -446,10 +455,18 @@ export struct SessionToolbar {
     } else if (this.viewOnlySession) {
       Column({ space: $r('app.float.space_8') }) {
         Row({ space: $r('app.float.space_8') }) {
-          this.ToolbarAction('display', '显示器', this.activeOverlayPanel === 'display', this.displayTransitionId,
-            () => this.onOpenDisplay())
-          this.ToolbarAction('quality', '画质', this.activeOverlayPanel === 'quality', this.qualityTransitionId,
-            () => this.onOpenQuality())
+          this.ToolbarAction({
+            label: '显示器',
+            active: this.activeOverlayPanel === 'display',
+            transitionId: this.displayTransitionId,
+            onClick: () => this.onOpenDisplay(),
+          })
+          this.ToolbarAction({
+            label: '画质',
+            active: this.activeOverlayPanel === 'quality',
+            transitionId: this.qualityTransitionId,
+            onClick: () => this.onOpenQuality(),
+          })
           this.DangerAction('断开')
         }
         .width('100%');
@@ -468,20 +485,36 @@ export struct SessionToolbar {
         Row({ space: $r('app.float.space_8') }) {
           this.PointerModeAction()
           if (this.softKeyboardAvailable) {
-            this.ToolbarAction('keyboard', this.softKeyboardVisible ? '键盘开' : '键盘', this.softKeyboardVisible,
-              SOFT_KEYBOARD_TRANSITION_ID, () => this.onToggleSoftKeyboard())
+            this.ToolbarAction({
+              label: this.softKeyboardVisible ? '键盘开' : '键盘',
+              active: this.softKeyboardVisible,
+              transitionId: SOFT_KEYBOARD_TRANSITION_ID,
+              onClick: () => this.onToggleSoftKeyboard(),
+            })
           }
-          this.ToolbarAction('chat', this.unreadCount > 0 ? `聊天 ${this.unreadCount}` : '聊天',
-            this.activeOverlayPanel === 'chat', this.chatTransitionId, () => this.onOpenChat())
+          this.ToolbarAction({
+            label: this.unreadCount > 0 ? `聊天 ${this.unreadCount}` : '聊天',
+            active: this.activeOverlayPanel === 'chat',
+            transitionId: this.chatTransitionId,
+            onClick: () => this.onOpenChat(),
+          })
           this.AudioToggle()
         }
         .width('100%');
 
         Row({ space: $r('app.float.space_8') }) {
-          this.ToolbarAction('display', '显示器', this.activeOverlayPanel === 'display', this.displayTransitionId,
-            () => this.onOpenDisplay())
-          this.ToolbarAction('quality', '画质', this.activeOverlayPanel === 'quality', this.qualityTransitionId,
-            () => this.onOpenQuality())
+          this.ToolbarAction({
+            label: '显示器',
+            active: this.activeOverlayPanel === 'display',
+            transitionId: this.displayTransitionId,
+            onClick: () => this.onOpenDisplay(),
+          })
+          this.ToolbarAction({
+            label: '画质',
+            active: this.activeOverlayPanel === 'quality',
+            transitionId: this.qualityTransitionId,
+            onClick: () => this.onOpenQuality(),
+          })
           if (this.windowControlsAvailable) {
             this.WindowControlActions()
           }
@@ -496,19 +529,35 @@ export struct SessionToolbar {
         Row({ space: $r('app.float.space_8') }) {
           this.PointerModeAction()
           if (this.softKeyboardAvailable) {
-            this.ToolbarAction('keyboard', this.softKeyboardVisible ? '键盘开' : '键盘', this.softKeyboardVisible, SOFT_KEYBOARD_TRANSITION_ID,
-              () => this.onToggleSoftKeyboard())
+            this.ToolbarAction({
+              label: this.softKeyboardVisible ? '键盘开' : '键盘',
+              active: this.softKeyboardVisible,
+              transitionId: SOFT_KEYBOARD_TRANSITION_ID,
+              onClick: () => this.onToggleSoftKeyboard(),
+            })
           }
-          this.ToolbarAction('chat', this.unreadCount > 0 ? `聊天 ${this.unreadCount}` : '聊天',
-            this.activeOverlayPanel === 'chat', this.chatTransitionId, () => this.onOpenChat())
+          this.ToolbarAction({
+            label: this.unreadCount > 0 ? `聊天 ${this.unreadCount}` : '聊天',
+            active: this.activeOverlayPanel === 'chat',
+            transitionId: this.chatTransitionId,
+            onClick: () => this.onOpenChat(),
+          })
         }
         .width('100%');
 
         Row({ space: $r('app.float.space_8') }) {
-          this.ToolbarAction('display', '显示器', this.activeOverlayPanel === 'display', this.displayTransitionId,
-            () => this.onOpenDisplay())
-          this.ToolbarAction('quality', '画质', this.activeOverlayPanel === 'quality', this.qualityTransitionId,
-            () => this.onOpenQuality())
+          this.ToolbarAction({
+            label: '显示器',
+            active: this.activeOverlayPanel === 'display',
+            transitionId: this.displayTransitionId,
+            onClick: () => this.onOpenDisplay(),
+          })
+          this.ToolbarAction({
+            label: '画质',
+            active: this.activeOverlayPanel === 'quality',
+            transitionId: this.qualityTransitionId,
+            onClick: () => this.onOpenQuality(),
+          })
         }
         .width('100%');
 

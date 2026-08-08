@@ -131,11 +131,11 @@ export struct AccountSettingsCard {
   }
 
   private requestOidc(provider: string): void {
-    const normalizedProvider = provider.trim().toLowerCase();
-    if (normalizedProvider.length === 0 || this.isBusy()) {
+    const providerName = provider.trim();
+    if (providerName.length === 0 || this.isBusy()) {
       return;
     }
-    this.onOidcLogin(normalizedProvider);
+    this.onOidcLogin(providerName);
   }
 
   private providerLabel(provider: AccountLoginProvider): string {
