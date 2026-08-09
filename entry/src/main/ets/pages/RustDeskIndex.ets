@@ -95,6 +95,15 @@ import {
   DataTransferBackgroundBinding,
 } from '../services/DataTransferBackgroundService';
 import {
+  REMOTE_SESSION_APP_STATE_EVENT,
+  REMOTE_SESSION_CONTINUE_STATE_EVENT,
+  REMOTE_SESSION_HANDOFF_EVENT,
+  RemoteSessionHandoffEnvelope,
+  RemoteSessionHandoffService,
+  RemoteSessionShareController,
+  RemoteSessionShareSnapshot,
+} from '../services/RemoteSessionHandoffService';
+import {
   EASYTIER_API_RESULT_EVENT,
   EASYTIER_OPERATION_START_INSTANCE,
   EASYTIER_SNAPSHOT_EVENT,
@@ -202,6 +211,7 @@ struct RustDeskIndex {
   );
   private cursorModel: RustDeskCursorModel = new RustDeskCursorModel();
   private mainBridge: RustDeskMainBridge = new RustDeskMainBridge();
+  private remoteSessionShareController: RemoteSessionShareController = new RemoteSessionShareController();
   private activeSessionDefaults: SessionDefaults = new SessionDefaults();
   private inputController?: RustDeskInputController;
   private clipboardController?: RustDeskClipboardController;
@@ -215,6 +225,15 @@ struct RustDeskIndex {
   private keyboardEnteredSessionId: string = '';
   private lastKeyboardFocusLogAt: number = 0;
   @Local pageVisible: boolean = true;
+  private appForeground: boolean = true;
+  private remoteSessionHandoffListenerRegistered: boolean = false;
+  private remoteSessionSharingActive: boolean = false;
+  private activeSessionPassword: string = '';
+  private activeSessionShareTarget: string = '';
+  private activeSessionShareTargetKind: string = 'target';
+  private activeSessionServerConfig: ServerConfig = new ServerConfig();
+  private activeSessionPasswordEphemeral: boolean = false;
+  private activeSessionForceRelay: boolean = false;
   private remoteInteractionReady: boolean = false;
   private inputInterceptorActive: boolean = false;
   private previewKeyboardCaptureFocused: boolean = false;
@@ -463,13 +482,25 @@ struct RustDeskIndex {
   private onEasyTierSnapshot = (snapshot: EasyTierSnapshotEvent): void => {
     this.applyEasyTierSnapshot(snapshot);
   };
+  private onRemoteSessionHandoff = (): void => {
+    const envelope = RemoteSessionHandoffService.takeIncoming();
+    if (envelope !== undefined) {
+      void this.connectRemoteSessionHandoff(envelope);
+    }
+  };
+  private onRemoteSessionAppState = (foreground: boolean): void => {
+    this.appForeground = foreground;
+    this.syncRemoteSessionSharing();
+  };
   aboutToAppear(): void {
     this.pageVisible = true;
+    this.appForeground = true;
     this.previewController.onCreated = (surfaceId: string) => this.handlePreviewSurfaceCreated(surfaceId);
     this.previewController.onChanged = (surfaceId: string, rect: SurfaceRect) =>
       this.handlePreviewSurfaceChanged(surfaceId, rect);
     this.previewController.onDestroyed = (surfaceId: string) => this.handlePreviewSurfaceDestroyed(surfaceId);
     this.initializeRuntime();
+    this.registerRemoteSessionHandoffListener();
     this.registerEasyTierResultListener();
     this.registerWindowAvoidAreaListener();
     this.applySessionFullscreen(false, true);
@@ -478,6 +509,8 @@ struct RustDeskIndex {
   }
 
   aboutToDisappear(): void {
+    this.clearActiveSessionHandoffState();
+    this.unregisterRemoteSessionHandoffListener();
     this.connectionGeneration += 1;
     this.clearConnectionTimeout();
     this.clearPasswordTimeout();
@@ -512,6 +545,7 @@ struct RustDeskIndex {
 
   onPageShow(): void {
     this.pageVisible = true;
+    this.appForeground = true;
     this.syncClipboardController();
     this.syncInputInterceptor();
     this.refreshFreeWindowChrome();
@@ -519,12 +553,35 @@ struct RustDeskIndex {
     if (this.accountOidcActive) {
       this.scheduleAccountPoll(200);
     }
+    this.syncRemoteSessionSharing();
   }
 
   onPageHide(): void {
     this.pageVisible = false;
+    this.disableRemoteSessionSharing();
     this.clipboardController?.stop();
     this.stopInputInterceptor();
+  }
+
+  private registerRemoteSessionHandoffListener(): void {
+    if (this.remoteSessionHandoffListenerRegistered) {
+      return;
+    }
+    const context = this.abilityContext();
+    context.eventHub.on(REMOTE_SESSION_HANDOFF_EVENT, this.onRemoteSessionHandoff);
+    context.eventHub.on(REMOTE_SESSION_APP_STATE_EVENT, this.onRemoteSessionAppState);
+    this.remoteSessionHandoffListenerRegistered = true;
+    this.onRemoteSessionHandoff();
+  }
+
+  private unregisterRemoteSessionHandoffListener(): void {
+    if (!this.remoteSessionHandoffListenerRegistered) {
+      return;
+    }
+    const context = this.abilityContext();
+    context.eventHub.off(REMOTE_SESSION_HANDOFF_EVENT, this.onRemoteSessionHandoff);
+    context.eventHub.off(REMOTE_SESSION_APP_STATE_EVENT, this.onRemoteSessionAppState);
+    this.remoteSessionHandoffListenerRegistered = false;
   }
 
   private registerEasyTierResultListener(): void {
@@ -799,7 +856,103 @@ struct RustDeskIndex {
     defaults.preferredCodec = source.preferredCodec;
     defaults.gesturesEnabled = source.gesturesEnabled;
     defaults.toolbarExpanded = source.toolbarExpanded;
+    defaults.sessionSharingEnabled = source.sessionSharingEnabled;
     return defaults;
+  }
+
+  private copyServerConfig(source: ServerConfig): ServerConfig {
+    const config = new ServerConfig();
+    config.mode = source.mode;
+    config.idServer = source.idServer;
+    config.relayServer = source.relayServer;
+    config.apiServer = source.apiServer;
+    config.key = source.key;
+    config.effectiveApiServer = source.effectiveApiServer;
+    config.usingPublicServer = source.usingPublicServer;
+    config.remoteReachable = source.remoteReachable;
+    config.accountAvailable = source.accountAvailable;
+    config.message = source.message;
+    return config;
+  }
+
+  private serverConfigFromHandoff(envelope: RemoteSessionHandoffEnvelope): ServerConfig {
+    const config = new ServerConfig();
+    if (envelope.targetKind === 'ip') {
+      return config;
+    }
+    config.idServer = envelope.idServer;
+    config.relayServer = envelope.relayServer;
+    config.apiServer = envelope.apiServer;
+    config.key = envelope.key;
+    return config;
+  }
+
+  private createRemoteSessionShareSnapshot(): RemoteSessionShareSnapshot | undefined {
+    if (this.activeSessionShareTarget.length === 0 || this.activeSessionPassword.length === 0) {
+      return undefined;
+    }
+    const snapshot = new RemoteSessionShareSnapshot();
+    snapshot.target = this.activeSessionShareTarget;
+    snapshot.targetKind = this.activeSessionShareTargetKind;
+    snapshot.password = this.activeSessionPassword;
+    if (snapshot.targetKind === 'target') {
+      snapshot.idServer = this.activeSessionServerConfig.idServer;
+      snapshot.relayServer = this.activeSessionServerConfig.relayServer;
+      snapshot.apiServer = this.activeSessionServerConfig.apiServer;
+      snapshot.key = this.activeSessionServerConfig.key;
+      snapshot.forceRelay = this.activeSessionForceRelay;
+    }
+    snapshot.connectionMode = 'remote_control';
+    return snapshot;
+  }
+
+  private syncRemoteSessionSharing(): void {
+    const snapshot = this.createRemoteSessionShareSnapshot();
+    const eligible = this.pageVisible
+      && this.appForeground
+      && this.sessionDefaults.sessionSharingEnabled
+      && this.activeSessionKind === 'remote_control'
+      && this.activeSessionId.length > 0
+      && this.sessionPhase === 'connected'
+      && this.showPreviewModal
+      && snapshot !== undefined;
+    if (eligible === this.remoteSessionSharingActive) {
+      return;
+    }
+    if (!eligible || snapshot === undefined) {
+      this.disableRemoteSessionSharing();
+      return;
+    }
+    this.remoteSessionSharingActive = true;
+    this.remoteSessionShareController.setEnabled(this.abilityContext(), snapshot);
+    this.abilityContext().eventHub.emit(REMOTE_SESSION_CONTINUE_STATE_EVENT, true);
+  }
+
+  private disableRemoteSessionSharing(): void {
+    this.remoteSessionSharingActive = false;
+    this.remoteSessionShareController.disable();
+    this.abilityContext().eventHub.emit(REMOTE_SESSION_CONTINUE_STATE_EVENT, false);
+  }
+
+  private clearActiveSessionHandoffState(): void {
+    this.disableRemoteSessionSharing();
+    this.activeSessionPassword = '';
+    this.activeSessionShareTarget = '';
+    this.activeSessionShareTargetKind = 'target';
+    this.activeSessionServerConfig = new ServerConfig();
+    this.activeSessionPasswordEphemeral = false;
+    this.activeSessionForceRelay = false;
+  }
+
+  private handoffTargetKind(target: string): string {
+    const normalized = target.trim();
+    if (normalized.includes('@')) {
+      return 'target';
+    }
+    if (normalized.includes(':') || /^\d{1,3}(\.\d{1,3}){3}$/.test(normalized)) {
+      return 'ip';
+    }
+    return 'target';
   }
 
   private resolvePreferredCodec(requested: string, capabilities: DecoderCapability[]): string {
@@ -853,6 +1006,7 @@ struct RustDeskIndex {
     const nextDefaults = this.copySessionDefaults(defaults);
     this.sessionDefaults = nextDefaults;
     this.preferences?.saveSessionDefaults(nextDefaults);
+    this.syncRemoteSessionSharing();
     if (!this.activeSessionId) {
       this.activeSessionDefaults = this.copySessionDefaults(nextDefaults);
       this.applySessionDefaultsToIdleState(this.decoderCapabilities);
@@ -1887,25 +2041,49 @@ struct RustDeskIndex {
     await this.preparePeerLaunch(this.peerTarget, 'view_only');
   }
 
-  private async connectSessionDirect(kind: PrimarySessionKind): Promise<void> {
+  private async connectRemoteSessionHandoff(envelope: RemoteSessionHandoffEnvelope): Promise<void> {
+    try {
+      await this.connectSessionDirect('remote_control', envelope);
+    } finally {
+      envelope.password = '';
+      envelope.key = '';
+    }
+  }
+
+  private async connectSessionDirect(
+    kind: PrimarySessionKind,
+    handoff?: RemoteSessionHandoffEnvelope,
+  ): Promise<void> {
     if (this.sessionCloseInFlight) {
       return;
     }
     if (!this.runtimeInitialized) {
       this.initializeRuntime();
     }
-    const target = this.peerTarget.trim();
-    if (target.length === 0) {
+    const connectionTarget = handoff === undefined
+      ? this.peerTarget.trim()
+      : RemoteSessionHandoffService.buildConnectionTarget(handoff);
+    const displayTarget = handoff === undefined ? connectionTarget : handoff.target.trim();
+    if (connectionTarget.length === 0 || displayTarget.length === 0) {
       this.errorText = '请输入目标地址';
       return;
     }
-    this.peerTarget = target;
-    this.preferences?.saveTarget(target);
+    this.peerTarget = displayTarget;
+    this.preferences?.saveTarget(displayTarget);
     if (this.activeSessionId.length > 0) {
       await this.closeSession('正在切换会话');
     }
+    this.activeSessionPassword = handoff?.password ?? '';
+    this.activeSessionShareTarget = displayTarget;
+    const targetKind = handoff?.targetKind ?? this.handoffTargetKind(displayTarget);
+    this.activeSessionShareTargetKind = targetKind;
+    this.activeSessionServerConfig = targetKind === 'ip'
+      ? new ServerConfig()
+      : (handoff === undefined ? this.copyServerConfig(this.serverConfig) : this.serverConfigFromHandoff(handoff));
+    this.activeSessionPasswordEphemeral = handoff !== undefined;
+    this.activeSessionForceRelay = targetKind === 'target' ? (handoff?.forceRelay ?? false) : false;
     await this.applySessionFullscreen(false, true);
-    this.beginConnectionAttempt(kind, target);
+    this.beginConnectionAttempt(kind, displayTarget);
     this.activeSessionKind = kind;
     this.activeSessionDefaults = this.copySessionDefaults(this.sessionDefaults);
     this.clipboardSyncEnabled = this.activeSessionDefaults.clipboardEnabled;
@@ -1923,14 +2101,20 @@ struct RustDeskIndex {
     this.sessionMessage = kind === 'view_camera'
       ? '正在连接摄像头'
       : (kind === 'view_only' ? '正在连接远端屏幕' : '正在连接远端');
-    hilog.info(DOMAIN, TAG, 'connectSession kind=%{public}s target=%{public}s', kind, target);
+    hilog.info(DOMAIN, TAG, 'connectSession kind=%{public}s target=%{public}s', kind, displayTarget);
     this.showTransferWorkspace = false;
     this.showPreviewModal = false;
     this.performanceTuningApplied = false;
     this.resetPreviewState();
     const connectionGeneration = this.connectionGeneration + 1;
     this.connectionGeneration = connectionGeneration;
-    const sessionCreated = await this.createSession(target, kind);
+    const sessionCreated = await this.createSession(
+      connectionTarget,
+      kind,
+      this.activeSessionPassword,
+      this.activeSessionPasswordEphemeral,
+      this.activeSessionForceRelay,
+    );
     if (connectionGeneration !== this.connectionGeneration) {
       return;
     }
@@ -1964,14 +2148,21 @@ struct RustDeskIndex {
     void this.pollSessionEvents();
   }
 
-  private async createSession(target: string, kind: PrimarySessionKind): Promise<boolean> {
+  private async createSession(
+    target: string,
+    kind: PrimarySessionKind,
+    password: string,
+    passwordEphemeral: boolean,
+    forceRelay: boolean,
+  ): Promise<boolean> {
     try {
       const response = this.nativeSessionBridge.addSession(this.nextSessionId(), target, {
-        password: '',
-        forceRelay: false,
+        password,
+        forceRelay,
         isFileTransfer: false,
         isViewCamera: kind === 'view_camera',
         isViewOnly: kind === 'view_only',
+        passwordEphemeral,
       });
       this.updateSessionState(response);
       if (!response.ok || this.activeSessionId.length === 0) {
@@ -2050,6 +2241,15 @@ struct RustDeskIndex {
     }
   }
 
+  private dismissPasswordDialogFor(kind: PasswordSessionKind): void {
+    if (!this.passwordDialogVisible || this.passwordSessionKind !== kind) {
+      return;
+    }
+    this.passwordDialogVisible = false;
+    this.passwordDraft = '';
+    this.clearPasswordTimeout();
+  }
+
   private async submitPassword(passwordInput?: string, rememberPasswordInput?: boolean): Promise<void> {
     if (this.passwordSessionKind === 'primary' && !this.activeSessionId) {
       return;
@@ -2066,6 +2266,9 @@ struct RustDeskIndex {
       return;
     }
     this.passwordDraft = '';
+    if (this.passwordSessionKind === 'primary') {
+      this.activeSessionPassword = password;
+    }
     this.passwordDialogVisible = false;
     this.clearPasswordTimeout();
     try {
@@ -2084,8 +2287,9 @@ struct RustDeskIndex {
       this.connectionUiPhase = 'authenticating';
       this.connectionUiMessage = '密码已提交，正在等待远端验证。';
       this.scheduleConnectionTimeout();
-      const response = this.nativeSessionBridge.login(this.activeSessionId, password, this.rememberPassword);
-      hilog.info(DOMAIN, TAG, 'submitPassword sessionId=%{public}s remember=%{public}s ok=%{public}s', this.activeSessionId, String(this.rememberPassword), String(response.ok));
+      const remember = this.activeSessionPasswordEphemeral ? false : this.rememberPassword;
+      const response = this.nativeSessionBridge.login(this.activeSessionId, password, remember);
+      hilog.info(DOMAIN, TAG, 'submitPassword sessionId=%{public}s remember=%{public}s ok=%{public}s', this.activeSessionId, String(remember), String(response.ok));
       this.updateSessionState(response);
       if (!response.ok) {
         this.failConnectionAttempt(response.message ?? '密码提交失败');
@@ -2142,6 +2346,7 @@ struct RustDeskIndex {
       this.unregisterFoldHoverListeners();
       this.passwordDialogVisible = false;
       this.showPreviewModal = false;
+      this.clearActiveSessionHandoffState();
       this.clearPasswordTimeout();
       this.inputController?.releasePressedButtons();
       this.clearSurfaceBinding();
@@ -3024,6 +3229,8 @@ struct RustDeskIndex {
       this.syncTransferState();
       if (this.transferManager.canTransfer() && this.transferConnectionPending) {
         this.clearConnectionTimeout();
+        this.dismissPasswordDialogFor('file_transfer');
+        this.errorText = '';
         this.transferConnectionPending = false;
         this.connectionUiPhase = 'idle';
         this.connectionUiMessage = '';
@@ -4054,6 +4261,7 @@ struct RustDeskIndex {
       return;
     }
     this.showPreviewModal = true;
+    this.syncRemoteSessionSharing();
     this.syncInputInterceptor();
     this.registerFoldHoverListeners();
     this.previewSurfaceVisible = false;
@@ -4322,7 +4530,7 @@ struct RustDeskIndex {
   }
 
   private shouldDrawRemoteCursorOverlay(): boolean {
-    return this.relativeMouseMode && this.remoteCursorVisible;
+    return this.isRemoteControlSessionActive() && this.relativeMouseMode && this.remoteCursorVisible;
   }
 
   private resetRemoteCursorVisualState(): void {
@@ -5246,6 +5454,8 @@ struct RustDeskIndex {
     }
     if (event.name === 'peer_info' || event.name === 'sync_peer_info') {
       this.clearConnectionTimeout();
+      this.dismissPasswordDialogFor('primary');
+      this.errorText = '';
       this.connectionUiPhase = 'connected';
       this.connectionUiMessage = '连接成功，正在准备远端画面。';
       this.sessionPhase = 'connected';

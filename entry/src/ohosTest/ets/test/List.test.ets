@@ -3,6 +3,7 @@ import chatStoreTest from './ChatStore.test';
 import downloadRootManagerTest from './DownloadRootManager.test';
 import pressedButtonStateTest from './RustDeskPressedButtonState.test';
 import remoteSessionOrientationPolicyTest from './RemoteSessionOrientationPolicy.test';
+import remoteSessionHandoffServiceTest from './RemoteSessionHandoffService.test';
 import sessionDisplayControllerTest from './SessionDisplayController.test';
 import sessionOverlayStateTest from './SessionOverlayState.test';
 import sessionToolbarMetricsTest from './SessionToolbarMetrics.test';
@@ -17,6 +18,7 @@ export default function testsuite(): void {
   downloadRootManagerTest();
   pressedButtonStateTest();
   remoteSessionOrientationPolicyTest();
+  remoteSessionHandoffServiceTest();
   sessionDisplayControllerTest();
   sessionOverlayStateTest();
   sessionToolbarMetricsTest();

@@ -7,6 +7,7 @@ export interface SessionStartOptions {
   isFileTransfer: boolean;
   isViewCamera: boolean;
   isViewOnly: boolean;
+  passwordEphemeral?: boolean;
 }
 
 export interface RemoteFileEntry {

@@ -1,13 +1,11 @@
 import {
   LuminousButton,
   LuminousControlSize,
-  LuminousSegmentedControl,
-  LuminousSelectionItem,
   LuminousSurface,
   LuminousTextField,
   LuminousTone,
 } from 'luminous_neo';
-import { ServerConfig, ServerMode } from '../RustDeskDirectoryTypes';
+import { ServerConfig } from '../RustDeskDirectoryTypes';
 
 export interface ServerSettingsCardProps {
   showHeader: boolean;
@@ -68,13 +66,13 @@ export struct ServerSettingsCard {
 
   private copyConfig(): ServerConfig {
     const next = new ServerConfig();
-    next.mode = this.config.mode;
+    next.mode = 'custom';
     next.idServer = this.config.idServer;
     next.relayServer = this.config.relayServer;
     next.apiServer = this.config.apiServer;
     next.key = this.config.key;
     next.effectiveApiServer = this.config.effectiveApiServer;
-    next.usingPublicServer = this.config.usingPublicServer;
+    next.usingPublicServer = false;
     next.remoteReachable = this.config.remoteReachable;
     next.accountAvailable = this.config.accountAvailable;
     next.message = this.config.message;
@@ -88,17 +86,6 @@ export struct ServerSettingsCard {
     this.validationMessage = '';
     this.validationField = '';
     this.onConfigChange(next);
-  }
-
-  private updateMode(mode: ServerMode): void {
-    const next = this.copyConfig();
-    next.mode = mode;
-    next.usingPublicServer = mode === 'official';
-    this.emitDraft(next);
-  }
-
-  private updateModeIndex(index: number): void {
-    this.updateMode(index === 1 ? 'custom' : 'official');
   }
 
   private updateIdServer(value: string): void {
@@ -135,9 +122,6 @@ export struct ServerSettingsCard {
   }
 
   private validateFormat(config: ServerConfig): ResourceStr {
-    if (config.mode === 'official') {
-      return '';
-    }
     if (config.idServer.length === 0) {
       return $r('app.string.settings_server_error_id_required');
     }
@@ -156,9 +140,6 @@ export struct ServerSettingsCard {
   }
 
   private findValidationField(config: ServerConfig): string {
-    if (config.mode === 'official') {
-      return '';
-    }
     if (config.idServer.length === 0 || config.idServer.includes(' ')) {
       return 'id-server';
     }
@@ -202,9 +183,6 @@ export struct ServerSettingsCard {
   }
 
   private remoteStatusText(): ResourceStr {
-    if (this.config.mode === 'official') {
-      return $r('app.string.settings_server_remote_auto');
-    }
     if (this.config.remoteReachable) {
       return $r('app.string.settings_server_remote_ready');
     }
@@ -215,7 +193,7 @@ export struct ServerSettingsCard {
     if (this.config.accountAvailable) {
       return $r('app.string.settings_server_account_ready');
     }
-    if (this.config.mode === 'custom' && this.config.apiServer.trim().length === 0) {
+    if (this.config.effectiveApiServer.trim().length === 0) {
       return $r('app.string.settings_server_account_unconfigured');
     }
     return $r('app.string.settings_server_account_pending');
@@ -242,25 +220,6 @@ export struct ServerSettingsCard {
         onChange: onChange,
       })
         .margin({ top: -10 })
-    }
-    .width('100%')
-    .justifyContent(FlexAlign.Center);
-  }
-
-  @Builder
-  private ModeSelector() {
-    Row() {
-      LuminousSegmentedControl({
-        items: [
-          new LuminousSelectionItem('official', $r('app.string.settings_server_official')),
-          new LuminousSelectionItem('custom', $r('app.string.settings_server_custom')),
-        ],
-        selectedIndex: this.config.mode === 'custom' ? 1 : 0,
-        controlWidth: this.selectorWidth(),
-        controlHeight: 50,
-        motionEnabled: true,
-        onChange: (index: number) => this.updateModeIndex(index),
-      })
     }
     .width('100%')
     .justifyContent(FlexAlign.Center);
@@ -549,20 +508,13 @@ export struct ServerSettingsCard {
         .alignItems(VerticalAlign.Center);
       }
 
-      this.ModeSelector()
-
-      Text(this.config.mode === 'official'
-        ? $r('app.string.settings_server_public_hint')
-        : $r('app.string.settings_server_custom_hint'))
+      Text($r('app.string.settings_server_custom_hint'))
         .width('100%')
         .fontSize($r('app.float.font_body'))
         .lineHeight(20)
-        .fontColor($r('app.color.neu_text_secondary'))
-        .margin({ top: -12 });
+        .fontColor($r('app.color.neu_text_secondary'));
 
-      if (this.config.mode === 'custom') {
-        this.CustomFields()
-      }
+      this.CustomFields()
 
       this.StatusSummary()
 

@@ -195,6 +195,7 @@ export struct SettingsTab {
     defaults.preferredCodec = source.preferredCodec;
     defaults.gesturesEnabled = source.gesturesEnabled;
     defaults.toolbarExpanded = source.toolbarExpanded;
+    defaults.sessionSharingEnabled = source.sessionSharingEnabled;
     return defaults;
   }
 
@@ -246,9 +247,6 @@ export struct SettingsTab {
   }
 
   private serverSummary(): ResourceStr {
-    if (this.serverConfig.mode === 'official') {
-      return $r('app.string.settings_server_official');
-    }
     if (this.serverConfig.idServer.trim().length > 0) {
       return this.serverConfig.idServer.trim();
     }
@@ -832,7 +830,6 @@ export struct SettingsTab {
     } else if (this.selectedSection === 'account') {
       AccountSettingsCard({
         showHeader: false,
-        officialServer: this.serverConfig.mode === 'official',
         accountState: this.accountState,
         loginProviders: this.accountLoginProviders,
         onLogin: (username: string, password: string) => this.onAccountLogin(username, password),

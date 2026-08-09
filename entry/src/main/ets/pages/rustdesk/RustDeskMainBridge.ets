@@ -296,15 +296,13 @@ export class RustDeskMainBridge {
       config.message = message;
       return config;
     }
-    config.mode = String(source.mode ?? '') === 'custom' ? 'custom' : 'official';
+    config.mode = 'custom';
     config.idServer = String(source.idServer ?? '').trim();
     config.relayServer = String(source.relayServer ?? '').trim();
     config.apiServer = String(source.apiServer ?? '').trim();
     config.key = String(source.key ?? '').trim();
     config.effectiveApiServer = String(source.effectiveApiServer ?? config.apiServer).trim();
-    config.usingPublicServer = source.usingPublicServer === undefined
-      ? config.mode === 'official'
-      : Boolean(source.usingPublicServer);
+    config.usingPublicServer = false;
     config.remoteReachable = source.remoteReachable === undefined
       ? reachable
       : Boolean(source.remoteReachable);
@@ -388,6 +386,7 @@ export class RustDeskMainBridge {
       record.hostname = String(row.hostname ?? '').trim();
       record.platform = String(row.platform ?? '').trim();
       record.alias = String(row.alias ?? '').trim();
+      record.lanIp = String(row.ip ?? '').trim();
       record.source = peerSource;
       record.addressBookName = addressBookName;
       record.tags = this.copyStringArray(row.tags);

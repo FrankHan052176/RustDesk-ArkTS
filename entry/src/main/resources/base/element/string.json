@@ -130,11 +130,7 @@
     },
     {
       "name": "settings_server_subtitle",
-      "value": "官方公共服务或自定义 ID / Relay / API"
-    },
-    {
-      "name": "settings_server_official",
-      "value": "官方服务器"
+      "value": "配置 ID / Relay / API 与服务器公钥"
     },
     {
       "name": "settings_server_custom",
@@ -170,7 +166,7 @@
     },
     {
       "name": "settings_server_effective_api_auto",
-      "value": "由内核自动选择"
+      "value": "未配置"
     },
     {
       "name": "settings_server_remote_capability",
@@ -183,10 +179,6 @@
     {
       "name": "settings_server_remote_ready",
       "value": "地址解析通过"
-    },
-    {
-      "name": "settings_server_remote_auto",
-      "value": "由内核自动选择公共节点"
     },
     {
       "name": "settings_server_remote_pending",
@@ -234,7 +226,7 @@
     },
     {
       "name": "settings_server_error_id_required",
-      "value": "自定义模式至少需要填写 ID Server。"
+      "value": "需要填写 ID Server。"
     },
     {
       "name": "settings_server_error_id_space",
@@ -249,12 +241,8 @@
       "value": "API Server 需要以 http:// 或 https:// 开头。"
     },
     {
-      "name": "settings_server_public_hint",
-      "value": "官方模式会清空自定义字段，由内核自动选择公共 ID 与 Relay 节点。"
-    },
-    {
       "name": "settings_server_custom_hint",
-      "value": "自建开源服务器可能只提供远控，不一定包含账户与通讯簿 API。"
+      "value": "应用不预置服务器；配置 API 后会从该服务加载账户密码、OAuth 与通讯簿能力。"
     },
     {
       "name": "settings_defaults_title",
@@ -369,10 +357,6 @@
       "value": "账户能力由当前服务器的 API 提供；仅配置 ID / Relay 的自建服务器可能不支持登录。"
     },
     {
-      "name": "settings_account_official_login_hint",
-      "value": "登录 RustDesk 官方账户；支持账户密码、邮箱验证码、TOTP 双重验证和浏览器第三方授权，成功后可同步官方通讯簿。"
-    },
-    {
       "name": "settings_account_oidc_divider",
       "value": "或使用浏览器授权"
     },
@@ -481,10 +465,6 @@
       "value": "当前服务器账户"
     },
     {
-      "name": "settings_account_official_signed_in_hint",
-      "value": "RustDesk 官方账户"
-    },
-    {
       "name": "settings_account_email",
       "value": "邮箱"
     },
@@ -523,6 +503,14 @@
     {
       "name": "settings_status_checking",
       "value": "检查中"
+    },
+    {
+      "name": "settings_session_sharing",
+      "value": "允许分享当前远控"
+    },
+    {
+      "name": "settings_session_sharing_description",
+      "value": "允许隔空传送、碰一碰与接续；默认关闭"
     }
   ]
 }

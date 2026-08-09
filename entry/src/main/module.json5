@@ -30,6 +30,7 @@
         "startWindowBackground": "$color:start_window_background",
         "orientation": "follow_desktop",
         "preferMultiWindowOrientation": "landscape_auto",
+        "continuable": true,
         "backgroundModes": [
           "dataTransfer"
         ],
@@ -41,6 +42,18 @@
             ],
             "actions": [
               "action.system.home"
+            ]
+          },
+          {
+            "actions": [
+              "ohos.want.action.viewData"
+            ],
+            "uris": [
+              {
+                "scheme": "resk",
+                "host": "handoff",
+                "path": "remote"
+              }
             ]
           }
         ]

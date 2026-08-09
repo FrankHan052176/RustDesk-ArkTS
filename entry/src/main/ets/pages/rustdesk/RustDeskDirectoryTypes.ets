@@ -1,14 +1,14 @@
-export type ServerMode = 'official' | 'custom';
+export type ServerMode = 'custom';
 export type PeerSource = 'recent' | 'addressBook' | 'lan';
 
 export class ServerConfig {
-  mode: ServerMode = 'official';
+  mode: ServerMode = 'custom';
   idServer: string = '';
   relayServer: string = '';
   apiServer: string = '';
   key: string = '';
   effectiveApiServer: string = '';
-  usingPublicServer: boolean = true;
+  usingPublicServer: boolean = false;
   remoteReachable: boolean = false;
   accountAvailable: boolean = false;
   message: string = '';
@@ -20,6 +20,7 @@ export class PeerRecord {
   hostname: string = '';
   platform: string = '';
   alias: string = '';
+  lanIp: string = '';
   source: PeerSource = 'recent';
   addressBookName: string = '';
   tags: string[] = [];
@@ -46,6 +47,7 @@ export class SessionDefaults {
   preferredCodec: string = 'auto';
   gesturesEnabled: boolean = true;
   toolbarExpanded: boolean = false;
+  sessionSharingEnabled: boolean = false;
 }
 
 export class AccountState {

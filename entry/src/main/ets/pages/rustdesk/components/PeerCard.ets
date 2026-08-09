@@ -51,18 +51,10 @@ export struct PeerCard {
   }
 
   private identityDetail(): string {
-    const username = this.peer.username.trim();
-    const hostname = this.peer.hostname.trim();
-    if (username.length > 0 && hostname.length > 0 && hostname !== this.displayName()) {
-      return `${username} · ${hostname}`;
+    if (this.peer.source === 'lan' && this.peer.lanIp.trim().length > 0) {
+      return this.peer.lanIp.trim();
     }
-    if (hostname.length > 0 && hostname !== this.displayName()) {
-      return hostname;
-    }
-    if (username.length > 0 && username !== this.displayName()) {
-      return username;
-    }
-    return this.peer.platform.trim();
+    return this.peer.id;
   }
 
   private sourceAccent(): ResourceColor {
@@ -183,7 +175,7 @@ export struct PeerCard {
           .fontColor($r('app.color.neu_text_primary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(this.identityDetail().length > 0 ? this.identityDetail() : `ID ${this.peer.id}`)
+        Text(this.identityDetail())
           .width('100%')
           .fontSize(12)
           .fontColor($r('app.color.neu_text_secondary'))

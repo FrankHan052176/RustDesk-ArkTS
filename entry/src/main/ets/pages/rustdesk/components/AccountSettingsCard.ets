@@ -10,7 +10,6 @@ import { FloatingGlassSurface } from './FloatingSurface';
 
 export interface AccountSettingsCardProps {
   showHeader: boolean;
-  officialServer: boolean;
   accountState: AccountState;
   loginProviders: AccountLoginProvider[];
   onLogin: (username: string, password: string) => void;
@@ -25,7 +24,6 @@ export interface AccountSettingsCardProps {
 @ComponentV2
 export struct AccountSettingsCard {
   @Param showHeader: boolean = true;
-  @Param officialServer: boolean = true;
   @Param accountState: AccountState = new AccountState();
   @Param loginProviders: AccountLoginProvider[] = [];
   @Local username: string = '';
@@ -751,9 +749,7 @@ export struct AccountSettingsCard {
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis });
 
-          Text(this.officialServer
-            ? $r('app.string.settings_account_official_signed_in_hint')
-            : $r('app.string.settings_account_signed_in_hint'))
+          Text($r('app.string.settings_account_signed_in_hint'))
             .width('100%')
             .fontSize($r('app.float.font_label'))
             .fontColor($r('app.color.text_secondary'));

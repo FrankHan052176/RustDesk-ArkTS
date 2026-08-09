@@ -21,6 +21,7 @@ const DEFAULT_CODEC_PRIORITY_VERSION_KEY = 'default_codec_priority_version';
 const DEFAULT_CODEC_PRIORITY_VERSION = 1;
 const DEFAULT_GESTURES_ENABLED_KEY = 'default_gestures_enabled';
 const DEFAULT_TOOLBAR_EXPANDED_KEY = 'default_toolbar_expanded';
+const SESSION_SHARING_ENABLED_KEY = 'session_sharing_enabled';
 const ANDROID_NAVIGATION_VISIBLE_KEY = 'android_navigation_visible';
 const ANDROID_NAVIGATION_POSITION_INITIALIZED_KEY = 'android_navigation_position_initialized';
 const ANDROID_NAVIGATION_X_KEY = 'android_navigation_x';
@@ -215,6 +216,10 @@ export class RustDeskPreferences {
         DEFAULT_TOOLBAR_EXPANDED_KEY,
         defaults.toolbarExpanded,
       ) as boolean;
+      defaults.sessionSharingEnabled = store.getSync(
+        SESSION_SHARING_ENABLED_KEY,
+        defaults.sessionSharingEnabled,
+      ) as boolean;
     } catch (_) {
       return new SessionDefaults();
     }
@@ -236,6 +241,7 @@ export class RustDeskPreferences {
       store.putSync(DEFAULT_PREFERRED_CODEC_KEY, defaults.preferredCodec.trim());
       store.putSync(DEFAULT_GESTURES_ENABLED_KEY, defaults.gesturesEnabled);
       store.putSync(DEFAULT_TOOLBAR_EXPANDED_KEY, defaults.toolbarExpanded);
+      store.putSync(SESSION_SHARING_ENABLED_KEY, defaults.sessionSharingEnabled);
       store.flushSync();
     } catch (_) {
     }

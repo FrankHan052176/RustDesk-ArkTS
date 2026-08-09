@@ -21,6 +21,7 @@ export struct SessionDefaultsCard {
   @Local displayedClipboardEnabled: boolean = true;
   @Local displayedGesturesEnabled: boolean = true;
   @Local displayedToolbarExpanded: boolean = false;
+  @Local displayedSessionSharingEnabled: boolean = false;
   @Event onDefaultsChange: (defaults: SessionDefaults) => void = (_defaults: SessionDefaults) => {};
 
   aboutToAppear(): void {
@@ -37,6 +38,7 @@ export struct SessionDefaultsCard {
     this.displayedClipboardEnabled = this.defaults.clipboardEnabled;
     this.displayedGesturesEnabled = this.defaults.gesturesEnabled;
     this.displayedToolbarExpanded = this.defaults.toolbarExpanded;
+    this.displayedSessionSharingEnabled = this.defaults.sessionSharingEnabled;
   }
 
   private isWide(): boolean {
@@ -54,6 +56,7 @@ export struct SessionDefaultsCard {
     next.preferredCodec = this.defaults.preferredCodec;
     next.gesturesEnabled = this.defaults.gesturesEnabled;
     next.toolbarExpanded = this.defaults.toolbarExpanded;
+    next.sessionSharingEnabled = this.defaults.sessionSharingEnabled;
     return next;
   }
 
@@ -92,6 +95,13 @@ export struct SessionDefaultsCard {
     this.displayedToolbarExpanded = enabled;
     const next = this.copyDefaults();
     next.toolbarExpanded = enabled;
+    this.emit(next);
+  }
+
+  private updateSessionSharing(enabled: boolean): void {
+    this.displayedSessionSharingEnabled = enabled;
+    const next = this.copyDefaults();
+    next.sessionSharingEnabled = enabled;
     this.emit(next);
   }
 
@@ -273,6 +283,21 @@ export struct SessionDefaultsCard {
   }
 
   @Builder
+  private SessionSharingToggleRow() {
+    LuminousSwitch({
+      label: $r('app.string.settings_session_sharing'),
+      description: $r('app.string.settings_session_sharing_description'),
+      isOn: this.displayedSessionSharingEnabled,
+      rowWidth: this.toggleRowWidth(),
+      motionEnabled: true,
+      onChange: (enabled: boolean): void => this.updateSessionSharing(enabled),
+    })
+    .width(this.toggleRowWidth())
+    .height(64)
+    .clip(false);
+  }
+
+  @Builder
   private PointerModeSelector() {
     Column({ space: 2 }) {
       Text($r('app.string.settings_pointer_mode'))
@@ -439,6 +464,11 @@ export struct SessionDefaultsCard {
               }
               .width('100%');
 
+              Row() {
+                this.SessionSharingToggleRow()
+              }
+              .width('100%');
+
               Row({ space: $r('app.float.space_8') }) {
                 Column() {
                   this.GesturesToggleRow()
@@ -459,6 +489,7 @@ export struct SessionDefaultsCard {
               this.ClipboardToggleRow()
               this.GesturesToggleRow()
               this.ToolbarToggleRow()
+              this.SessionSharingToggleRow()
             }
             .width('100%');
           }

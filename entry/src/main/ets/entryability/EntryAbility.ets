@@ -1,4 +1,4 @@
-import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
+import { AbilityConstant, UIAbility, Want, wantConstant } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
@@ -10,6 +10,12 @@ import {
   DataTransferBackgroundService,
 } from '../services/DataTransferBackgroundService';
 import { EasyTierApiService } from '../services/EasyTierApiService';
+import {
+  REMOTE_SESSION_APP_STATE_EVENT,
+  REMOTE_SESSION_CONTINUE_PARAM,
+  REMOTE_SESSION_CONTINUE_STATE_EVENT,
+  RemoteSessionHandoffService,
+} from '../services/RemoteSessionHandoffService';
 import {
   shouldUseStatusBarKeepAlive,
   StatusBarKeepAliveService,
@@ -38,6 +44,9 @@ export default class EntryAbility extends UIAbility {
     this.dataTransferBackgroundService?.unbind();
     this.dataTransferBinding = undefined;
   };
+  private onRemoteSessionContinueState = (active: boolean): void => {
+    this.setContinueState(active);
+  };
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(DOMAIN, TAG, 'Ability onCreate');
@@ -47,7 +56,9 @@ export default class EntryAbility extends UIAbility {
     this.context.eventHub.on(DATA_TRANSFER_BACKGROUND_BIND_EVENT, this.onDataTransferBind);
     this.context.eventHub.on(DATA_TRANSFER_BACKGROUND_CHANGE_EVENT, this.onDataTransferChanged);
     this.context.eventHub.on(DATA_TRANSFER_BACKGROUND_UNBIND_EVENT, this.onDataTransferUnbind);
-    this.handleIncomingWant(want);
+    this.context.eventHub.on(REMOTE_SESSION_CONTINUE_STATE_EVENT, this.onRemoteSessionContinueState);
+    this.setContinueState(false);
+    this.handleIncomingWant(want, launchParam);
   }
 
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
@@ -57,11 +68,20 @@ export default class EntryAbility extends UIAbility {
       this.easyTierApiService = new EasyTierApiService(this.context);
       void this.easyTierApiService.startSnapshotObserver();
     }
-    this.handleIncomingWant(want);
+    this.handleIncomingWant(want, launchParam);
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
     hilog.info(DOMAIN, TAG, 'Ability onWindowStageCreate');
+    this.loadMainContent(windowStage);
+  }
+
+  onWindowStageRestore(windowStage: window.WindowStage): void {
+    hilog.info(DOMAIN, TAG, 'Ability onWindowStageRestore');
+    this.loadMainContent(windowStage);
+  }
+
+  private loadMainContent(windowStage: window.WindowStage): void {
     windowStage.loadContent('pages/RustDeskIndex', (err) => {
       if (err.code) {
         hilog.error(DOMAIN, TAG, 'Failed to load content: %{public}s', JSON.stringify(err) ?? '');
@@ -99,6 +119,7 @@ export default class EntryAbility extends UIAbility {
     this.context.eventHub.off(DATA_TRANSFER_BACKGROUND_BIND_EVENT, this.onDataTransferBind);
     this.context.eventHub.off(DATA_TRANSFER_BACKGROUND_CHANGE_EVENT, this.onDataTransferChanged);
     this.context.eventHub.off(DATA_TRANSFER_BACKGROUND_UNBIND_EVENT, this.onDataTransferUnbind);
+    this.context.eventHub.off(REMOTE_SESSION_CONTINUE_STATE_EVENT, this.onRemoteSessionContinueState);
     this.dataTransferBackgroundService?.destroy();
     this.dataTransferBackgroundService = undefined;
     this.dataTransferBinding = undefined;
@@ -113,11 +134,24 @@ export default class EntryAbility extends UIAbility {
     hilog.info(DOMAIN, TAG, 'Ability onForeground');
     this.dataTransferBackgroundService?.onForeground();
     void this.easyTierApiService?.startSnapshotObserver();
+    this.context.eventHub.emit(REMOTE_SESSION_APP_STATE_EVENT, true);
   }
 
   onBackground(): void {
     hilog.info(DOMAIN, TAG, 'Ability onBackground');
     this.dataTransferBackgroundService?.onBackground();
+    this.context.eventHub.emit(REMOTE_SESSION_APP_STATE_EVENT, false);
+    this.setContinueState(false);
+  }
+
+  onContinue(wantParam: Record<string, Object>): AbilityConstant.OnContinueResult {
+    const payload = RemoteSessionHandoffService.createContinuationPayload();
+    if (payload === undefined) {
+      return AbilityConstant.OnContinueResult.REJECT;
+    }
+    wantParam[REMOTE_SESSION_CONTINUE_PARAM] = payload;
+    wantParam[wantConstant.Params.SUPPORT_CONTINUE_PAGE_STACK_KEY] = false;
+    return AbilityConstant.OnContinueResult.AGREE;
   }
 
   private enableDataTransferKeepAlive(): void {
@@ -209,7 +243,21 @@ export default class EntryAbility extends UIAbility {
     }
   }
 
-  private handleIncomingWant(want: Want): void {
+  private setContinueState(active: boolean): void {
+    const state = active ? AbilityConstant.ContinueState.ACTIVE : AbilityConstant.ContinueState.INACTIVE;
+    this.context.setMissionContinueState(state).catch((error: BusinessError): void => {
+      hilog.warn(DOMAIN, TAG, 'setMissionContinueState ignored: %{public}d %{public}s', error.code, error.message);
+    });
+  }
+
+  private handleIncomingWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    if (launchParam.launchReason === AbilityConstant.LaunchReason.CONTINUATION &&
+      RemoteSessionHandoffService.handleContinuationWant(this.context, want)) {
+      return;
+    }
+    if (RemoteSessionHandoffService.handleDeepLinkWant(this.context, want)) {
+      return;
+    }
     if (!EasyTierApiService.isResultWant(want)) {
       return;
     }
