@@ -6,7 +6,7 @@
   "author": "",
   "license": "",
   "dependencies": {
-    "luminous_neo": "1.0.1"
+    "luminous_neo": "1.0.2"
   },
   "devDependencies": {},
   "dynamicDependencies": {}

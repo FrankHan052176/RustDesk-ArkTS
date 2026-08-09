@@ -21,6 +21,7 @@ env:
   OHOS_COMMAND_LINE_TOOLS_VERSION: 6.1.1.280
   CORE_HAR_PACKAGE: ${{ github.event.client_payload.package_name || inputs.package_name || 'rustdesk-ohrs' }}
   CORE_HAR_REGISTRY: https://devrepo.devcloud.cn-north-4.huaweicloud.com/artgalaxy/api/ohpm/cn-north-4_c07b1b38744f424b8d87a86532d38003_ohpm_1/
+  LUMINOUS_NEO_VERSION: 1.0.2
   SIGNING_REPOSITORY: ${{ vars.SIGNING_REPOSITORY || 'FrankHan052176/AppGallerySigning' }}
   SIGNING_REPOSITORY_REF: ${{ vars.SIGNING_REPOSITORY_REF || '70779bd9e42c8565772dd8c43c80b89a197c3369' }}
   AGC_ENABLED: ${{ secrets.AGC_CLIENT_ID != '' && secrets.AGC_CLIENT_SECRET != '' && secrets.AGC_APP_ID != '' }}
@@ -69,7 +70,8 @@ jobs:
             --retry_interval 3000
           (
             cd entry
-            ohpm install \
+            echo "Installing Luminous Neo: luminous_neo@$LUMINOUS_NEO_VERSION"
+            ohpm install "luminous_neo@$LUMINOUS_NEO_VERSION" \
               --registry "$CORE_HAR_REGISTRY" \
               --retry_times 5 \
               --retry_interval 3000
@@ -83,7 +85,13 @@ jobs:
           rm -f "$private_config"
 
           core_har_version="$(jq -er '.version' "oh_modules/${CORE_HAR_PACKAGE}/oh-package.json5")"
+          luminous_neo_version="$(jq -er '.version' "entry/oh_modules/luminous_neo/oh-package.json5")"
+          if [[ "$luminous_neo_version" != "$LUMINOUS_NEO_VERSION" ]]; then
+            echo "Expected luminous_neo@$LUMINOUS_NEO_VERSION, got $luminous_neo_version" >&2
+            exit 1
+          fi
           echo "Core HAR version: $core_har_version"
+          echo "Luminous Neo version: $luminous_neo_version"
           echo "core_har_version=$core_har_version" >> "$GITHUB_OUTPUT"
 
       - name: Sign
