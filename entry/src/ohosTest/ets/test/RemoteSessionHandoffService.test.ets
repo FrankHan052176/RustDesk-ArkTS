@@ -11,7 +11,7 @@ export default function remoteSessionHandoffServiceTest(): void {
       const source = new RemoteSessionShareSnapshot();
       source.target = '192.168.1.10:21118';
       source.targetKind = 'ip';
-      source.password = 'temporary';
+      source.connToken = 'token';
       source.idServer = 'id.example.com';
       source.relayServer = 'relay.example.com';
       source.apiServer = 'https://api.example.com';
@@ -31,7 +31,7 @@ export default function remoteSessionHandoffServiceTest(): void {
       const source = new RemoteSessionShareSnapshot();
       source.target = '123456789';
       source.targetKind = 'target';
-      source.password = 'temporary';
+      source.connToken = 'token';
       source.idServer = 'id.example.com:21116';
       source.relayServer = 'relay.example.com:21117';
       source.apiServer = 'https://api.example.com';
@@ -56,6 +56,54 @@ export default function remoteSessionHandoffServiceTest(): void {
 
       expect(RemoteSessionHandoffService.buildConnectionTarget(envelope))
         .assertEqual('192.168.1.10:21118');
+    });
+
+    it('rejects manually accepted sessions without a Core connection token', 0, () => {
+      const snapshot = new RemoteSessionShareSnapshot();
+      snapshot.target = '192.168.1.10:21118';
+      snapshot.targetKind = 'ip';
+
+      RemoteSessionHandoffService.setOutgoingSnapshot(snapshot);
+      const payload = RemoteSessionHandoffService.createContinuationPayload();
+      RemoteSessionHandoffService.setOutgoingSnapshot(undefined);
+
+      expect(payload === undefined).assertEqual(true);
+    });
+
+    it('accepts a Core connection token without a plaintext password', 0, () => {
+      const snapshot = new RemoteSessionShareSnapshot();
+      snapshot.target = '123456789';
+      snapshot.targetKind = 'target';
+      snapshot.connToken = '{"password":[1,2,3],"password_source":"Undefined","session_id":7}';
+      snapshot.idServer = 'id.example.com:21116';
+
+      RemoteSessionHandoffService.setOutgoingSnapshot(snapshot);
+      const payload = RemoteSessionHandoffService.createContinuationPayload();
+      RemoteSessionHandoffService.setOutgoingSnapshot(undefined);
+
+      expect(payload === undefined).assertEqual(false);
+    });
+
+    it('shares a custom Deep Link instead of an App Linking URL', 0, () => {
+      const snapshot = new RemoteSessionShareSnapshot();
+      snapshot.target = '123456789';
+      snapshot.targetKind = 'target';
+      snapshot.connToken = 'token';
+      snapshot.idServer = 'id.example.com:21116';
+
+      const data = RemoteSessionHandoffService.buildSharedData(snapshot, 'gesture');
+      expect(data === undefined).assertEqual(false);
+      if (data === undefined) {
+        return;
+      }
+      const records = data.getRecords();
+      expect(records.length).assertEqual(1);
+      const content = records[0].content ?? '';
+      expect(content.startsWith('resk://handoff/remote?')).assertEqual(true);
+      expect(content.includes('v=1')).assertEqual(true);
+      expect(content.includes('target=123456789')).assertEqual(true);
+      expect(content.includes('source=gesture')).assertEqual(true);
+      expect(content.startsWith('https://')).assertEqual(false);
     });
   });
 }

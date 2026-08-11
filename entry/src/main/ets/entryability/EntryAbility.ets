@@ -12,7 +12,7 @@ import {
 import { EasyTierApiService } from '../services/EasyTierApiService';
 import {
   REMOTE_SESSION_APP_STATE_EVENT,
-  REMOTE_SESSION_CONTINUE_PARAM,
+  REMOTE_SESSION_CONTINUE_HANDOFF_EVENT,
   REMOTE_SESSION_CONTINUE_STATE_EVENT,
   RemoteSessionHandoffService,
 } from '../services/RemoteSessionHandoffService';
@@ -78,6 +78,10 @@ export default class EntryAbility extends UIAbility {
 
   onWindowStageRestore(windowStage: window.WindowStage): void {
     hilog.info(DOMAIN, TAG, 'Ability onWindowStageRestore');
+    if (this.mainWindow !== undefined) {
+      hilog.info(DOMAIN, TAG, 'Keeping existing main page for hot continuation');
+      return;
+    }
     this.loadMainContent(windowStage);
   }
 
@@ -141,7 +145,6 @@ export default class EntryAbility extends UIAbility {
     hilog.info(DOMAIN, TAG, 'Ability onBackground');
     this.dataTransferBackgroundService?.onBackground();
     this.context.eventHub.emit(REMOTE_SESSION_APP_STATE_EVENT, false);
-    this.setContinueState(false);
   }
 
   onContinue(wantParam: Record<string, Object>): AbilityConstant.OnContinueResult {
@@ -149,8 +152,10 @@ export default class EntryAbility extends UIAbility {
     if (payload === undefined) {
       return AbilityConstant.OnContinueResult.REJECT;
     }
-    wantParam[REMOTE_SESSION_CONTINUE_PARAM] = payload;
+    wantParam['data'] = payload;
+    wantParam[wantConstant.Params.SUPPORT_CONTINUE_SOURCE_EXIT_KEY] = false;
     wantParam[wantConstant.Params.SUPPORT_CONTINUE_PAGE_STACK_KEY] = false;
+    this.context.eventHub.emit(REMOTE_SESSION_CONTINUE_HANDOFF_EVENT);
     return AbilityConstant.OnContinueResult.AGREE;
   }
 
@@ -258,9 +263,8 @@ export default class EntryAbility extends UIAbility {
     if (RemoteSessionHandoffService.handleDeepLinkWant(this.context, want)) {
       return;
     }
-    if (!EasyTierApiService.isResultWant(want)) {
-      return;
+    if (EasyTierApiService.isResultWant(want)) {
+      void this.easyTierApiService?.handleWant(want);
     }
-    void this.easyTierApiService?.handleWant(want);
   }
 }

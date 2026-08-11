@@ -2,12 +2,14 @@ import { common, Want } from '@kit.AbilityKit';
 import { uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { util, url } from '@kit.ArkTS';
 import { window } from '@kit.ArkUI';
+import { deviceInfo } from '@kit.BasicServicesKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { harmonyShare, systemShare } from '@kit.ShareKit';
 
 export const REMOTE_SESSION_HANDOFF_EVENT = 'rustdesk.remote_session_handoff';
 export const REMOTE_SESSION_CONTINUE_STATE_EVENT = 'rustdesk.remote_session_continue_state';
+export const REMOTE_SESSION_CONTINUE_HANDOFF_EVENT = 'rustdesk.remote_session_continue_handoff';
 export const REMOTE_SESSION_APP_STATE_EVENT = 'rustdesk.remote_session_app_state';
-export const REMOTE_SESSION_CONTINUE_PARAM = 'rustdeskRemoteSessionHandoff';
 
 const HANDOFF_VERSION = 1;
 const HANDOFF_TTL_MS = 120000;
@@ -16,13 +18,15 @@ const MAX_CONSUMED_NONCES = 64;
 const HANDOFF_SCHEME = 'resk:';
 const HANDOFF_HOST = 'handoff';
 const HANDOFF_PATH = '/remote';
+const DOMAIN = 0xFF00;
+const TAG = 'RustDeskHandoff';
 
 export type RemoteSessionHandoffSource = 'gesture' | 'knock' | 'continuation';
 
 export class RemoteSessionShareSnapshot {
   target: string = '';
   targetKind: string = 'target';
-  password: string = '';
+  connToken: string = '';
   idServer: string = '';
   relayServer: string = '';
   apiServer: string = '';
@@ -56,16 +60,32 @@ export class RemoteSessionHandoffService {
     if (snapshot === undefined || !RemoteSessionHandoffService.isShareableSnapshot(snapshot)) {
       return undefined;
     }
-    return JSON.stringify(RemoteSessionHandoffService.createEnvelope(snapshot, 'continuation'));
+    return RemoteSessionHandoffService.buildDeepLink(
+      RemoteSessionHandoffService.createEnvelope(snapshot, 'continuation'),
+    );
   }
 
   static handleDeepLinkWant(context: common.UIAbilityContext, want: Want): boolean {
+    const parameters = want.parameters;
+    const rawParameter = parameters?.data;
+    if (typeof rawParameter === 'string' && rawParameter.length > 0) {
+      const parameterEnvelope = RemoteSessionHandoffService.parseDeepLink(rawParameter)
+        ?? RemoteSessionHandoffService.parseEnvelope(rawParameter);
+      if (parameterEnvelope !== undefined) {
+        hilog.info(DOMAIN, TAG, 'handoff payload received from Want parameters length=%{public}d', rawParameter.length);
+        RemoteSessionHandoffService.bufferIncoming(context, parameterEnvelope);
+        return true;
+      }
+    }
     const uri = want.uri;
     if (uri === undefined || uri.length === 0) {
+      hilog.info(DOMAIN, TAG, 'deep link want has no uri');
       return false;
     }
+    hilog.info(DOMAIN, TAG, 'deep link want received uriLength=%{public}d', uri.length);
     const envelope = RemoteSessionHandoffService.parseDeepLink(uri);
     if (envelope === undefined) {
+      hilog.warn(DOMAIN, TAG, 'deep link want rejected by parser');
       return false;
     }
     RemoteSessionHandoffService.bufferIncoming(context, envelope);
@@ -77,11 +97,12 @@ export class RemoteSessionHandoffService {
     if (parameters === undefined) {
       return false;
     }
-    const rawPayload = parameters[REMOTE_SESSION_CONTINUE_PARAM];
-    if (typeof rawPayload !== 'string') {
+    const rawPayload = parameters.data;
+    if (typeof rawPayload !== 'string' || rawPayload.length === 0) {
       return false;
     }
-    const envelope = RemoteSessionHandoffService.parseEnvelope(rawPayload);
+    const envelope = RemoteSessionHandoffService.parseDeepLink(rawPayload)
+      ?? RemoteSessionHandoffService.parseEnvelope(rawPayload);
     if (envelope === undefined || envelope.source !== 'continuation') {
       return false;
     }
@@ -136,7 +157,7 @@ export class RemoteSessionHandoffService {
     const snapshot = new RemoteSessionShareSnapshot();
     snapshot.target = source.target;
     snapshot.targetKind = source.targetKind;
-    snapshot.password = source.password;
+    snapshot.connToken = source.connToken;
     snapshot.idServer = source.idServer;
     snapshot.relayServer = source.relayServer;
     snapshot.apiServer = source.apiServer;
@@ -155,7 +176,7 @@ export class RemoteSessionHandoffService {
     const envelope = new RemoteSessionHandoffEnvelope();
     envelope.target = snapshot.target.trim();
     envelope.targetKind = snapshot.targetKind;
-    envelope.password = snapshot.password;
+    envelope.connToken = snapshot.connToken;
     envelope.idServer = snapshot.idServer.trim();
     envelope.relayServer = snapshot.relayServer.trim();
     envelope.apiServer = snapshot.apiServer.trim();
@@ -184,16 +205,64 @@ export class RemoteSessionHandoffService {
     try {
       const parsed = url.URL.parseURL(link);
       if (parsed.protocol !== HANDOFF_SCHEME || parsed.hostname !== HANDOFF_HOST || parsed.pathname !== HANDOFF_PATH) {
+        hilog.warn(
+          DOMAIN,
+          TAG,
+          'deep link shape mismatch protocol=%{public}s host=%{public}s path=%{public}s',
+          parsed.protocol,
+          parsed.hostname,
+          parsed.pathname,
+        );
         return undefined;
       }
       const payload = parsed.params.get('payload');
-      if (payload === null) {
-        return undefined;
+      if (payload !== null && payload.length > 0) {
+        return RemoteSessionHandoffService.parseEnvelope(payload);
       }
-      return RemoteSessionHandoffService.parseEnvelope(payload);
-    } catch (_) {
+      return RemoteSessionHandoffService.parseQueryEnvelope(parsed.params);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'deep link URL parsing threw: %{public}s', String(error));
       return undefined;
     }
+  }
+
+  private static parseQueryEnvelope(params: url.URLParams): RemoteSessionHandoffEnvelope | undefined {
+    const version = params.get('v');
+    const nonce = params.get('nonce');
+    const issuedAt = params.get('issued_at');
+    const expiresAt = params.get('expires_at');
+    const sourceValue = params.get('source');
+    const target = params.get('target');
+    const targetKind = params.get('target_kind');
+    const connectionMode = params.get('connection_mode');
+    const oneTime = params.get('one_time');
+    if (version === null || nonce === null || issuedAt === null || expiresAt === null ||
+      sourceValue === null || target === null || targetKind === null || connectionMode === null ||
+      oneTime === null) {
+      return undefined;
+    }
+    const source = RemoteSessionHandoffService.parseSource(sourceValue);
+    if (source === undefined) {
+      return undefined;
+    }
+    const envelope = new RemoteSessionHandoffEnvelope();
+    envelope.version = Number(version);
+    envelope.nonce = nonce.trim().toLowerCase();
+    envelope.issuedAt = Number(issuedAt);
+    envelope.expiresAt = Number(expiresAt);
+    envelope.source = source;
+    envelope.target = target.trim();
+    envelope.targetKind = targetKind.trim();
+    envelope.connToken = params.get('conn_token') ?? '';
+    envelope.idServer = params.get('id_server') ?? '';
+    envelope.relayServer = params.get('relay_server') ?? '';
+    envelope.apiServer = params.get('api_server') ?? '';
+    envelope.key = params.get('key') ?? '';
+    envelope.connectionMode = connectionMode.trim();
+    envelope.forceRelay = params.get('force_relay') === '1';
+    envelope.oneTime = oneTime === '1' || oneTime.toLowerCase() === 'true';
+    RemoteSessionHandoffService.normalizeTransportContext(envelope);
+    return RemoteSessionHandoffService.isEnvelopeValid(envelope) ? envelope : undefined;
   }
 
   private static parseEnvelope(payload: string): RemoteSessionHandoffEnvelope | undefined {
@@ -214,7 +283,7 @@ export class RemoteSessionHandoffService {
       envelope.source = source;
       envelope.target = String(value.target ?? '').trim();
       envelope.targetKind = String(value.targetKind ?? '').trim();
-      envelope.password = String(value.password ?? '');
+      envelope.connToken = String(value.connToken ?? '');
       envelope.idServer = String(value.idServer ?? '').trim();
       envelope.relayServer = String(value.relayServer ?? '').trim();
       envelope.apiServer = String(value.apiServer ?? '').trim();
@@ -267,7 +336,7 @@ export class RemoteSessionHandoffService {
     if (snapshot.target.trim().length === 0 || snapshot.target.length > 512) {
       return false;
     }
-    if (snapshot.password.length === 0 || snapshot.password.length > 1024) {
+    if (snapshot.connToken.length === 0 || snapshot.connToken.length > 4096) {
       return false;
     }
     if (snapshot.idServer.length > 512 || snapshot.relayServer.length > 512 || snapshot.apiServer.length > 1024) {
@@ -333,7 +402,6 @@ export class RemoteSessionShareController {
     this.registrationGeneration += 1;
     this.unregister();
     this.snapshot = snapshot === undefined ? undefined : RemoteSessionHandoffService.copySnapshot(snapshot);
-    RemoteSessionHandoffService.setOutgoingSnapshot(this.snapshot);
     if (this.snapshot === undefined) {
       return;
     }
@@ -342,26 +410,44 @@ export class RemoteSessionShareController {
       if (generation !== this.registrationGeneration || this.snapshot === undefined) {
         return;
       }
-      const registry: harmonyShare.SendCapabilityRegistry = {
-        windowId: currentWindow.getWindowProperties().id,
-        sendOnly: true,
-      };
+      if (!canIUse('SystemCapability.Collaboration.HarmonyShare')) {
+        hilog.info(DOMAIN, TAG, 'HarmonyShare is unavailable on this device');
+        return;
+      }
+      const useWindowScope = RemoteSessionShareController.requiresWindowScope(currentWindow);
+      const registry: harmonyShare.SendCapabilityRegistry | undefined = useWindowScope
+        ? { windowId: currentWindow.getWindowProperties().id }
+        : undefined;
       this.registry = registry;
       try {
-        harmonyShare.on('gesturesShare', registry, this.gesturesCallback);
-        this.gesturesRegistered = true;
-      } catch (_) {
-        this.gesturesRegistered = false;
+        if (registry === undefined) {
+          harmonyShare.on('knockShare', this.knockCallback);
+        } else {
+          harmonyShare.on('knockShare', registry, this.knockCallback);
+        }
+        this.knockRegistered = true;
+        hilog.info(DOMAIN, TAG, 'knockShare listener registered scoped=%{public}s', useWindowScope.toString());
+      } catch (error) {
+        this.knockRegistered = false;
+        hilog.error(DOMAIN, TAG, 'knockShare registration failed: %{public}s', String(error));
       }
       try {
-        harmonyShare.on('knockShare', registry, this.knockCallback);
-        this.knockRegistered = true;
-      } catch (_) {
-        this.knockRegistered = false;
+        if (registry === undefined) {
+          harmonyShare.on('gesturesShare', this.gesturesCallback);
+        } else {
+          harmonyShare.on('gesturesShare', registry, this.gesturesCallback);
+        }
+        this.gesturesRegistered = true;
+        hilog.info(DOMAIN, TAG, 'gesturesShare listener registered scoped=%{public}s', useWindowScope.toString());
+      } catch (error) {
+        this.gesturesRegistered = false;
+        hilog.error(DOMAIN, TAG, 'gesturesShare registration failed: %{public}s', String(error));
       }
-    }).catch((): void => {
-      this.snapshot = undefined;
-      RemoteSessionHandoffService.setOutgoingSnapshot(undefined);
+    }).catch((error: Error): void => {
+      if (generation !== this.registrationGeneration) {
+        return;
+      }
+      hilog.error(DOMAIN, TAG, 'share window lookup failed: %{public}s', error.message);
     });
   }
 
@@ -369,26 +455,54 @@ export class RemoteSessionShareController {
     this.registrationGeneration += 1;
     this.unregister();
     this.snapshot = undefined;
-    RemoteSessionHandoffService.setOutgoingSnapshot(undefined);
   }
 
   private unregister(): void {
     const registry = this.registry;
-    if (registry !== undefined && this.gesturesRegistered) {
-      try {
-        harmonyShare.off('gesturesShare', registry, this.gesturesCallback);
-      } catch (_) {
-      }
-    }
     if (registry !== undefined && this.knockRegistered) {
       try {
         harmonyShare.off('knockShare', registry, this.knockCallback);
-      } catch (_) {
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'knockShare unregister ignored: %{public}s', String(error));
+      }
+    } else if (this.knockRegistered) {
+      try {
+        harmonyShare.off('knockShare', this.knockCallback);
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'knockShare unregister ignored: %{public}s', String(error));
+      }
+    }
+    if (registry !== undefined && this.gesturesRegistered) {
+      try {
+        harmonyShare.off('gesturesShare', registry, this.gesturesCallback);
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'gesturesShare unregister ignored: %{public}s', String(error));
+      }
+    } else if (this.gesturesRegistered) {
+      try {
+        harmonyShare.off('gesturesShare', this.gesturesCallback);
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'gesturesShare unregister ignored: %{public}s', String(error));
       }
     }
     this.registry = undefined;
     this.gesturesRegistered = false;
     this.knockRegistered = false;
+  }
+
+  private static requiresWindowScope(currentWindow: window.Window): boolean {
+    const deviceType = deviceInfo.deviceType.trim().toLowerCase();
+    if (deviceType === 'pc' || deviceType === '2in1') {
+      return true;
+    }
+    if (deviceType !== 'tablet') {
+      return false;
+    }
+    try {
+      return currentWindow.getWindowStatus() === window.WindowStatusType.FLOATING;
+    } catch (_) {
+      return false;
+    }
   }
 
   private share(target: harmonyShare.SharableTarget, source: RemoteSessionHandoffSource): void {

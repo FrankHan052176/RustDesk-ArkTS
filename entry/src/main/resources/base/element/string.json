@@ -510,7 +510,7 @@
     },
     {
       "name": "settings_session_sharing_description",
-      "value": "允许隔空传送、碰一碰与接续；默认关闭"
+      "value": "仅控制本设备作为分享方；接收连接无需开启"
     }
   ]
 }

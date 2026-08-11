@@ -241,6 +241,8 @@ export class EasyTierApiService {
   private context: common.UIAbilityContext;
   private activeRequestIds: Set<string> = new Set<string>();
   private snapshotHandle: dataShare.DataProxyHandle | undefined = undefined;
+  private snapshotStartPromise: Promise<void> | undefined = undefined;
+  private snapshotObserverGeneration: number = 0;
   private onSnapshotChanged = (error: BusinessError<void>, changes: dataShare.DataProxyChangeInfo[]): void => {
     if (error) {
       hilog.error(DOMAIN, TAG, 'EasyTier snapshot subscription failed: %{public}s', error.message);
@@ -287,8 +289,31 @@ export class EasyTierApiService {
     if (deviceInfo.sdkApiVersion < 20 || this.snapshotHandle !== undefined) {
       return;
     }
+    const pending = this.snapshotStartPromise;
+    if (pending !== undefined) {
+      await pending;
+      return;
+    }
+    const generation = this.snapshotObserverGeneration;
+    const startPromise = this.registerSnapshotObserver(generation);
+    this.snapshotStartPromise = startPromise;
     try {
-      const handle = await dataShare.createDataProxyHandle();
+      await startPromise;
+    } finally {
+      if (this.snapshotStartPromise === startPromise) {
+        this.snapshotStartPromise = undefined;
+      }
+    }
+  }
+
+  private async registerSnapshotObserver(generation: number): Promise<void> {
+    let handle: dataShare.DataProxyHandle | undefined = undefined;
+    let subscribed: boolean = false;
+    try {
+      handle = await dataShare.createDataProxyHandle();
+      if (generation !== this.snapshotObserverGeneration) {
+        return;
+      }
       const config: dataShare.DataProxyConfig = {
         type: dataShare.DataProxyType.SHARED_CONFIG,
       };
@@ -297,22 +322,29 @@ export class EasyTierApiService {
         || results[0].result !== dataShare.DataProxyErrorCode.SUCCESS) {
         throw new Error('系统拒绝订阅 EasyTier 实例快照');
       }
+      subscribed = true;
+      if (generation !== this.snapshotObserverGeneration) {
+        this.unsubscribeSnapshotHandle(handle);
+        return;
+      }
       this.snapshotHandle = handle;
-      const snapshot = await EasyTierApiService.readSnapshot(this.context);
-      EasyTierApiService.deliverSnapshot(this.context, snapshot);
+      const snapshot = await EasyTierApiService.readSnapshot(this.context, handle);
+      if (generation === this.snapshotObserverGeneration) {
+        EasyTierApiService.deliverSnapshot(this.context, snapshot);
+      }
     } catch (error) {
-      const snapshot = new EasyTierSnapshotEvent(false, false,
-        `订阅 EasyTier 实例状态失败：${EasyTierApiService.errorMessage(error as Object)}`);
-      EasyTierApiService.deliverSnapshot(this.context, snapshot);
+      if (handle !== undefined && subscribed && this.snapshotHandle !== handle) {
+        this.unsubscribeSnapshotHandle(handle);
+      }
+      if (generation === this.snapshotObserverGeneration) {
+        const snapshot = new EasyTierSnapshotEvent(false, false,
+          `订阅 EasyTier 实例状态失败：${EasyTierApiService.errorMessage(error as Object)}`);
+        EasyTierApiService.deliverSnapshot(this.context, snapshot);
+      }
     }
   }
 
-  stopSnapshotObserver(): void {
-    const handle = this.snapshotHandle;
-    this.snapshotHandle = undefined;
-    if (handle === undefined) {
-      return;
-    }
+  private unsubscribeSnapshotHandle(handle: dataShare.DataProxyHandle): void {
     const config: dataShare.DataProxyConfig = {
       type: dataShare.DataProxyType.SHARED_CONFIG,
     };
@@ -324,7 +356,19 @@ export class EasyTierApiService {
     }
   }
 
-  static async readSnapshot(context: common.UIAbilityContext): Promise<EasyTierSnapshotEvent> {
+  stopSnapshotObserver(): void {
+    this.snapshotObserverGeneration += 1;
+    this.snapshotStartPromise = undefined;
+    const handle = this.snapshotHandle;
+    this.snapshotHandle = undefined;
+    if (handle === undefined) {
+      return;
+    }
+    this.unsubscribeSnapshotHandle(handle);
+  }
+
+  static async readSnapshot(context: common.UIAbilityContext,
+    existingHandle: dataShare.DataProxyHandle | undefined = undefined): Promise<EasyTierSnapshotEvent> {
     if (deviceInfo.sdkApiVersion < 20) {
       return new EasyTierSnapshotEvent(false, false, '当前系统版本不支持 EasyTier 实例状态共享');
     }
@@ -332,7 +376,10 @@ export class EasyTierApiService {
       type: dataShare.DataProxyType.SHARED_CONFIG,
     };
     try {
-      const handle = await dataShare.createDataProxyHandle();
+      let handle = existingHandle;
+      if (handle === undefined) {
+        handle = await dataShare.createDataProxyHandle();
+      }
       const results = await handle.get([EASYTIER_SNAPSHOT_URI], config);
       if (results.length !== 1 || results[0].uri !== EASYTIER_SNAPSHOT_URI) {
         return new EasyTierSnapshotEvent(false, false, '未找到 EasyTier 实例快照');

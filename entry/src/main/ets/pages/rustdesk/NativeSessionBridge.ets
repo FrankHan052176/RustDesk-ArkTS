@@ -12,6 +12,7 @@ export interface NativeSessionBridge {
   refresh(sessionId: string, display: number): ActionResponse;
   changeResolution(sessionId: string, display: number, width: number, height: number): ActionResponse;
   getImageQuality(sessionId: string): string | null;
+  getConnToken(sessionId: string): string | null;
   setImageQuality(sessionId: string, quality: string): ActionResponse;
   setCustomImageQuality(sessionId: string, quality: number): void;
   setCustomFps(sessionId: string, fps: number): ActionResponse;
@@ -54,6 +55,10 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
 
   getImageQuality(sessionId: string): string | null {
     return native.sessionGetImageQuality(sessionId);
+  }
+
+  getConnToken(sessionId: string): string | null {
+    return native.sessionGetConnToken(sessionId);
   }
 
   setImageQuality(sessionId: string, quality: string): ActionResponse {

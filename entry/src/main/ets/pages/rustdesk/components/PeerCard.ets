@@ -57,6 +57,16 @@ export struct PeerCard {
     return this.peer.id;
   }
 
+  private connectionTarget(): string {
+    if (this.peer.source === 'lan') {
+      const lanIp = this.peer.lanIp.trim();
+      if (lanIp.length > 0) {
+        return lanIp;
+      }
+    }
+    return this.peer.id;
+  }
+
   private sourceAccent(): ResourceColor {
     if (this.peer.source === 'lan') {
       return $r('app.color.success');
@@ -263,13 +273,13 @@ export struct PeerCard {
       }) {
         Stack({ alignContent: Alignment.Center }) {
           Row({ space: 8 }) {
-            this.SessionAction('远控', true, (): void => this.onConnectRemote(this.peer.id));
-            this.SessionAction('观看', false, (): void => this.onViewOnly(this.peer.id));
-            this.SessionAction('相机', false, (): void => this.onViewCamera(this.peer.id));
+            this.SessionAction('远控', true, (): void => this.onConnectRemote(this.connectionTarget()));
+            this.SessionAction('观看', false, (): void => this.onViewOnly(this.connectionTarget()));
+            this.SessionAction('相机', false, (): void => this.onViewCamera(this.connectionTarget()));
             this.SessionAction(
               this.transferActive ? '传输中' : '文件',
               this.transferActive,
-              (): void => this.onOpenTransfer(this.peer.id),
+              (): void => this.onOpenTransfer(this.connectionTarget()),
             );
           }
           .width('100%')

@@ -3,6 +3,7 @@ export type TransferState = 'queued' | 'running' | 'awaiting_override' | 'comple
 
 export interface SessionStartOptions {
   password: string;
+  connToken?: string;
   forceRelay: boolean;
   isFileTransfer: boolean;
   isViewCamera: boolean;

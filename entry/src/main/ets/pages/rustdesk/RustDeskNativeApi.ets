@@ -40,6 +40,7 @@ import {
   sessionClose as bridgeSessionClose,
   sessionEnterOrLeave as bridgeSessionEnterOrLeave,
   sessionGetImageQuality as bridgeSessionGetImageQuality,
+  sessionGetConnToken as bridgeSessionGetConnToken,
   sessionGetRenderStats as bridgeSessionGetRenderStats,
   sessionGetRemoteAudioState as bridgeSessionGetRemoteAudioState,
   sessionGetRgbaSize as bridgeSessionGetRgbaSize,
@@ -234,6 +235,10 @@ export class RustDeskNativeApi {
 
   sessionGetImageQuality(sessionId: string): string | null {
     return bridgeSessionGetImageQuality(sessionId);
+  }
+
+  sessionGetConnToken(sessionId: string): string | null {
+    return bridgeSessionGetConnToken(sessionId);
   }
 
   sessionGetRenderStats(sessionId: string, display: number): string {
