@@ -468,6 +468,7 @@ struct RustDeskIndex {
   @Local pendingResolutionWidth: number = 0;
   @Local pendingResolutionHeight: number = 0;
   private hdsTabsController: HdsTabsController = new HdsTabsController();
+  @Local hdsMaterialAvailable: boolean = false;
   @Local easyTierDataAvailable: boolean = false;
   @Local easyTierPreconnectEnabled: boolean = false;
   @Local easyTierSelectedInstanceId: string = '';
@@ -502,9 +503,23 @@ struct RustDeskIndex {
     hilog.info(DOMAIN, TAG, 'continuation payload delivered; closing source session');
     void this.closeSession('已接续到其他设备');
   };
+
+  private detectHdsMaterialCapability(): void {
+    this.hdsMaterialAvailable = false;
+    if (deviceInfo.distributionOSApiVersion < 60100) {
+      return;
+    }
+    try {
+      this.hdsMaterialAvailable = hdsMaterial.getSystemMaterialTypes().length > 0;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'HDS material capability unavailable: %{public}s', String(error));
+    }
+  }
+
   aboutToAppear(): void {
     this.pageVisible = true;
     this.appForeground = true;
+    this.detectHdsMaterialCapability();
     this.previewController.onCreated = (surfaceId: string) => this.handlePreviewSurfaceCreated(surfaceId);
     this.previewController.onChanged = (surfaceId: string, rect: SurfaceRect) =>
       this.handlePreviewSurfaceChanged(surfaceId, rect);
@@ -1572,6 +1587,7 @@ struct RustDeskIndex {
     peer.hostname = source.hostname;
     peer.platform = source.platform;
     peer.alias = source.alias;
+    peer.lanIp = source.lanIp;
     peer.source = source.source;
     peer.addressBookName = source.addressBookName;
     peer.tags = source.tags.slice();
@@ -6458,10 +6474,10 @@ struct RustDeskIndex {
           enableScrollEffect: false,
           scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
         },
-        systemMaterialEffect: {
+        systemMaterialEffect: this.hdsMaterialAvailable ? {
           materialType: hdsMaterial.MaterialType.ADAPTIVE,
           materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
-        },
+        } : undefined,
       },
     })
     .bindToScrollable([this.transferScroller])
@@ -7114,10 +7130,10 @@ struct RustDeskIndex {
       gradientMask: {
         maskColor: $r('app.color.tabs_gradient_mask'),
       },
-      systemMaterialEffect: {
+      systemMaterialEffect: this.hdsMaterialAvailable ? {
         materialType: hdsMaterial.MaterialType.ADAPTIVE,
         materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
-      },
+      } : undefined,
     })
     .width('100%')
     .height('100%')
@@ -7188,10 +7204,10 @@ struct RustDeskIndex {
               },
             },
           },
-          systemMaterialEffect: {
+          systemMaterialEffect: this.hdsMaterialAvailable ? {
             materialType: hdsMaterial.MaterialType.ADAPTIVE,
             materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
-          },
+          } : undefined,
         },
       })
       .bindToScrollable(this.activeMainScrollers())

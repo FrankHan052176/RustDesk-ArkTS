@@ -2,6 +2,7 @@ import { AbilityConstant, UIAbility, Want, wantConstant } from '@kit.AbilityKit'
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
+import { LuminousMotionLight } from 'luminous_neo';
 import {
   DATA_TRANSFER_BACKGROUND_BIND_EVENT,
   DATA_TRANSFER_BACKGROUND_CHANGE_EVENT,
@@ -120,6 +121,7 @@ export default class EntryAbility extends UIAbility {
 
   onDestroy(): void {
     hilog.info(DOMAIN, TAG, 'Ability onDestroy');
+    LuminousMotionLight.suspend();
     this.context.eventHub.off(DATA_TRANSFER_BACKGROUND_BIND_EVENT, this.onDataTransferBind);
     this.context.eventHub.off(DATA_TRANSFER_BACKGROUND_CHANGE_EVENT, this.onDataTransferChanged);
     this.context.eventHub.off(DATA_TRANSFER_BACKGROUND_UNBIND_EVENT, this.onDataTransferUnbind);
@@ -136,6 +138,7 @@ export default class EntryAbility extends UIAbility {
 
   onForeground(): void {
     hilog.info(DOMAIN, TAG, 'Ability onForeground');
+    LuminousMotionLight.resume();
     this.dataTransferBackgroundService?.onForeground();
     void this.easyTierApiService?.startSnapshotObserver();
     this.context.eventHub.emit(REMOTE_SESSION_APP_STATE_EVENT, true);
@@ -143,6 +146,7 @@ export default class EntryAbility extends UIAbility {
 
   onBackground(): void {
     hilog.info(DOMAIN, TAG, 'Ability onBackground');
+    LuminousMotionLight.suspend();
     this.dataTransferBackgroundService?.onBackground();
     this.context.eventHub.emit(REMOTE_SESSION_APP_STATE_EVENT, false);
   }

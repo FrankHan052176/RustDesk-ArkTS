@@ -116,51 +116,91 @@ export struct PeerCard {
 
   @Builder
   private FavoriteButton() {
-    Stack() {
-      FloatingActionSurface({
-        compact: true,
-        subtleDepth: true,
-        accessibilityLabel: this.favoriteActive ? '取消收藏设备' : '收藏设备',
-        onActivate: (): void => this.toggleFavorite(),
-      }) {
-        Stack({ alignContent: Alignment.Center }) {
-          SymbolGlyph(this.favoriteActive ? $r('sys.symbol.star_fill') : $r('sys.symbol.star'))
-            .fontSize(18)
-            .fontColor([this.favoriteActive
-              ? $r('app.color.warning')
-              : $r('app.color.neu_text_secondary')]);
+    Stack({ alignContent: Alignment.Center }) {
+      Stack() {
+        FloatingActionSurface({
+          compact: true,
+          subtleDepth: true,
+          actionEnabled: false,
+          accessibilityLabel: this.favoriteActive ? '取消收藏设备' : '收藏设备',
+          onActivate: (): void => {},
+        }) {
+          Stack({ alignContent: Alignment.Center }) {
+            SymbolGlyph(this.favoriteActive ? $r('sys.symbol.star_fill') : $r('sys.symbol.star'))
+              .fontSize(18)
+              .fontColor([this.favoriteActive
+                ? $r('app.color.warning')
+                : $r('app.color.neu_text_secondary')]);
+          }
+          .width('100%')
+          .height('100%');
         }
-        .width('100%')
-        .height('100%');
       }
+      .width(38)
+      .height(38)
+      .hitTestBehavior(HitTestMode.None)
+      .accessibilityLevel('no');
+
+      Button({ type: ButtonType.Normal, stateEffect: false }) {
+        Row()
+      }
+        .width(48)
+        .height(48)
+        .padding(0)
+        .backgroundColor(Color.Transparent)
+        .hoverEffect(HoverEffect.None)
+        .borderRadius(0)
+        .hitTestBehavior(HitTestMode.Block)
+        .zIndex(10)
+        .accessibilityText(this.favoriteActive ? '取消收藏设备' : '收藏设备')
+        .onClick((): void => this.toggleFavorite());
     }
-    .width(38)
-    .height(38)
-    .borderRadius(19)
+    .width(48)
+    .height(48)
     .clip(false);
   }
 
   @Builder
   private RemoveButton() {
-    Stack() {
-      FloatingActionSurface({
-        compact: true,
-        subtleDepth: true,
-        accessibilityLabel: '从最近设备中移除',
-        onActivate: (): void => this.onRemoveRecent(this.peer.id),
-      }) {
-        Stack({ alignContent: Alignment.Center }) {
-          SymbolGlyph($r('sys.symbol.trash'))
-            .fontSize(18)
-            .fontColor([$r('app.color.error')]);
+    Stack({ alignContent: Alignment.Center }) {
+      Stack() {
+        FloatingActionSurface({
+          compact: true,
+          subtleDepth: true,
+          actionEnabled: false,
+          accessibilityLabel: '从最近设备中移除',
+          onActivate: (): void => {},
+        }) {
+          Stack({ alignContent: Alignment.Center }) {
+            SymbolGlyph($r('sys.symbol.trash'))
+              .fontSize(18)
+              .fontColor([$r('app.color.error')]);
+          }
+          .width('100%')
+          .height('100%');
         }
-        .width('100%')
-        .height('100%');
       }
+      .width(38)
+      .height(38)
+      .hitTestBehavior(HitTestMode.None)
+      .accessibilityLevel('no');
+
+      Button({ type: ButtonType.Normal, stateEffect: false }) {
+        Row()
+      }
+        .width(48)
+        .height(48)
+        .padding(0)
+        .backgroundColor(Color.Transparent)
+        .hoverEffect(HoverEffect.None)
+        .borderRadius(0)
+        .hitTestBehavior(HitTestMode.Block)
+        .zIndex(10)
+        .accessibilityText('从最近设备中移除')
+        .onClick((): void => this.onRemoveRecent(this.peer.id));
     }
-    .width(38)
-    .height(38)
-    .borderRadius(19)
+    .width(48)
+    .height(48)
     .clip(false);
   }
 
