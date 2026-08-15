@@ -68,8 +68,14 @@ export class RustDeskMainBridge {
   }
 
   startAccountLogin(username: string, password: string): AccountActionResult {
+    const normalizedUsername = username.trim();
+    if (normalizedUsername.length === 0 || password.trim().length === 0) {
+      const result = new AccountActionResult();
+      result.message = '请输入用户名和密码';
+      return result;
+    }
     const payload: AccountLoginPayload = {
-      username: username.trim(),
+      username: normalizedUsername,
       password,
     };
     return this.parseAccountAction((): string => native.runtimeStartAccountLogin(JSON.stringify(payload)));

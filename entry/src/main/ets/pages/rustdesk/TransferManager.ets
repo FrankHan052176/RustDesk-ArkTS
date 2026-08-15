@@ -20,11 +20,13 @@ export class TransferManager {
   private remoteDirectory: string = '/';
   private remoteEntries: RemoteFileEntry[] = [];
   private transfers: TransferItem[] = [];
+  private pendingTransfers: TransferItem[] = [];
   private issuedSessionIds: string[] = [];
   private passwordRequested: boolean = false;
   private passwordMessage: string = '';
   private sessionState: TransferSessionState = 'idle';
   private statusMessage: string = '文件传输未连接';
+  private transferErrorMessage: string = '';
   private closeInProgress: boolean = false;
 
   constructor(bridge: NativeSessionBridge, sessionIdFactory: () => string) {
@@ -60,10 +62,12 @@ export class TransferManager {
     this.remoteDirectory = '/';
     this.remoteEntries = [];
     this.transfers = [];
+    this.pendingTransfers = [];
     this.passwordRequested = false;
     this.passwordMessage = '';
     this.sessionState = 'connecting';
     this.statusMessage = '正在建立文件传输连接';
+    this.transferErrorMessage = '';
 
     if (!this.bridge.startSession(resolvedSessionId).ok) {
       this.bridge.closeSession(resolvedSessionId);
@@ -115,6 +119,7 @@ export class TransferManager {
     if (!response.ok) {
       return false;
     }
+    this.promoteTransfer(actId);
     item.state = 'cancelled';
     return true;
   }
@@ -213,11 +218,12 @@ export class TransferManager {
       return false;
     }
     if (event.name === 'job_progress') {
-      item.state = 'running';
       const fileNum = this.parseNonNegativeInteger(event.file_num);
       if (fileNum !== undefined) {
         item.fileNum = fileNum;
       }
+      this.promoteTransfer(item.id);
+      item.state = 'running';
       const speed = this.parseNonNegativeNumber(event.speed);
       if (speed !== undefined) {
         item.speedBytesPerSecond = speed;
@@ -235,6 +241,7 @@ export class TransferManager {
       if (fileNum !== undefined) {
         item.fileNum = fileNum;
       }
+      this.promoteTransfer(item.id);
       item.state = 'completed';
       if (item.totalBytes > item.transferredBytes) {
         item.transferredBytes = item.totalBytes;
@@ -248,15 +255,23 @@ export class TransferManager {
       }
       const error = event.err?.trim() || 'Transfer failed';
       if (error === 'cancel') {
+        this.promoteTransfer(item.id);
         item.state = 'cancelled';
         item.errorText = '';
       } else if (error === 'skipped') {
+        this.promoteTransfer(item.id);
         item.state = 'completed';
         item.transferredBytes = item.totalBytes;
         item.errorText = '';
       } else {
-        item.state = 'failed';
-        item.errorText = error;
+        if (this.isPendingTransfer(item.id)) {
+          this.removePendingTransfer(item.id);
+          this.transferErrorMessage = this.transferStartErrorMessage(item.direction, error);
+          this.statusMessage = this.transferErrorMessage;
+        } else {
+          item.state = 'failed';
+          item.errorText = error;
+        }
       }
       return true;
     }
@@ -265,6 +280,7 @@ export class TransferManager {
       if (fileNum !== undefined) {
         item.fileNum = fileNum;
       }
+      this.promoteTransfer(item.id);
       item.state = 'awaiting_override';
       return true;
     }
@@ -314,6 +330,15 @@ export class TransferManager {
 
   public getStatusMessage(): string {
     return this.statusMessage;
+  }
+
+  public consumeTransferError(): string | undefined {
+    if (this.transferErrorMessage.length === 0) {
+      return undefined;
+    }
+    const message = this.transferErrorMessage;
+    this.transferErrorMessage = '';
+    return message;
   }
 
   public close(): boolean {
@@ -367,14 +392,19 @@ export class TransferManager {
       state: 'queued',
       errorText: '',
     };
-    this.transfers.push(item);
-
     const response = this.bridge.sendFiles(this.fileSessionId, actId, sourcePath, destinationPath, isRemote);
     if (response.ok) {
+      this.pendingTransfers.push(item);
+      this.statusMessage = direction === 'upload'
+        ? '正在验证远端目录是否可写'
+        : '正在验证本地目录是否可写';
       return true;
     }
-    item.state = 'failed';
-    item.errorText = response.message?.trim() || 'Unable to start transfer';
+    this.transferErrorMessage = this.transferStartErrorMessage(
+      direction,
+      response.message?.trim() || 'Unable to start transfer',
+    );
+    this.statusMessage = this.transferErrorMessage;
     return false;
   }
 
@@ -426,7 +456,56 @@ export class TransferManager {
         return item;
       }
     }
+    for (let index = 0; index < this.pendingTransfers.length; index += 1) {
+      const item = this.pendingTransfers[index];
+      if (item.id === actId) {
+        return item;
+      }
+    }
     return undefined;
+  }
+
+  private isPendingTransfer(actId: number): boolean {
+    for (let index = 0; index < this.pendingTransfers.length; index += 1) {
+      if (this.pendingTransfers[index].id === actId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private promoteTransfer(actId: number): void {
+    const pending = this.findPendingTransfer(actId);
+    if (pending === undefined) {
+      return;
+    }
+    this.removePendingTransfer(actId);
+    this.transfers.push(pending);
+    this.statusMessage = '文件传输已连接';
+  }
+
+  private findPendingTransfer(actId: number): TransferItem | undefined {
+    for (let index = 0; index < this.pendingTransfers.length; index += 1) {
+      if (this.pendingTransfers[index].id === actId) {
+        return this.pendingTransfers[index];
+      }
+    }
+    return undefined;
+  }
+
+  private removePendingTransfer(actId: number): void {
+    const remaining: TransferItem[] = [];
+    for (let index = 0; index < this.pendingTransfers.length; index += 1) {
+      if (this.pendingTransfers[index].id !== actId) {
+        remaining.push(this.pendingTransfers[index]);
+      }
+    }
+    this.pendingTransfers = remaining;
+  }
+
+  private transferStartErrorMessage(direction: TransferDirection, error: string): string {
+    const destination = direction === 'upload' ? '远端目录' : '本地目录';
+    return `${destination}无法创建文件或文件夹，无法开始传输：${error}`;
   }
 
   private isValidLocalPath(path: string): boolean {
@@ -510,10 +589,12 @@ export class TransferManager {
     this.remoteDirectory = '/';
     this.remoteEntries = [];
     this.transfers = [];
+    this.pendingTransfers = [];
     this.passwordRequested = false;
     this.passwordMessage = '';
     this.sessionState = 'idle';
     this.statusMessage = message;
+    this.transferErrorMessage = '';
   }
 
   private parsePositiveInteger(value: string | undefined): number | undefined {

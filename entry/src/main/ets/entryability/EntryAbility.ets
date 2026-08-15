@@ -1,8 +1,9 @@
 import { AbilityConstant, UIAbility, Want, wantConstant } from '@kit.AbilityKit';
-import { BusinessError } from '@kit.BasicServicesKit';
+import { BusinessError, commonEventManager } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { LuminousMotionLight } from 'luminous_neo';
+import { PrivacyConsentService } from '../services/PrivacyConsentService';
 import {
   DATA_TRANSFER_BACKGROUND_BIND_EVENT,
   DATA_TRANSFER_BACKGROUND_CHANGE_EVENT,
@@ -24,6 +25,12 @@ import {
 
 const DOMAIN = 0xFF00;
 const TAG = 'RustDeskHMOS';
+const PRIVACY_STATE_CHANGED_EVENT = 'usual.event.PRIVACY_STATE_CHANGED';
+
+interface PrivacyStateChangedPayload {
+  resultType?: number;
+  appIndex?: number;
+}
 
 export default class EntryAbility extends UIAbility {
   private dataTransferBackgroundService: DataTransferBackgroundService | undefined = undefined;
@@ -48,9 +55,17 @@ export default class EntryAbility extends UIAbility {
   private onRemoteSessionContinueState = (active: boolean): void => {
     this.setContinueState(active);
   };
+  private privacyConsentAccepted: boolean = false;
+  private appForeground: boolean = false;
+  private privacySubscriber: commonEventManager.CommonEventSubscriber | undefined = undefined;
+  private abilityDestroyed: boolean = false;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(DOMAIN, TAG, 'Ability onCreate');
+    this.abilityDestroyed = false;
+    LuminousMotionLight.suspend();
+    this.privacyConsentAccepted = PrivacyConsentService.readSystemAccepted();
+    this.subscribePrivacyStateChanged();
     this.statusBarKeepAliveService = new StatusBarKeepAliveService(this.context, () => this.restoreMainWindow());
     this.easyTierApiService = new EasyTierApiService(this.context);
     void this.easyTierApiService.startSnapshotObserver();
@@ -121,7 +136,9 @@ export default class EntryAbility extends UIAbility {
 
   onDestroy(): void {
     hilog.info(DOMAIN, TAG, 'Ability onDestroy');
+    this.abilityDestroyed = true;
     LuminousMotionLight.suspend();
+    this.unsubscribePrivacyStateChanged();
     this.context.eventHub.off(DATA_TRANSFER_BACKGROUND_BIND_EVENT, this.onDataTransferBind);
     this.context.eventHub.off(DATA_TRANSFER_BACKGROUND_CHANGE_EVENT, this.onDataTransferChanged);
     this.context.eventHub.off(DATA_TRANSFER_BACKGROUND_UNBIND_EVENT, this.onDataTransferUnbind);
@@ -138,7 +155,8 @@ export default class EntryAbility extends UIAbility {
 
   onForeground(): void {
     hilog.info(DOMAIN, TAG, 'Ability onForeground');
-    LuminousMotionLight.resume();
+    this.appForeground = true;
+    this.refreshPrivacyConsentFromSystem();
     this.dataTransferBackgroundService?.onForeground();
     void this.easyTierApiService?.startSnapshotObserver();
     this.context.eventHub.emit(REMOTE_SESSION_APP_STATE_EVENT, true);
@@ -146,9 +164,110 @@ export default class EntryAbility extends UIAbility {
 
   onBackground(): void {
     hilog.info(DOMAIN, TAG, 'Ability onBackground');
-    LuminousMotionLight.suspend();
+    this.appForeground = false;
+    this.syncLuminousMotionLight();
     this.dataTransferBackgroundService?.onBackground();
     this.context.eventHub.emit(REMOTE_SESSION_APP_STATE_EVENT, false);
+  }
+
+  private syncLuminousMotionLight(): void {
+    if (this.appForeground && this.privacyConsentAccepted) {
+      LuminousMotionLight.resume();
+      return;
+    }
+    LuminousMotionLight.suspend();
+  }
+
+  private subscribePrivacyStateChanged(): void {
+    const subscribeInfo: commonEventManager.CommonEventSubscribeInfo = {
+      events: [PRIVACY_STATE_CHANGED_EVENT],
+    };
+    commonEventManager.createSubscriber(subscribeInfo).then(
+      (subscriber: commonEventManager.CommonEventSubscriber): void => {
+        if (this.abilityDestroyed) {
+          commonEventManager.unsubscribe(subscriber, (): void => {});
+          return;
+        }
+        this.privacySubscriber = subscriber;
+        commonEventManager.subscribe(
+          subscriber,
+          (error: BusinessError, data: commonEventManager.CommonEventData): void => {
+            if (error) {
+              hilog.error(
+                DOMAIN,
+                TAG,
+                'Privacy state event failed: %{public}d %{public}s',
+                error.code,
+                error.message,
+              );
+              return;
+            }
+            this.handlePrivacyStateChanged(data);
+          },
+        );
+        this.refreshPrivacyConsentFromSystem();
+      },
+    ).catch((error: BusinessError): void => {
+      hilog.error(
+        DOMAIN,
+        TAG,
+        'Privacy state subscriber creation failed: %{public}d %{public}s',
+        error.code,
+        error.message,
+      );
+    });
+  }
+
+  private handlePrivacyStateChanged(data: commonEventManager.CommonEventData): void {
+    try {
+      const payload = JSON.parse(data.data ?? '{}') as PrivacyStateChangedPayload;
+      if (payload.appIndex !== undefined && payload.appIndex !== this.currentAppCloneIndex()) {
+        hilog.info(DOMAIN, TAG, 'Ignored privacy event for another app clone: %{public}d', payload.appIndex);
+        return;
+      }
+      const resultType = Number(payload.resultType ?? -1);
+      if (resultType !== 0 && resultType !== 1) {
+        hilog.warn(DOMAIN, TAG, 'Ignored invalid privacy result type: %{public}d', resultType);
+        return;
+      }
+      const accepted = resultType === 1;
+      this.privacyConsentAccepted = accepted;
+      this.syncLuminousMotionLight();
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'Failed to parse privacy state event: %{public}s', String(error));
+    }
+  }
+
+  private refreshPrivacyConsentFromSystem(): void {
+    this.privacyConsentAccepted = PrivacyConsentService.readSystemAccepted();
+    this.syncLuminousMotionLight();
+  }
+
+  private currentAppCloneIndex(): number {
+    try {
+      return this.context.getApplicationContext().getCurrentAppCloneIndex();
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  private unsubscribePrivacyStateChanged(): void {
+    const subscriber = this.privacySubscriber;
+    if (subscriber === undefined) {
+      return;
+    }
+    commonEventManager.unsubscribe(subscriber, (error?: BusinessError): void => {
+      if (error) {
+        hilog.warn(
+          DOMAIN,
+          TAG,
+          'Privacy state unsubscribe ignored: %{public}d %{public}s',
+          error.code,
+          error.message,
+        );
+      }
+    });
+    this.privacySubscriber = undefined;
   }
 
   onContinue(wantParam: Record<string, Object>): AbilityConstant.OnContinueResult {

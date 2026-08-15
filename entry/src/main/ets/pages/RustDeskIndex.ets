@@ -252,6 +252,7 @@ struct RustDeskIndex {
   private addressBookPollTimer: number = -1;
   private accountOidcActive: boolean = false;
   private accountOidcOpenedUrl: string = '';
+  private sessionReturnTabIndex: number = 0;
 
   @Local currentTabIndex: number = 0;
   @Local mainTabTransitionDirection: number = 1;
@@ -1305,7 +1306,16 @@ struct RustDeskIndex {
     if (this.accountState.busy || this.accountState.syncing) {
       return;
     }
-    const result = this.mainBridge.startAccountLogin(username, password);
+    const normalizedUsername = username.trim();
+    if (normalizedUsername.length === 0 || password.trim().length === 0) {
+      const invalid = this.copyAccountState(this.accountState);
+      invalid.busy = false;
+      invalid.message = '请输入用户名和密码';
+      this.accountState = invalid;
+      this.clearAccountPollTimer();
+      return;
+    }
+    const result = this.mainBridge.startAccountLogin(normalizedUsername, password);
     if (!result.ok || result.state !== 'pending') {
       const state = this.copyAccountState(this.accountState);
       state.message = result.message || '无法启动登录请求';
@@ -1685,6 +1695,7 @@ struct RustDeskIndex {
       this.errorText = '请输入目标地址';
       return;
     }
+    this.captureSessionReturnTab();
     this.updatePeerTarget(target);
     this.preferences?.saveTarget(target);
     if (!this.easyTierPreconnectEnabled || !this.easyTierDataAvailable) {
@@ -2091,6 +2102,7 @@ struct RustDeskIndex {
   }
 
   private async connectRemoteSessionHandoff(envelope: RemoteSessionHandoffEnvelope): Promise<void> {
+    this.sessionReturnTabIndex = 0;
     try {
       await this.connectSessionDirect('remote_control', envelope);
     } finally {
@@ -2409,6 +2421,7 @@ struct RustDeskIndex {
       this.unregisterFoldHoverListeners();
       this.passwordDialogVisible = false;
       this.showPreviewModal = false;
+      const shouldRestoreMainTab = reason !== '正在切换会话';
       this.clearActiveSessionHandoffState();
       this.clearPasswordTimeout();
       this.inputController?.releasePressedButtons();
@@ -2430,6 +2443,9 @@ struct RustDeskIndex {
         this.activeSessionDefaults = this.copySessionDefaults(this.sessionDefaults);
         this.applySessionDefaultsToIdleState(this.decoderCapabilities);
         this.refreshDirectorySnapshot();
+        if (shouldRestoreMainTab) {
+          this.restoreSessionReturnTab();
+        }
         return;
       }
       try {
@@ -2448,6 +2464,9 @@ struct RustDeskIndex {
         this.applySessionDefaultsToIdleState(this.decoderCapabilities);
         this.refreshDirectorySnapshot();
         this.publishDataTransferChanged();
+        if (shouldRestoreMainTab) {
+          this.restoreSessionReturnTab();
+        }
       }
     } finally {
       this.sessionCloseInFlight = false;
@@ -3079,6 +3098,7 @@ struct RustDeskIndex {
 
   private async openTransferWorkspace(): Promise<void> {
     if (this.transferManager.isReady() && this.transferSessionTarget === this.peerTarget.trim()) {
+      this.captureSessionReturnTab();
       await this.openTransferWorkspaceDirect();
       return;
     }
@@ -3160,6 +3180,7 @@ struct RustDeskIndex {
       this.closeTransferSession();
     } else {
       this.showTransferWorkspace = false;
+      this.restoreSessionReturnTab();
     }
     setTimeout(() => this.requestPreviewInputFocus(), 80);
   }
@@ -3285,6 +3306,10 @@ struct RustDeskIndex {
     this.transferPollInFlight = true;
     try {
       this.transferManager.poll();
+      const transferError = this.transferManager.consumeTransferError();
+      if (transferError !== undefined) {
+        this.reportTransferError(transferError);
+      }
       const passwordMessage = this.transferManager.consumePasswordRequest();
       if (passwordMessage !== undefined) {
         this.openPasswordDialog('file_transfer', passwordMessage);
@@ -3349,7 +3374,9 @@ struct RustDeskIndex {
     if (this.transferManager.upload(local.path, remotePath, local.size)) {
       this.syncTransferState();
       this.publishDataTransferChanged();
+      return;
     }
+    this.reportPendingTransferError();
   }
 
   private downloadSelectedTransferFile(): void {
@@ -3367,7 +3394,9 @@ struct RustDeskIndex {
     if (this.transferManager.download(remotePath, localPath, remote.size)) {
       this.syncTransferState();
       this.publishDataTransferChanged();
+      return;
     }
+    this.reportPendingTransferError();
   }
 
   private findLocalTransferEntry(name: string): LocalFileEntry | undefined {
@@ -3461,6 +3490,26 @@ struct RustDeskIndex {
     }
     this.transferConnectionStatus = '文件传输未连接';
     this.refreshDirectorySnapshot();
+    this.publishDataTransferChanged();
+    this.restoreSessionReturnTab();
+  }
+
+  private reportPendingTransferError(): void {
+    const message = this.transferManager.consumeTransferError();
+    if (message !== undefined) {
+      this.reportTransferError(message);
+    }
+  }
+
+  private reportTransferError(message: string): void {
+    this.errorText = message;
+    this.transferConnectionStatus = message;
+    try {
+      this.getUIContext().getPromptAction().showToast({ message, duration: 5000 });
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'Failed to show transfer error: %{public}s', String(error));
+    }
+    this.syncTransferState();
     this.publishDataTransferChanged();
   }
 
@@ -6589,6 +6638,24 @@ struct RustDeskIndex {
     }, (): void => {
       this.currentTabIndex = index;
     });
+  }
+
+  private captureSessionReturnTab(): void {
+    if (this.currentTabIndex >= 0 && this.currentTabIndex <= 2) {
+      this.sessionReturnTabIndex = this.currentTabIndex;
+      return;
+    }
+    this.sessionReturnTabIndex = 0;
+  }
+
+  private restoreSessionReturnTab(): void {
+    const targetIndex = this.sessionReturnTabIndex;
+    this.currentTabIndex = targetIndex;
+    setTimeout((): void => {
+      if (!this.showPreviewModal && !this.showTransferWorkspace && !this.isWideMainLayout()) {
+        this.hdsTabsController.changeIndex(targetIndex);
+      }
+    }, 0);
   }
 
   private playRotationTransition(): void {

@@ -29,6 +29,7 @@ export struct AccountSettingsCard {
   @Local username: string = '';
   @Local password: string = '';
   @Local verificationCode: string = '';
+  @Local inputError: string = '';
   @Local viewportWidth: number = 390;
   @Event onLogin: (username: string, password: string) => void = (_username: string, _password: string) => {};
   @Event onVerify: (code: string) => void = (_code: string) => {};
@@ -103,9 +104,14 @@ export struct AccountSettingsCard {
   private requestLogin(): void {
     const normalizedUsername = this.username.trim();
     const submittedPassword = this.password;
-    if (normalizedUsername.length === 0 || submittedPassword.length === 0 || this.isBusy()) {
+    if (this.isBusy()) {
       return;
     }
+    if (normalizedUsername.length === 0 || submittedPassword.trim().length === 0) {
+      this.inputError = '请输入用户名和密码';
+      return;
+    }
+    this.inputError = '';
     this.username = normalizedUsername;
     this.password = '';
     this.onLogin(normalizedUsername, submittedPassword);
@@ -577,6 +583,13 @@ export struct AccountSettingsCard {
       }
 
       this.LoginButton()
+
+      if (this.inputError.length > 0) {
+        Text(this.inputError)
+          .width(this.fieldSurfaceWidth())
+          .fontSize($r('app.float.font_caption'))
+          .fontColor($r('app.color.warning'));
+      }
 
       Text($r('app.string.settings_account_password_note'))
         .width(this.fieldSurfaceWidth())

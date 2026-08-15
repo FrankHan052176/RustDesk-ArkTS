@@ -88,6 +88,10 @@ class RecordingTransferBridge implements NativeSessionBridge {
     return null;
   }
 
+  getConnToken(_sessionId: string): string | null {
+    return null;
+  }
+
   setImageQuality(_sessionId: string, _quality: string): ActionResponse {
     return this.ok('set_image_quality');
   }
@@ -165,8 +169,9 @@ export default function transferManagerTest(): void {
       openManager(manager);
       expect(manager.upload('/root/local.txt', '/remote/local.txt', 100)).assertTrue();
 
-      expect(manager.snapshot()[0].state).assertEqual('queued');
+      expect(manager.snapshot().length).assertEqual(0);
       expect(manager.handleEvent({ name: 'job_progress', id: '7', file_num: '0', speed: '12', finished_size: '30' })).assertTrue();
+      expect(manager.snapshot()[0].state).assertEqual('running');
       expect(manager.snapshot()[0].transferredBytes).assertEqual(30);
       expect(manager.snapshot()[0].speedBytesPerSecond).assertEqual(12);
       expect(manager.handleEvent({ name: 'job_done', id: '7', file_num: '0' })).assertTrue();
@@ -178,6 +183,13 @@ export default function transferManagerTest(): void {
       const manager = createManager(bridge);
       openManager(manager);
       manager.upload('/root/failed.txt', '/remote/failed.txt', 50);
+      expect(manager.handleEvent({
+        name: 'job_progress',
+        id: '7',
+        file_num: '0',
+        speed: '1',
+        finished_size: '1',
+      })).assertTrue();
 
       expect(manager.handleEvent({ name: 'job_error', id: '7', file_num: '0', err: 'disk full' })).assertTrue();
       expect(manager.snapshot()[0].state).assertEqual('failed');
@@ -190,16 +202,34 @@ export default function transferManagerTest(): void {
       expect(bridge.calls[5]).assertEqual('override:file-session:8:true:true');
     });
 
-    it('does not update jobs for another job or file number', 0, () => {
+    it('reports a destination error without leaving an unstarted task', 0, () => {
+      const bridge = new RecordingTransferBridge();
+      const manager = createManager(bridge);
+      openManager(manager);
+      manager.upload('/root/blocked.txt', '/remote/blocked.txt', 50);
+
+      expect(manager.handleEvent({
+        name: 'job_error',
+        id: '7',
+        file_num: '0',
+        err: 'Access is denied',
+      })).assertTrue();
+      expect(manager.snapshot().length).assertEqual(0);
+      expect(manager.consumeTransferError()).assertContain('远端目录无法创建文件或文件夹');
+      expect(manager.consumeTransferError()).assertUndefined();
+    });
+
+    it('ignores another job and advances file numbers within the same job', 0, () => {
       const bridge = new RecordingTransferBridge();
       const manager = createManager(bridge);
       openManager(manager);
       manager.upload('/root/local.txt', '/remote/local.txt', 100);
 
       expect(manager.handleEvent({ name: 'job_progress', id: '8', file_num: '0', speed: '12', finished_size: '30' })).assertFalse();
-      expect(manager.handleEvent({ name: 'job_progress', id: '7', file_num: '1', speed: '12', finished_size: '30' })).assertFalse();
-      expect(manager.snapshot()[0].state).assertEqual('queued');
-      expect(manager.snapshot()[0].transferredBytes).assertEqual(0);
+      expect(manager.snapshot().length).assertEqual(0);
+      expect(manager.handleEvent({ name: 'job_progress', id: '7', file_num: '1', speed: '12', finished_size: '30' })).assertTrue();
+      expect(manager.snapshot()[0].fileNum).assertEqual(1);
+      expect(manager.snapshot()[0].transferredBytes).assertEqual(30);
     });
 
     it('routes polled file-session events to the transfer state', 0, () => {
@@ -255,9 +285,16 @@ export default function transferManagerTest(): void {
       openManager(manager);
       manager.upload('/root/local.txt', '/remote/local.txt', 100);
 
-      const items = manager.snapshot();
-      items[0].state = 'completed';
-      expect(manager.snapshot()[0].state).assertEqual('queued');
+      expect(manager.handleEvent({
+        name: 'job_progress',
+        id: '7',
+        file_num: '0',
+        speed: '12',
+        finished_size: '30',
+      })).assertTrue();
+      const activeItems = manager.snapshot();
+      activeItems[0].state = 'completed';
+      expect(manager.snapshot()[0].state).assertEqual('running');
     });
 
     it('sends downloads, cancels jobs, and closes only the file session', 0, () => {
