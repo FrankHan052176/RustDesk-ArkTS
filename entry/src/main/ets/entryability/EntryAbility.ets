@@ -63,8 +63,12 @@ export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(DOMAIN, TAG, 'Ability onCreate');
     this.abilityDestroyed = false;
+    LuminousMotionLight.disableSensorSubscription();
     LuminousMotionLight.suspend();
     this.privacyConsentAccepted = PrivacyConsentService.readSystemAccepted();
+    hilog.debug(DOMAIN, TAG,
+      'Startup privacy state accepted=%{public}s; gravity sensor remains explicitly gated',
+      String(this.privacyConsentAccepted));
     this.subscribePrivacyStateChanged();
     this.statusBarKeepAliveService = new StatusBarKeepAliveService(this.context, () => this.restoreMainWindow());
     this.easyTierApiService = new EasyTierApiService(this.context);
@@ -138,6 +142,7 @@ export default class EntryAbility extends UIAbility {
     hilog.info(DOMAIN, TAG, 'Ability onDestroy');
     this.abilityDestroyed = true;
     LuminousMotionLight.suspend();
+    LuminousMotionLight.disableSensorSubscription();
     this.unsubscribePrivacyStateChanged();
     this.context.eventHub.off(DATA_TRANSFER_BACKGROUND_BIND_EVENT, this.onDataTransferBind);
     this.context.eventHub.off(DATA_TRANSFER_BACKGROUND_CHANGE_EVENT, this.onDataTransferChanged);
@@ -171,9 +176,16 @@ export default class EntryAbility extends UIAbility {
   }
 
   private syncLuminousMotionLight(): void {
+    hilog.debug(DOMAIN, TAG,
+      'Sync motion sensor foreground=%{public}s privacyAccepted=%{public}s',
+      String(this.appForeground), String(this.privacyConsentAccepted));
     if (this.appForeground && this.privacyConsentAccepted) {
+      LuminousMotionLight.enableSensorSubscription();
       LuminousMotionLight.resume();
       return;
+    }
+    if (!this.privacyConsentAccepted) {
+      LuminousMotionLight.disableSensorSubscription();
     }
     LuminousMotionLight.suspend();
   }
@@ -232,6 +244,9 @@ export default class EntryAbility extends UIAbility {
       }
       const accepted = resultType === 1;
       this.privacyConsentAccepted = accepted;
+      hilog.debug(DOMAIN, TAG,
+        'Privacy event applied accepted=%{public}s appIndex=%{public}d',
+        String(accepted), payload.appIndex ?? this.currentAppCloneIndex());
       this.syncLuminousMotionLight();
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'Failed to parse privacy state event: %{public}s', String(error));
@@ -240,6 +255,8 @@ export default class EntryAbility extends UIAbility {
 
   private refreshPrivacyConsentFromSystem(): void {
     this.privacyConsentAccepted = PrivacyConsentService.readSystemAccepted();
+    hilog.debug(DOMAIN, TAG,
+      'System privacy state refreshed accepted=%{public}s', String(this.privacyConsentAccepted));
     this.syncLuminousMotionLight();
   }
 
