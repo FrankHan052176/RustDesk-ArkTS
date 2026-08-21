@@ -2852,6 +2852,26 @@ struct RustDeskIndex {
     if (modifier && !down && this.softKeyboardPressedKeys.indexOf(name) < 0) {
       return;
     }
+
+    // Optimized direct text input for Android remote peers:
+    if (this.isPeerAndroid() && down && !modifier) {
+      const character = this.softKeyboardCharacter(name, shift);
+      if (character.length > 0 && !ctrl && !alt && !command) {
+        try {
+          this.nativeSessionBridge.inputString(this.activeSessionId, character);
+          return;
+        } catch (_) {
+        }
+      }
+      if (name === 'VK_SPACE') {
+        try {
+          this.nativeSessionBridge.inputString(this.activeSessionId, ' ');
+          return;
+        } catch (_) {
+        }
+      }
+    }
+
     const usbHid = this.softKeyboardUsbHid(name);
     if (!modifier && usbHid !== undefined) {
       const character = down ? this.softKeyboardCharacter(name, shift) : '';

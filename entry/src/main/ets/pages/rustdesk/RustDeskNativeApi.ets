@@ -47,6 +47,7 @@ import {
   sessionGetToggleOption as bridgeSessionGetToggleOption,
   sessionHandleFlutterKeyEvent as bridgeSessionHandleFlutterKeyEvent,
   sessionInputKey as bridgeSessionInputKey,
+  sessionInputString as bridgeSessionInputString,
   sessionLogin as bridgeSessionLogin,
   sessionNextRgba as bridgeSessionNextRgba,
   sessionOnWaitingForImageDialogShow as bridgeSessionOnWaitingForImageDialogShow,
@@ -264,6 +265,10 @@ export class RustDeskNativeApi {
 
   sessionInputKey(sessionId: string, keyJson: string): string {
     return bridgeSessionInputKey(sessionId, keyJson);
+  }
+
+  sessionInputString(sessionId: string, value: string): string {
+    return bridgeSessionInputString(sessionId, value);
   }
 
   sessionLogin(sessionId: string, loginJson: string): string {
