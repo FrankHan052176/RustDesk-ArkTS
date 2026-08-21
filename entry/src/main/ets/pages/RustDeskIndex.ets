@@ -390,6 +390,7 @@ struct RustDeskIndex {
   @Local authDialogMode: AuthDialogMode = 'password';
   @Local code2faDraft: string = '';
   @Local trustThisDevice: boolean = false;
+  @Local canTrustDevice: boolean = true;
   @Local insecureConnectionDialogVisible: boolean = false;
   @Local insecureConnectionMessage: string = '';
   private insecureConnectionSessionId: string = '';
@@ -5865,6 +5866,7 @@ struct RustDeskIndex {
     if (type === 'input-2fa') {
       this.connectionSummary = '等待二次验证 (2FA)';
       this.errorText = message;
+      this.canTrustDevice = this.nativeSessionBridge.getEnableTrustedDevices(this.activeSessionId);
       this.openPasswordDialog('primary', message, '2fa');
       return;
     }
@@ -7739,6 +7741,7 @@ struct RustDeskIndex {
       PasswordDialog({
         visible: this.passwordDialogVisible,
         mode: this.authDialogMode,
+        canTrustDevice: this.canTrustDevice,
         password: this.passwordDraft,
         rememberPassword: this.rememberPassword,
         code2fa: this.code2faDraft,

@@ -12,6 +12,7 @@ export type AuthDialogMode = '2fa' | 'password';
 export interface PasswordDialogProps {
   visible: boolean;
   mode: AuthDialogMode;
+  canTrustDevice: boolean;
   password: string;
   rememberPassword: boolean;
   code2fa: string;
@@ -29,6 +30,7 @@ export interface PasswordDialogProps {
 export struct PasswordDialog {
   @Param visible: boolean = false;
   @Param mode: AuthDialogMode = 'password';
+  @Param canTrustDevice: boolean = true;
   @Param password: string = '';
   @Param rememberPassword: boolean = false;
   @Param code2fa: string = '';
@@ -109,6 +111,7 @@ export struct PasswordDialog {
             .justifyContent(FlexAlign.Center)
             .clip(false);
 
+            if (this.canTrustDevice) {
             LuminousSwitch({
               label: '信任此设备',
               description: '下次连接该设备无需重复 2FA 验证',
@@ -119,6 +122,7 @@ export struct PasswordDialog {
                 this.onTrustThisDeviceChange(value);
               },
             })
+            }
           } else {
             Row() {
               LuminousTextField({
