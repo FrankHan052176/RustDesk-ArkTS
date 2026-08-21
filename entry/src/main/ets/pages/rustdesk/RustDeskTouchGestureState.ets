@@ -26,6 +26,11 @@ export class RustDeskTouchGestureState {
   private pendingTapX: number = 0;
   private pendingTapY: number = 0;
   private pendingTapAt: number = 0;
+  private twoFingerRightClickEnabled: boolean = false;
+
+  setTwoFingerRightClick(enabled: boolean): void {
+    this.twoFingerRightClickEnabled = enabled;
+  }
 
   onDown(x: number, y: number, at: number): Array<RustDeskTouchAction> {
     this.downActive = true;
@@ -40,21 +45,31 @@ export class RustDeskTouchGestureState {
     return [];
   }
 
-  onMove(x: number, y: number): Array<RustDeskTouchAction> {
+  onMove(x: number, y: number, allowPanSwipe: boolean = false): Array<RustDeskTouchAction> {
     if (!this.downActive) {
       return [];
     }
     this.lastX = x;
     this.lastY = y;
+    const actions: Array<RustDeskTouchAction> = [];
     if (!this.dragActive) {
       if (this.distanceReachesLongPressRange(x, y, this.downX, this.downY)) {
         this.longPressCancelledByMovement = true;
       }
       if (this.distanceExceedsTapRange(x, y, this.downX, this.downY)) {
         this.movedBeyondTapDistance = true;
+        if (allowPanSwipe) {
+          // Flutter touch scheme for Android in simulated mouse mode: one-finger swipe triggers drag_start at downX, downY
+          if (this.pendingTap) {
+            actions.push({ type: 'click_left', x: this.pendingTapX, y: this.pendingTapY });
+            this.clearPendingTap();
+          }
+          this.dragActive = true;
+          actions.push({ type: 'drag_start', x: this.downX, y: this.downY });
+        }
       }
     }
-    return [];
+    return actions;
   }
 
   onLongPress(at: number): Array<RustDeskTouchAction> {
@@ -88,6 +103,11 @@ export class RustDeskTouchGestureState {
       && !this.distanceExceedsTapRange(x, y, this.downX, this.downY);
     this.clearDownState();
     if (!tapCandidate) {
+      return actions;
+    }
+    if (this.twoFingerRightClickEnabled) {
+      this.clearPendingTap();
+      actions.push({ type: 'click_left', x, y });
       return actions;
     }
     if (this.pendingTap) {

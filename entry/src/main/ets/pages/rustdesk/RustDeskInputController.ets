@@ -40,6 +40,8 @@ export interface RustDeskInputControllerCallbacks {
   isSessionActive: () => boolean;
   isRelativeMode: () => boolean;
   isPeerMacOS: () => boolean;
+  isPeerAndroid: () => boolean;
+  twoFingerRightClick: () => boolean;
   getCoordinateSpace: () => RustDeskCoordinateSpace | undefined;
   sendMouse: (payload: RustDeskMousePayload) => void;
   sendFlutterKey: (payload: RustDeskFlutterKeyPayload) => boolean;
@@ -63,6 +65,9 @@ export class RustDeskInputController {
   private touchLastY: number = 0;
   private touchSecondaryLastX: number = 0;
   private touchSecondaryLastY: number = 0;
+  private touchTwoFingerDownAt: number = 0;
+  private touchTwoFingerMoved: boolean = false;
+  private touchTwoFingerTriggered: boolean = false;
   private touchLongPressTimer: number = -1;
   private touchTapTimeoutTimer: number = -1;
   private relativeLastX: number = 0;
@@ -473,6 +478,8 @@ export class RustDeskInputController {
   }
 
   private handleTouchDown(event: TouchEvent): void {
+    const twoFingerRightClick = this.callbacks.twoFingerRightClick();
+    this.touchGestureState.setTwoFingerRightClick(twoFingerRightClick);
     const changedTouches = event.changedTouches;
     for (let index = 0; index < changedTouches.length; index++) {
       const touch = changedTouches[index];
@@ -486,6 +493,9 @@ export class RustDeskInputController {
         this.touchPrimaryId = touch.id;
         this.touchLastX = touch.x;
         this.touchLastY = touch.y;
+        this.touchTwoFingerDownAt = 0;
+        this.touchTwoFingerMoved = false;
+        this.touchTwoFingerTriggered = false;
         this.applyTouchActions(this.touchGestureState.onDown(touch.x, touch.y, Date.now()));
         this.startLongPressTimer();
         continue;
@@ -494,6 +504,9 @@ export class RustDeskInputController {
         this.touchSecondaryId = touch.id;
         this.touchSecondaryLastX = touch.x;
         this.touchSecondaryLastY = touch.y;
+        this.touchTwoFingerDownAt = Date.now();
+        this.touchTwoFingerMoved = false;
+        this.touchTwoFingerTriggered = false;
         this.cancelTouchTimers();
         this.applyTouchActions(this.touchGestureState.reset());
       }
@@ -508,7 +521,28 @@ export class RustDeskInputController {
     if (!primaryTouch) {
       return;
     }
-    this.applyTouchActions(this.touchGestureState.onMove(primaryTouch.x, primaryTouch.y));
+    if (this.relativeModeActive) {
+      this.touchGestureState.onMove(primaryTouch.x, primaryTouch.y);
+      if (!this.touchGestureState.isLongPressPending()) {
+        this.cancelLongPressTimer();
+      }
+      if (this.touchSecondaryId !== -1) {
+        this.cancelLongPressTimer();
+        this.handleTwoFingerScroll(event);
+        return;
+      }
+      const deltaX = primaryTouch.x - this.touchLastX;
+      const deltaY = primaryTouch.y - this.touchLastY;
+      this.touchLastX = primaryTouch.x;
+      this.touchLastY = primaryTouch.y;
+      if (deltaX !== 0 || deltaY !== 0) {
+        const remoteDelta = this.mapLocalDeltaToRemoteDelta(deltaX, deltaY);
+        this.queueRelativeMouseMove(remoteDelta.x * TOUCHPAD_MOVE_SENSITIVITY, remoteDelta.y * TOUCHPAD_MOVE_SENSITIVITY);
+      }
+      return;
+    }
+    const isAndroidPeer: boolean = this.callbacks.isPeerAndroid();
+    this.applyTouchActions(this.touchGestureState.onMove(primaryTouch.x, primaryTouch.y, isAndroidPeer));
     if (!this.touchGestureState.isLongPressPending()) {
       this.cancelLongPressTimer();
     }
@@ -521,11 +555,6 @@ export class RustDeskInputController {
     this.touchLastX = primaryTouch.x;
     this.touchLastY = primaryTouch.y;
     if (deltaX === 0 && deltaY === 0) {
-      return;
-    }
-    if (this.relativeModeActive) {
-      const remoteDelta = this.mapLocalDeltaToRemoteDelta(deltaX, deltaY);
-      this.queueRelativeMouseMove(remoteDelta.x * TOUCHPAD_MOVE_SENSITIVITY, remoteDelta.y * TOUCHPAD_MOVE_SENSITIVITY);
       return;
     }
     this.moveRemoteCursorToLocalPoint(primaryTouch.x, primaryTouch.y);
@@ -572,20 +601,51 @@ export class RustDeskInputController {
         secondaryReleased = true;
       }
     }
+    const isTwoFinger = this.touchSecondaryId !== -1 || secondaryReleased;
+    if (isTwoFinger && this.callbacks.twoFingerRightClick() && !this.touchTwoFingerMoved
+      && this.touchTwoFingerDownAt > 0 && Date.now() - this.touchTwoFingerDownAt <= 350
+      && !this.touchTwoFingerTriggered) {
+      this.touchTwoFingerTriggered = true;
+      if (this.relativeModeActive) {
+        this.clickCurrentCursor('right');
+      } else {
+        this.applyTouchClick(primaryX, primaryY, 'right');
+      }
+      this.cancelTouchTimers();
+      this.applyTouchActions(this.touchGestureState.reset());
+      this.clearTouchPointerState();
+      return;
+    }
     if (primaryReleased) {
       const cancelled = event.type === TouchType.Cancel;
       this.cancelLongPressTimer();
-      this.applyTouchActions(this.touchGestureState.onRelease(primaryX, primaryY, Date.now(), cancelled));
+      if (!this.touchTwoFingerTriggered) {
+        this.applyTouchActions(this.touchGestureState.onRelease(primaryX, primaryY, Date.now(), cancelled));
+      }
       if (cancelled) {
         this.cancelTouchTapTimeout();
         this.applyTouchActions(this.touchGestureState.reset());
-      } else {
+      } else if (!this.callbacks.twoFingerRightClick()) {
         this.syncTouchTapTimeout(Date.now());
       }
       this.clearTouchPointerState();
       return;
     }
     if (secondaryReleased) {
+      if (this.callbacks.twoFingerRightClick() && !this.touchTwoFingerMoved
+        && this.touchTwoFingerDownAt > 0 && Date.now() - this.touchTwoFingerDownAt <= 350
+        && !this.touchTwoFingerTriggered) {
+        this.touchTwoFingerTriggered = true;
+        if (this.relativeModeActive) {
+          this.clickCurrentCursor('right');
+        } else {
+          this.applyTouchClick(primaryX, primaryY, 'right');
+        }
+        this.cancelTouchTimers();
+        this.applyTouchActions(this.touchGestureState.reset());
+        this.clearTouchPointerState();
+        return;
+      }
       this.touchSecondaryId = -1;
       this.touchSecondaryLastX = 0;
       this.touchSecondaryLastY = 0;

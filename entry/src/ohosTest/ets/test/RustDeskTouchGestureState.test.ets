@@ -120,6 +120,48 @@ export default function touchGestureStateTest(): void {
       expect(state.onTapTimeout(400).length).assertEqual(0);
     });
 
+    it('starts a Flutter-style left drag for Android when allowPanSwipe is enabled', 0, () => {
+      const state = new RustDeskTouchGestureState();
+      state.onDown(10, 10, 0);
+      const startActions = state.onMove(29, 10, true);
+      expect(startActions.length).assertEqual(1);
+      expect(startActions[0].type).assertEqual('drag_start');
+      expect(startActions[0].x).assertEqual(10);
+      expect(startActions[0].y).assertEqual(10);
+
+      const endActions = state.onRelease(29, 10, 100, false);
+      expect(endActions.length).assertEqual(1);
+      expect(endActions[0].type).assertEqual('drag_end');
+      expect(endActions[0].x).assertEqual(29);
+      expect(endActions[0].y).assertEqual(10);
+      expect(state.onTapTimeout(400).length).assertEqual(0);
+    });
+
+    it('commits a pending tap before starting a later one-finger drag when allowPanSwipe is enabled', 0, () => {
+      const state = new RustDeskTouchGestureState();
+      state.onDown(10, 10, 0);
+      state.onRelease(10, 10, 100, false);
+      state.onDown(60, 60, 140);
+
+      const actions = state.onMove(80, 60, true);
+      expect(actions.length).assertEqual(2);
+      expect(actions[0].type).assertEqual('click_left');
+      expect(actions[0].x).assertEqual(10);
+      expect(actions[0].y).assertEqual(10);
+      expect(actions[1].type).assertEqual('drag_start');
+      expect(actions[1].x).assertEqual(60);
+      expect(actions[1].y).assertEqual(60);
+    });
+
+    it('does not start a drag on normal move when allowPanSwipe is false (non-Android desktop mode)', 0, () => {
+      const state = new RustDeskTouchGestureState();
+      state.onDown(10, 10, 0);
+      const moveActions = state.onMove(30, 10, false);
+      expect(moveActions.length).assertEqual(0);
+      expect(state.onRelease(30, 10, 100, false).length).assertEqual(0);
+      expect(state.onTapTimeout(400).length).assertEqual(0);
+    });
+
     it('ends a drag once when a touch is cancelled', 0, () => {
       const state = new RustDeskTouchGestureState();
       state.onDown(10, 10, 0);

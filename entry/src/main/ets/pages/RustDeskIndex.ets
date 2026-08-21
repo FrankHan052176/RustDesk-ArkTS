@@ -655,6 +655,8 @@ struct RustDeskIndex {
         isSessionActive: () => this.isRemoteControlSessionActive(),
         isRelativeMode: () => this.relativeMouseMode,
         isPeerMacOS: () => this.isPeerMacOS(),
+        isPeerAndroid: () => this.isPeerAndroid(),
+        twoFingerRightClick: () => this.sessionDefaults.twoFingerRightClick,
         getCoordinateSpace: () => this.getCoordinateSpace(),
         sendMouse: (payload: RustDeskMousePayload) => this.sendMousePayload(payload),
         sendFlutterKey: (payload: RustDeskFlutterKeyPayload) => this.sendFlutterKeyPayloadObject(payload),
@@ -884,6 +886,7 @@ struct RustDeskIndex {
   private copySessionDefaults(source: SessionDefaults): SessionDefaults {
     const defaults = new SessionDefaults();
     defaults.relativeMouseMode = source.relativeMouseMode;
+    defaults.twoFingerRightClick = source.twoFingerRightClick;
     defaults.audioEnabled = source.audioEnabled;
     defaults.clipboardEnabled = source.clipboardEnabled;
     defaults.qualityPreset = source.qualityPreset;

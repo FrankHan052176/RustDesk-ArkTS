@@ -241,6 +241,46 @@ export struct SessionToolbar {
   }
 
   @Builder
+  private AndroidNavigationAction() {
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Text(this.displayedAndroidNavigationVisible ? '隐藏导航' : '显示导航')
+        .fontSize($r('app.float.font_caption'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.displayedAndroidNavigationVisible
+          ? $r('app.color.white')
+          : $r('app.color.neu_text_primary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis });
+    }
+    .width(84)
+    .height($r('app.float.control_compact'))
+    .padding({ left: $r('app.float.space_6'), right: $r('app.float.space_6') })
+    .backgroundColor(this.displayedAndroidNavigationVisible
+      ? $r('app.color.brand_primary')
+      : $r('app.color.mica_control'))
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
+      adaptiveColor: AdaptiveColor.DEFAULT,
+      scale: 0.56,
+    })
+    .border({
+      width: 1,
+      color: this.displayedAndroidNavigationVisible
+        ? $r('app.color.brand_primary')
+        : $r('app.color.mica_border'),
+    })
+    .borderRadius($r('app.float.radius_10'))
+    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+    .hoverEffect(HoverEffect.None)
+    .accessibilityText(this.displayedAndroidNavigationVisible ? '隐藏导航' : '显示导航')
+    .accessibilitySelected(this.displayedAndroidNavigationVisible)
+    .transition(TransitionEffect.OPACITY)
+    .onClick((): void => {
+      this.displayedAndroidNavigationVisible = !this.displayedAndroidNavigationVisible;
+      this.onToggleAndroidNavigation();
+    });
+  }
+
+  @Builder
   private CompactAction(
     key: string,
     label: string,
@@ -643,17 +683,7 @@ export struct SessionToolbar {
 
           if (this.androidNavigationAvailable) {
             Row() {
-              this.CompactAction(
-                'android-navigation',
-                this.displayedAndroidNavigationVisible ? '隐藏导航' : '显示导航',
-                this.displayedAndroidNavigationVisible,
-                false,
-                true,
-                () => {
-                  this.displayedAndroidNavigationVisible = !this.displayedAndroidNavigationVisible;
-                  this.onToggleAndroidNavigation();
-                },
-              )
+              this.AndroidNavigationAction();
             }
             .width('100%')
             .justifyContent(FlexAlign.End);
