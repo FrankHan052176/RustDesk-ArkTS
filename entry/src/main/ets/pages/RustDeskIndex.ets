@@ -6179,6 +6179,16 @@ struct RustDeskIndex {
             onToggleSoftKeyboard: () => this.toggleSoftKeyboard(),
             onToggleAndroidNavigation: () => {
               this.androidNavigationVisible = !this.androidNavigationVisible;
+              if (this.androidNavigationVisible && this.previewViewWidth > 0 && this.previewViewHeight > 0) {
+                if (this.androidNavigationX <= 0 && this.androidNavigationY <= 0) {
+                  this.androidNavigationX = this.clampAndroidNavigationX(
+                    (this.previewViewWidth - ANDROID_NAVIGATION_BAR_WIDTH) / 2,
+                  );
+                  this.androidNavigationY = this.clampAndroidNavigationY(
+                    this.previewViewHeight - ANDROID_NAVIGATION_BAR_HEIGHT - ANDROID_NAVIGATION_BOTTOM_OFFSET,
+                  );
+                }
+              }
               this.preferences?.saveAndroidNavigationVisible(this.androidNavigationVisible);
             },
             onDisconnect: () => this.closeSession('已手动断开连接'),

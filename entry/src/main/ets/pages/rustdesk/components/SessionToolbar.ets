@@ -70,6 +70,7 @@ export struct SessionToolbar {
   @Param viewOnlySession: boolean = false;
   @Param androidNavigationAvailable: boolean = false;
   @Param androidNavigationVisible: boolean = false;
+  @Local displayedAndroidNavigationVisible: boolean = false;
   @Param softKeyboardAvailable: boolean = false;
   @Param softKeyboardVisible: boolean = false;
   @Param audioAvailable: boolean = false;
@@ -102,6 +103,7 @@ export struct SessionToolbar {
   aboutToAppear(): void {
     this.displayedRelativeMouseMode = this.relativeMouseMode;
     this.displayedTransformMode = this.transformMode;
+    this.displayedAndroidNavigationVisible = this.androidNavigationVisible;
   }
 
   @Monitor('relativeMouseMode')
@@ -112,6 +114,11 @@ export struct SessionToolbar {
   @Monitor('transformMode')
   private onTransformModeChanged(_monitor: IMonitor): void {
     this.displayedTransformMode = this.transformMode;
+  }
+
+  @Monitor('androidNavigationVisible')
+  private onAndroidNavigationVisibleChanged(_monitor: IMonitor): void {
+    this.displayedAndroidNavigationVisible = this.androidNavigationVisible;
   }
 
   @Builder
@@ -250,7 +257,7 @@ export struct SessionToolbar {
           ? (selected ? $r('app.color.white') : $r('app.color.neu_text_primary'))
           : $r('app.color.neu_text_disabled'));
     }
-    .width(key === 'transform' ? 92 : 68)
+    .width(key === 'transform' ? 92 : (key === 'android-navigation' ? 84 : 68))
     .height($r('app.float.control_compact'))
     .padding({ left: $r('app.float.space_6'), right: $r('app.float.space_6') })
     .enabled(enabled)
@@ -638,11 +645,14 @@ export struct SessionToolbar {
             Row() {
               this.CompactAction(
                 'android-navigation',
-                this.androidNavigationVisible ? '隐藏导航' : '显示导航',
-                this.androidNavigationVisible,
+                this.displayedAndroidNavigationVisible ? '隐藏导航' : '显示导航',
+                this.displayedAndroidNavigationVisible,
                 false,
                 true,
-                () => this.onToggleAndroidNavigation(),
+                () => {
+                  this.displayedAndroidNavigationVisible = !this.displayedAndroidNavigationVisible;
+                  this.onToggleAndroidNavigation();
+                },
               )
             }
             .width('100%')

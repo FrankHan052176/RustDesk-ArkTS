@@ -1,7 +1,7 @@
 import { FloatingGlassSurface } from './FloatingSurface';
 
-export const ANDROID_NAVIGATION_BAR_WIDTH = 200;
-export const ANDROID_NAVIGATION_BAR_HEIGHT = 45;
+export const ANDROID_NAVIGATION_BAR_WIDTH = 140;
+export const ANDROID_NAVIGATION_BAR_HEIGHT = 32;
 
 @ComponentV2
 export struct AndroidNavigationBar {
@@ -14,34 +14,14 @@ export struct AndroidNavigationBar {
   private NavigationAction(icon: Resource, label: ResourceStr, onActivate: () => void) {
     Button({ type: ButtonType.Normal, stateEffect: true }) {
       SymbolGlyph(icon)
-        .fontSize($r('app.float.icon_large'))
+        .fontSize(18)
         .fontColor([$r('app.color.neu_text_primary')]);
     }
-    .width(44)
-    .height(44)
+    .width(30)
+    .height(30)
     .padding(0)
     .backgroundColor($r('app.color.transparent'))
-    .borderRadius($r('app.float.radius_10'))
-    .hoverEffect(HoverEffect.None)
-    .accessibilityText(label as Resource)
-    .onClick((): void => {
-      onActivate();
-    });
-  }
-
-  @Builder
-  private RecentAction(label: ResourceStr, onActivate: () => void) {
-    Button({ type: ButtonType.Normal, stateEffect: true }) {
-      Text($r('app.string.remote_android_navigation_recent_symbol'))
-        .fontSize($r('app.float.icon_large'))
-        .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.neu_text_primary'));
-    }
-    .width(44)
-    .height(44)
-    .padding(0)
-    .backgroundColor($r('app.color.transparent'))
-    .borderRadius($r('app.float.radius_10'))
+    .borderRadius($r('app.float.radius_6'))
     .hoverEffect(HoverEffect.None)
     .accessibilityText(label as Resource)
     .onClick((): void => {
@@ -67,14 +47,15 @@ export struct AndroidNavigationBar {
           $r('app.string.remote_android_navigation_home'),
           () => this.onHome(),
         )
-        this.RecentAction(
+        this.NavigationAction(
+          $r('sys.symbol.square'),
           $r('app.string.remote_android_navigation_recent'),
           () => this.onRecent(),
         )
 
         Column()
           .width($r('app.float.stroke_hairline'))
-          .height(25)
+          .height(18)
           .backgroundColor($r('app.color.neu_text_secondary'))
           .opacity(0.4);
 
@@ -86,7 +67,7 @@ export struct AndroidNavigationBar {
       }
       .width('100%')
       .height('100%')
-      .padding({ left: $r('app.float.space_4'), right: $r('app.float.space_4') })
+      .padding({ left: $r('app.float.space_2'), right: $r('app.float.space_2') })
       .alignItems(VerticalAlign.Center)
       .justifyContent(FlexAlign.SpaceBetween);
     }
