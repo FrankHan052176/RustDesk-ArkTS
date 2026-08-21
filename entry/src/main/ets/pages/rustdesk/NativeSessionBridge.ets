@@ -13,6 +13,7 @@ export interface NativeSessionBridge {
   changeResolution(sessionId: string, display: number, width: number, height: number): ActionResponse;
   getImageQuality(sessionId: string): string | null;
   getConnToken(sessionId: string): string | null;
+  send2fa(sessionId: string, code: string, trustThisDevice: boolean): ActionResponse;
   inputString(sessionId: string, value: string): ActionResponse;
   setImageQuality(sessionId: string, quality: string): ActionResponse;
   setCustomImageQuality(sessionId: string, quality: number): void;
@@ -61,6 +62,10 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
 
   getConnToken(sessionId: string): string | null {
     return native.sessionGetConnToken(sessionId);
+  }
+
+  send2fa(sessionId: string, code: string, trustThisDevice: boolean): ActionResponse {
+    return this.parseNativeResponse(() => native.sessionSend2fa(sessionId, code, trustThisDevice));
   }
 
   inputString(sessionId: string, value: string): ActionResponse {

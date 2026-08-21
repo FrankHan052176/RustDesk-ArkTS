@@ -20,7 +20,7 @@ import {
 } from 'luminous_neo';
 import { ConnectTab } from './rustdesk/components/ConnectTab';
 import { DeviceDirectoryPanel } from './rustdesk/components/DeviceDirectoryPanel';
-import { PasswordDialog } from './rustdesk/components/PasswordDialog';
+import { AuthDialogMode, PasswordDialog } from './rustdesk/components/PasswordDialog';
 import { ConnectionAttemptOverlay } from './rustdesk/components/ConnectionAttemptOverlay';
 import { InsecureConnectionDialog } from './rustdesk/components/InsecureConnectionDialog';
 import { SettingsTab } from './rustdesk/components/SettingsTab';
@@ -387,6 +387,9 @@ struct RustDeskIndex {
   private preferredCodec: string = 'auto';
   private codecPreferenceApplied: boolean = false;
   @Local passwordDialogVisible: boolean = false;
+  @Local authDialogMode: AuthDialogMode = 'password';
+  @Local code2faDraft: string = '';
+  @Local trustThisDevice: boolean = false;
   @Local insecureConnectionDialogVisible: boolean = false;
   @Local insecureConnectionMessage: string = '';
   private insecureConnectionSessionId: string = '';
@@ -2289,12 +2292,14 @@ struct RustDeskIndex {
     }
   }
 
-  private openPasswordDialog(kind: PasswordSessionKind = 'primary', message: string = ''): void {
+  private openPasswordDialog(kind: PasswordSessionKind = 'primary', message: string = '', initialMode: AuthDialogMode = 'password'): void {
     if (this.passwordDialogVisible) {
       return;
     }
     this.passwordSessionKind = kind;
     this.passwordDraft = '';
+    this.code2faDraft = '';
+    this.authDialogMode = initialMode;
     this.passwordDialogVisible = true;
     if (kind === 'file_transfer') {
       this.transferRootStatus = message.length > 0 ? message : '文件传输等待密码验证';
@@ -2337,6 +2342,7 @@ struct RustDeskIndex {
     }
     this.passwordDialogVisible = false;
     this.passwordDraft = '';
+    this.code2faDraft = '';
     this.clearPasswordTimeout();
   }
 
@@ -2345,6 +2351,29 @@ struct RustDeskIndex {
       return;
     }
     if (this.passwordSessionKind === 'file_transfer' && !this.transferManager.isReady()) {
+      return;
+    }
+    if (this.authDialogMode === '2fa') {
+      const code = this.code2faDraft.trim();
+      if (code.length === 0) {
+        this.errorText = '请输入 2FA 验证码';
+        return;
+      }
+      this.passwordDialogVisible = false;
+      this.clearPasswordTimeout();
+      this.connectionUiPhase = 'authenticating';
+      this.connectionUiMessage = '2FA 验证码已提交，正在等待远端验证。';
+      this.scheduleConnectionTimeout();
+      try {
+        const response = this.nativeSessionBridge.send2fa(this.activeSessionId, code, this.trustThisDevice);
+        this.updateSessionState(response);
+        if (!response.ok) {
+          this.failConnectionAttempt(response.message ?? '2FA 验证失败');
+        }
+      } catch (error) {
+        this.errorText = String(error);
+        this.failConnectionAttempt(this.errorText);
+      }
       return;
     }
     if (rememberPasswordInput !== undefined) {
@@ -5830,7 +5859,13 @@ struct RustDeskIndex {
       if (this.tryAutoSubmitHandoffPassword()) {
         return;
       }
-      this.openPasswordDialog('primary', message);
+      this.openPasswordDialog('primary', message, 'password');
+      return;
+    }
+    if (type === 'input-2fa') {
+      this.connectionSummary = '等待二次验证 (2FA)';
+      this.errorText = message;
+      this.openPasswordDialog('primary', message, '2fa');
       return;
     }
     if (text === WAITING_FOR_IMAGE_TEXT) {
@@ -7703,10 +7738,16 @@ struct RustDeskIndex {
 
       PasswordDialog({
         visible: this.passwordDialogVisible,
+        mode: this.authDialogMode,
         password: this.passwordDraft,
         rememberPassword: this.rememberPassword,
+        code2fa: this.code2faDraft,
+        trustThisDevice: this.trustThisDevice,
+        onModeChange: (mode: AuthDialogMode) => { this.authDialogMode = mode; },
         onPasswordChange: (value: string) => this.passwordDraft = value,
         onRememberChange: (value: boolean) => this.rememberPassword = value,
+        onCode2faChange: (value: string) => this.code2faDraft = value,
+        onTrustThisDeviceChange: (value: boolean) => this.trustThisDevice = value,
         onCancel: () => this.cancelPasswordDialog(),
         onSubmit: () => this.submitPassword(),
       })

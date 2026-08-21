@@ -54,6 +54,7 @@ import {
   sessionPollEvents as bridgeSessionPollEvents,
   sessionReadRemoteDir as bridgeSessionReadRemoteDir,
   sessionRefresh as bridgeSessionRefresh,
+  sessionSend2Fa as bridgeSessionSend2Fa,
   sessionSendChat as bridgeSessionSendChat,
   sessionSendClipboard as bridgeSessionSendClipboard,
   sessionSendFiles as bridgeSessionSendFiles,
@@ -293,6 +294,10 @@ export class RustDeskNativeApi {
 
   sessionRefresh(sessionId: string, display: number): string {
     return bridgeSessionRefresh(sessionId, display);
+  }
+
+  sessionSend2fa(sessionId: string, code: string, trustThisDevice: boolean): string {
+    return bridgeSessionSend2Fa(sessionId, code, trustThisDevice);
   }
 
   sessionSendChat(sessionId: string, text: string): string {
