@@ -2853,6 +2853,21 @@ struct RustDeskIndex {
       return;
     }
 
+    // Functional keys (Backspace, Enter, Tab, Delete, Esc, Arrows, Fn) go through sessionInputKey (ControlKey)
+    if (this.isFunctionalKey(name)) {
+      if (!down) {
+        return;
+      }
+      const payload = new RustDeskKeyPayload(name, false);
+      payload.press = true;
+      payload.alt = alt;
+      payload.ctrl = ctrl;
+      payload.shift = shift;
+      payload.command = command;
+      this.sendKeyPayloadObject(payload);
+      return;
+    }
+
     // Optimized direct text input for Android remote peers:
     if (this.isPeerAndroid() && down && !modifier) {
       const character = this.softKeyboardCharacter(name, shift);
@@ -2906,6 +2921,23 @@ struct RustDeskIndex {
 
   private isSoftKeyboardModifier(name: string): boolean {
     return name === 'VK_CONTROL' || name === 'VK_MENU' || name === 'VK_SHIFT' || name === 'Meta';
+  }
+
+  private isFunctionalKey(name: string): boolean {
+    return name === 'VK_BACK'
+      || name === 'VK_DELETE'
+      || name === 'VK_RETURN'
+      || name === 'VK_TAB'
+      || name === 'VK_ESCAPE'
+      || name === 'VK_HOME'
+      || name === 'VK_END'
+      || name === 'VK_PRIOR'
+      || name === 'VK_NEXT'
+      || name === 'VK_LEFT'
+      || name === 'VK_RIGHT'
+      || name === 'VK_UP'
+      || name === 'VK_DOWN'
+      || name.indexOf('VK_F') === 0;
   }
 
   private rememberSoftKeyboardKey(
