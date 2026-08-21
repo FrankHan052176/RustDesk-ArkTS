@@ -13,6 +13,7 @@ export interface PasswordDialogProps {
   visible: boolean;
   mode: AuthDialogMode;
   canTrustDevice: boolean;
+  errorMessage: string;
   password: string;
   rememberPassword: boolean;
   code2fa: string;
@@ -31,6 +32,7 @@ export struct PasswordDialog {
   @Param visible: boolean = false;
   @Param mode: AuthDialogMode = 'password';
   @Param canTrustDevice: boolean = true;
+  @Param errorMessage: string = '';
   @Param password: string = '';
   @Param rememberPassword: boolean = false;
   @Param code2fa: string = '';
@@ -89,6 +91,16 @@ export struct PasswordDialog {
               .fontColor($r('app.color.neu_text_secondary'))
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis });
+
+            if (this.errorMessage.length > 0) {
+              Text(this.errorMessage)
+                .width('100%')
+                .fontSize($r('app.float.font_caption'))
+                .fontColor($r('app.color.neu_danger'))
+                .fontWeight(FontWeight.Medium)
+                .maxLines(2)
+                .textOverflow({ overflow: TextOverflow.Ellipsis });
+            }
           }
           .width('100%')
           .alignItems(HorizontalAlign.Start);
@@ -112,16 +124,16 @@ export struct PasswordDialog {
             .clip(false);
 
             if (this.canTrustDevice) {
-            LuminousSwitch({
-              label: '信任此设备',
-              description: '下次连接该设备无需重复 2FA 验证',
-              isOn: this.trustThisDevice,
-              rowWidth: this.panelWidth() - 48,
-              motionEnabled: true,
-              onChange: (value: boolean): void => {
-                this.onTrustThisDeviceChange(value);
-              },
-            })
+              LuminousSwitch({
+                label: '信任此设备',
+                description: '下次连接该设备无需重复 2FA 验证',
+                isOn: this.trustThisDevice,
+                rowWidth: this.panelWidth() - 48,
+                motionEnabled: true,
+                onChange: (value: boolean): void => {
+                  this.onTrustThisDeviceChange(value);
+                },
+              })
             }
           } else {
             Row() {
@@ -181,7 +193,7 @@ export struct PasswordDialog {
           .clip(false);
         }
         .width(this.panelWidth())
-        .height(348)
+        .height(358)
         .padding(24)
         .justifyContent(FlexAlign.SpaceBetween)
         .alignItems(HorizontalAlign.Start)

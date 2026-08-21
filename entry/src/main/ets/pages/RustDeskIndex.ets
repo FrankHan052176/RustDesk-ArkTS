@@ -391,6 +391,7 @@ struct RustDeskIndex {
   @Local code2faDraft: string = '';
   @Local trustThisDevice: boolean = false;
   @Local canTrustDevice: boolean = true;
+  @Local authErrorMessage: string = '';
   @Local insecureConnectionDialogVisible: boolean = false;
   @Local insecureConnectionMessage: string = '';
   private insecureConnectionSessionId: string = '';
@@ -2301,6 +2302,7 @@ struct RustDeskIndex {
     this.passwordDraft = '';
     this.code2faDraft = '';
     this.authDialogMode = initialMode;
+    this.authErrorMessage = message;
     this.passwordDialogVisible = true;
     if (kind === 'file_transfer') {
       this.transferRootStatus = message.length > 0 ? message : '文件传输等待密码验证';
@@ -2344,6 +2346,7 @@ struct RustDeskIndex {
     this.passwordDialogVisible = false;
     this.passwordDraft = '';
     this.code2faDraft = '';
+    this.authErrorMessage = '';
     this.clearPasswordTimeout();
   }
 
@@ -2361,6 +2364,7 @@ struct RustDeskIndex {
         return;
       }
       this.passwordDialogVisible = false;
+      this.authErrorMessage = '';
       this.clearPasswordTimeout();
       this.connectionUiPhase = 'authenticating';
       this.connectionUiMessage = '2FA 验证码已提交，正在等待远端验证。';
@@ -5855,19 +5859,23 @@ struct RustDeskIndex {
       return;
     }
     if (type === 'input-password' || type === 're-input-password') {
+      const errorMsg = type === 're-input-password' ? '密码错误，请重新输入' : '';
       this.connectionSummary = '等待密码验证';
       this.errorText = message;
       if (this.tryAutoSubmitHandoffPassword()) {
         return;
       }
-      this.openPasswordDialog('primary', message, 'password');
+      this.openPasswordDialog('primary', errorMsg, 'password');
       return;
     }
     if (type === 'input-2fa') {
+      const errorMsg = (message.includes('wrong') || message.includes('Wrong') || message.includes('2fa-wrong'))
+        ? '2FA 验证码错误或已过期，请重新输入'
+        : '';
       this.connectionSummary = '等待二次验证 (2FA)';
       this.errorText = message;
       this.canTrustDevice = this.nativeSessionBridge.getEnableTrustedDevices(this.activeSessionId);
-      this.openPasswordDialog('primary', message, '2fa');
+      this.openPasswordDialog('primary', errorMsg, '2fa');
       return;
     }
     if (text === WAITING_FOR_IMAGE_TEXT) {
@@ -7742,6 +7750,7 @@ struct RustDeskIndex {
         visible: this.passwordDialogVisible,
         mode: this.authDialogMode,
         canTrustDevice: this.canTrustDevice,
+        errorMessage: this.authErrorMessage,
         password: this.passwordDraft,
         rememberPassword: this.rememberPassword,
         code2fa: this.code2faDraft,
