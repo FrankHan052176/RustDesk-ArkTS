@@ -58,6 +58,7 @@ import {
   sessionSendFiles as bridgeSessionSendFiles,
   sessionSendMouse as bridgeSessionSendMouse,
   sessionSetCodecPreference as bridgeSessionSetCodecPreference,
+  sessionSetCommon as bridgeSessionSetCommon,
   sessionSetConfirmOverrideFile as bridgeSessionSetConfirmOverrideFile,
   sessionSetCustomFps as bridgeSessionSetCustomFps,
   sessionSetCustomImageQuality as bridgeSessionSetCustomImageQuality,
@@ -307,6 +308,10 @@ export class RustDeskNativeApi {
 
   sessionSetCodecPreference(sessionId: string, codec: string): string {
     return bridgeSessionSetCodecPreference(sessionId, codec);
+  }
+
+  sessionSetCommon(sessionId: string, key: string, value: string): void {
+    bridgeSessionSetCommon(sessionId, key, value);
   }
 
   sessionSetConfirmOverrideFile(sessionId: string, actId: number, fileNum: number, needOverride: boolean, remember: boolean, isUpload: boolean): string {

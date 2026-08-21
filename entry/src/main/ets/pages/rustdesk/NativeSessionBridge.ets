@@ -22,6 +22,7 @@ export interface NativeSessionBridge {
   startSession(sessionId: string): ActionResponse;
   setViewOnly(sessionId: string, enabled: boolean): ActionResponse;
   login(sessionId: string, password: string, remember?: boolean): ActionResponse;
+  setCommon(sessionId: string, key: string, value: string): void;
   closeSession(sessionId: string): ActionResponse;
   pollEvents(sessionId: string, limit: number): ActionResponse;
   transferNextJobId(): number;
@@ -98,6 +99,10 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
       password,
       remember,
     })));
+  }
+
+  setCommon(sessionId: string, key: string, value: string): void {
+    native.sessionSetCommon(sessionId, key, value);
   }
 
   closeSession(sessionId: string): ActionResponse {

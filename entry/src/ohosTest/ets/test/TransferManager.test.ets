@@ -114,6 +114,8 @@ class RecordingTransferBridge implements NativeSessionBridge {
     return this.ok('login');
   }
 
+  setCommon(_sessionId: string, _key: string, _value: string): void {}
+
   getToggleOption(_sessionId: string, _option: string): boolean {
     return false;
   }

@@ -75,6 +75,8 @@ class RecordingNativeSessionBridge implements NativeSessionBridge {
     return this.ok('login');
   }
 
+  setCommon(_sessionId: string, _key: string, _value: string): void {}
+
   pollEvents(_sessionId: string, _limit: number): ActionResponse {
     return this.ok('poll_events');
   }

@@ -22,6 +22,7 @@ import { ConnectTab } from './rustdesk/components/ConnectTab';
 import { DeviceDirectoryPanel } from './rustdesk/components/DeviceDirectoryPanel';
 import { PasswordDialog } from './rustdesk/components/PasswordDialog';
 import { ConnectionAttemptOverlay } from './rustdesk/components/ConnectionAttemptOverlay';
+import { InsecureConnectionDialog } from './rustdesk/components/InsecureConnectionDialog';
 import { SettingsTab } from './rustdesk/components/SettingsTab';
 import { SessionToolbar } from './rustdesk/components/SessionToolbar';
 import {
@@ -382,6 +383,9 @@ struct RustDeskIndex {
   private preferredCodec: string = 'auto';
   private codecPreferenceApplied: boolean = false;
   @Local passwordDialogVisible: boolean = false;
+  @Local insecureConnectionDialogVisible: boolean = false;
+  @Local insecureConnectionMessage: string = '';
+  private insecureConnectionSessionId: string = '';
   private passwordSessionKind: PasswordSessionKind = 'primary';
   private sessionFullscreenApplied: boolean = false;
   private sessionOrientationMode: RemoteSessionOrientationMode = RemoteSessionOrientationMode.FOLLOW_DESKTOP;
@@ -538,6 +542,7 @@ struct RustDeskIndex {
   }
 
   aboutToDisappear(): void {
+    this.rejectPendingInsecureConnection();
     this.clearActiveSessionHandoffState();
     this.unregisterRemoteSessionHandoffListener();
     this.connectionGeneration += 1;
@@ -2409,6 +2414,7 @@ struct RustDeskIndex {
         this.connectionUiMessage = '';
       }
       const sessionId = this.activeSessionId;
+      this.rejectPendingInsecureConnection();
       hilog.info(DOMAIN, TAG, 'closeSession sessionId=%{public}s reason=%{public}s', sessionId, reason ?? '');
       this.releaseSoftKeyboardKeys();
       if (this.relativeMouseMode && sessionId) {
@@ -5626,7 +5632,10 @@ struct RustDeskIndex {
     if (event.name === 'connection_ready') {
       this.connectionSummary = `secure=${String(event.secure)}, direct=${String(event.direct)}, stream=${String(event.stream_type)}`;
       if (this.connectionUiPhase === 'connecting' || this.connectionUiPhase === 'authenticating') {
-        this.connectionUiMessage = '安全通道已建立，正在读取远端会话信息。';
+        const secure = String(event.secure).trim().toLowerCase() === 'true';
+        this.connectionUiMessage = secure
+          ? '安全通道已建立，正在读取远端会话信息。'
+          : '传输通道已建立，正在等待安全确认。';
       }
       if (this.isRemoteControlSessionActive()) {
         this.ensureRemoteCursorEnabled();
@@ -5732,6 +5741,10 @@ struct RustDeskIndex {
     const text = String(event.text ?? '');
     const type = String(event.type ?? '');
     const message = title.length > 0 ? `${title}: ${text}` : text;
+    if (type.includes('insecure-connection')) {
+      this.openInsecureConnectionDialog(text);
+      return;
+    }
     if (type === 'success' || title === 'Successful') {
       this.sessionMessage = message;
       this.errorText = '';
@@ -5760,6 +5773,75 @@ struct RustDeskIndex {
       return;
     }
     this.handleRemoteDisconnect(message);
+  }
+
+  private openInsecureConnectionDialog(text: string): void {
+    if (this.activeSessionId.length === 0) {
+      return;
+    }
+    this.clearConnectionTimeout();
+    this.insecureConnectionMessage = text === 'conn-e2ee-unavailable-tip'
+      ? '无法验证端到端加密。远程设备可能仍在准备中，请稍后重试。如果此问题持续出现，服务器可能不受信任。仍要继续吗？'
+      : text;
+    this.insecureConnectionDialogVisible = true;
+    this.insecureConnectionSessionId = this.activeSessionId;
+    this.connectionUiPhase = 'authenticating';
+    this.connectionUiMessage = '等待确认是否继续非安全连接。';
+    this.sessionMessage = '等待非安全连接确认';
+    this.errorText = '';
+  }
+
+  private continueInsecureConnection(): void {
+    const sessionId = this.insecureConnectionSessionId;
+    if (!this.insecureConnectionDialogVisible || sessionId.length === 0) {
+      return;
+    }
+    if (sessionId !== this.activeSessionId) {
+      this.insecureConnectionDialogVisible = false;
+      this.insecureConnectionMessage = '';
+      this.insecureConnectionSessionId = '';
+      this.handleRemoteDisconnect('连接会话已结束，请重新连接');
+      return;
+    }
+    try {
+      this.nativeSessionBridge.setCommon(sessionId, 'continue-insecure-connection', 'Y');
+      this.insecureConnectionDialogVisible = false;
+      this.insecureConnectionMessage = '';
+      this.insecureConnectionSessionId = '';
+      this.connectionUiPhase = 'connecting';
+      this.connectionUiMessage = '已确认继续，正在等待远端会话信息。';
+      this.sessionMessage = '正在继续非安全连接';
+      this.scheduleConnectionTimeout();
+    } catch (error) {
+      this.errorText = `无法继续连接：${String(error)}`;
+      this.disconnectInsecureConnection();
+    }
+  }
+
+  private disconnectInsecureConnection(): void {
+    if (!this.insecureConnectionDialogVisible) {
+      return;
+    }
+    this.rejectPendingInsecureConnection();
+    void this.closeSession('已拒绝非安全连接');
+  }
+
+  private rejectPendingInsecureConnection(): void {
+    if (!this.insecureConnectionDialogVisible) {
+      return;
+    }
+    const sessionId = this.insecureConnectionSessionId;
+    this.insecureConnectionDialogVisible = false;
+    this.insecureConnectionMessage = '';
+    this.insecureConnectionSessionId = '';
+    if (sessionId.length === 0) {
+      return;
+    }
+    try {
+      this.nativeSessionBridge.setCommon(sessionId, 'continue-insecure-connection', 'N');
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'rejectPendingInsecureConnection failed: %{public}s', String(error));
+    }
   }
 
   private tryAutoSubmitHandoffPassword(): boolean {
@@ -7502,7 +7584,8 @@ struct RustDeskIndex {
       .zIndex(1)
 
       ConnectionAttemptOverlay({
-        visible: this.connectionUiPhase !== 'idle' && !this.showPreviewModal && !this.passwordDialogVisible,
+        visible: this.connectionUiPhase !== 'idle' && !this.showPreviewModal && !this.passwordDialogVisible
+          && !this.insecureConnectionDialogVisible,
         phase: this.connectionUiPhase,
         target: this.connectionUiTarget,
         message: this.connectionUiMessage,
@@ -7523,6 +7606,14 @@ struct RustDeskIndex {
         onSubmit: () => this.submitPassword(),
       })
       .zIndex(2000)
+
+      InsecureConnectionDialog({
+        visible: this.insecureConnectionDialogVisible,
+        message: this.insecureConnectionMessage,
+        onContinue: () => this.continueInsecureConnection(),
+        onDisconnect: () => this.disconnectInsecureConnection(),
+      })
+      .zIndex(2100)
     }
     .width('100%')
     .height('100%')
