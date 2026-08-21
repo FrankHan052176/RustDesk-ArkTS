@@ -2723,6 +2723,9 @@ struct RustDeskIndex {
     if (name === 'VK_SPACE') {
       return ' ';
     }
+    if (name.length === 1) {
+      return name;
+    }
     if (name.length !== 4 || name.indexOf('VK_') !== 0) {
       return '';
     }
@@ -2747,6 +2750,54 @@ struct RustDeskIndex {
   private softKeyboardUsbHid(name: string): number | undefined {
     if (name === 'VK_SPACE') {
       return 0x2C;
+    }
+    if (name === 'VK_TAB') {
+      return 0x2B;
+    }
+    if (name === 'VK_RETURN') {
+      return 0x28;
+    }
+    if (name === 'VK_BACK') {
+      return 0x2A;
+    }
+    if (name === 'VK_ESCAPE') {
+      return 0x29;
+    }
+    if (name === 'VK_DELETE') {
+      return 0x4C;
+    }
+    if (name === ',' || name === '<') {
+      return 0x36;
+    }
+    if (name === '.' || name === '>') {
+      return 0x37;
+    }
+    if (name === '/' || name === '?') {
+      return 0x38;
+    }
+    if (name === ';' || name === ':') {
+      return 0x33;
+    }
+    if (name === '\'' || name === '"') {
+      return 0x34;
+    }
+    if (name === '[' || name === '{') {
+      return 0x2F;
+    }
+    if (name === ']' || name === '}') {
+      return 0x30;
+    }
+    if (name === '\\' || name === '|') {
+      return 0x31;
+    }
+    if (name === '-' || name === '_') {
+      return 0x2D;
+    }
+    if (name === '=' || name === '+') {
+      return 0x2E;
+    }
+    if (name === '`' || name === '~') {
+      return 0x35;
     }
     if (name.length !== 4 || name.indexOf('VK_') !== 0) {
       return undefined;

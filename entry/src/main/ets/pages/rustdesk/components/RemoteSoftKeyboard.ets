@@ -130,9 +130,12 @@ export struct RemoteSoftKeyboard {
 
   private layerTitle(): string {
     if (this.layer === 1) {
-      return '导航';
+      return '符号';
     }
     if (this.layer === 2) {
+      return '导航';
+    }
+    if (this.layer === 3) {
       return '功能';
     }
     return '字母';
@@ -179,7 +182,7 @@ export struct RemoteSoftKeyboard {
         new RemoteSoftKeySpec('↵', 'VK_RETURN', 1.35),
       ],
       [
-        new RemoteSoftKeySpec('⇧', 'VK_SHIFT', 1.35, true),
+        new RemoteSoftKeySpec('⇧', 'VK_SHIFT', 1.2, true),
         new RemoteSoftKeySpec('Z', 'VK_Z'),
         new RemoteSoftKeySpec('X', 'VK_X'),
         new RemoteSoftKeySpec('C', 'VK_C'),
@@ -187,16 +190,86 @@ export struct RemoteSoftKeyboard {
         new RemoteSoftKeySpec('B', 'VK_B'),
         new RemoteSoftKeySpec('N', 'VK_N'),
         new RemoteSoftKeySpec('M', 'VK_M'),
-        new RemoteSoftKeySpec('←', 'VK_LEFT'),
-        new RemoteSoftKeySpec('→', 'VK_RIGHT'),
+        new RemoteSoftKeySpec(',', ','),
+        new RemoteSoftKeySpec('.', '.'),
+        new RemoteSoftKeySpec('-', '-'),
       ],
       [
-        new RemoteSoftKeySpec('Ctrl', 'VK_CONTROL', 1.2, true),
+        new RemoteSoftKeySpec('Ctrl', 'VK_CONTROL', 1.1, true),
         new RemoteSoftKeySpec('Alt', 'VK_MENU', 1.1, true),
-        new RemoteSoftKeySpec('空格', 'VK_SPACE', 3.2),
+        new RemoteSoftKeySpec('/', '/'),
+        new RemoteSoftKeySpec('空格', 'VK_SPACE', 2.8),
+        new RemoteSoftKeySpec('Tab', 'VK_TAB', 1.1),
+        new RemoteSoftKeySpec('←', 'VK_LEFT'),
+        new RemoteSoftKeySpec('→', 'VK_RIGHT'),
+        new RemoteSoftKeySpec('⌘', 'Meta', 1.1, true),
+      ],
+    ];
+  }
+
+  private symbolRows(): RemoteSoftKeySpec[][] {
+    return [
+      [
+        new RemoteSoftKeySpec('~', '~'),
+        new RemoteSoftKeySpec('!', '!'),
+        new RemoteSoftKeySpec('@', '@'),
+        new RemoteSoftKeySpec('#', '#'),
+        new RemoteSoftKeySpec('$', '$'),
+        new RemoteSoftKeySpec('%', '%'),
+        new RemoteSoftKeySpec('^', '^'),
+        new RemoteSoftKeySpec('&', '&'),
+        new RemoteSoftKeySpec('*', '*'),
+        new RemoteSoftKeySpec('(', '('),
+        new RemoteSoftKeySpec(')', ')'),
+        new RemoteSoftKeySpec('⌫', 'VK_BACK', 1.35),
+      ],
+      [
+        new RemoteSoftKeySpec('1', 'VK_1'),
+        new RemoteSoftKeySpec('2', 'VK_2'),
+        new RemoteSoftKeySpec('3', 'VK_3'),
+        new RemoteSoftKeySpec('4', 'VK_4'),
+        new RemoteSoftKeySpec('5', 'VK_5'),
+        new RemoteSoftKeySpec('6', 'VK_6'),
+        new RemoteSoftKeySpec('7', 'VK_7'),
+        new RemoteSoftKeySpec('8', 'VK_8'),
+        new RemoteSoftKeySpec('9', 'VK_9'),
+        new RemoteSoftKeySpec('0', 'VK_0'),
+        new RemoteSoftKeySpec('-', '-'),
+        new RemoteSoftKeySpec('=', '='),
+      ],
+      [
+        new RemoteSoftKeySpec('[', '['),
+        new RemoteSoftKeySpec(']', ']'),
+        new RemoteSoftKeySpec('{', '{'),
+        new RemoteSoftKeySpec('}', '}'),
+        new RemoteSoftKeySpec('\\', '\\'),
+        new RemoteSoftKeySpec('|', '|'),
+        new RemoteSoftKeySpec(';', ';'),
+        new RemoteSoftKeySpec(':', ':'),
+        new RemoteSoftKeySpec('\'', '\''),
+        new RemoteSoftKeySpec('"', '"'),
+        new RemoteSoftKeySpec('↵', 'VK_RETURN', 1.35),
+      ],
+      [
+        new RemoteSoftKeySpec('_', '_'),
+        new RemoteSoftKeySpec('+', '+'),
+        new RemoteSoftKeySpec('<', '<'),
+        new RemoteSoftKeySpec('>', '>'),
+        new RemoteSoftKeySpec(',', ','),
+        new RemoteSoftKeySpec('.', '.'),
+        new RemoteSoftKeySpec('/', '/'),
+        new RemoteSoftKeySpec('?', '?'),
+        new RemoteSoftKeySpec('`', '`'),
+        new RemoteSoftKeySpec('Tab', 'VK_TAB', 1.2),
+      ],
+      [
+        new RemoteSoftKeySpec('Ctrl', 'VK_CONTROL', 1.1, true),
+        new RemoteSoftKeySpec('Alt', 'VK_MENU', 1.1, true),
+        new RemoteSoftKeySpec('空格', 'VK_SPACE', 3.0),
+        new RemoteSoftKeySpec('←', 'VK_LEFT'),
         new RemoteSoftKeySpec('↑', 'VK_UP'),
         new RemoteSoftKeySpec('↓', 'VK_DOWN'),
-        new RemoteSoftKeySpec('⌘', 'Meta', 1.1, true),
+        new RemoteSoftKeySpec('→', 'VK_RIGHT'),
       ],
     ];
   }
@@ -271,9 +344,12 @@ export struct RemoteSoftKeyboard {
 
   private rows(): RemoteSoftKeySpec[][] {
     if (this.layer === 1) {
-      return this.navigationRows();
+      return this.symbolRows();
     }
     if (this.layer === 2) {
+      return this.navigationRows();
+    }
+    if (this.layer === 3) {
       return this.functionRows();
     }
     return this.letterRows();
@@ -461,8 +537,9 @@ export struct RemoteSoftKeyboard {
           Row({ space: 4 }) {
             this.DragHandle();
             this.LayerButton('字母', 0);
-            this.LayerButton('导航', 1);
-            this.LayerButton('功能', 2);
+            this.LayerButton('符号', 1);
+            this.LayerButton('导航', 2);
+            this.LayerButton('功能', 3);
             Button({ type: ButtonType.Normal, stateEffect: true }) {
               Text(this.dockTop ? '下移' : '上移')
                 .fontSize(11)
