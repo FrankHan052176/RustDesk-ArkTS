@@ -313,6 +313,10 @@ struct RustDeskIndex {
   @Local frameWidth: number = 0;
   @Local frameHeight: number = 0;
   @Local renderFpsText: string = 'FPS --';
+  private softwareRenderFps: number = 0;
+  private softwareRenderTotalFrames: number = 0;
+  private softwareFrameWindowStart: number = 0;
+  private softwareFrameWindowCount: number = 0;
   @Local showPreviewModal: boolean = false;
   @Local showTransferWorkspace: boolean = false;
   @Local previewSurfaceVisible: boolean = false;
@@ -2539,6 +2543,10 @@ struct RustDeskIndex {
     this.pendingPreviewPeerInfo = undefined;
     this.releasePreviewFramePixelMap();
     this.renderFpsText = 'FPS --';
+    this.softwareRenderFps = 0;
+    this.softwareRenderTotalFrames = 0;
+    this.softwareFrameWindowStart = 0;
+    this.softwareFrameWindowCount = 0;
     this.toolbarRenderStats = {
       fps: 0,
       totalFrames: 0,
@@ -5072,6 +5080,9 @@ struct RustDeskIndex {
       };
       return;
     }
+    if (this.rgbaFallbackActive) {
+      return;
+    }
     const now = Date.now();
     try {
       const currentDisplay = this.viewportModel.getCurrentDisplayIndex();
@@ -5891,7 +5902,11 @@ struct RustDeskIndex {
     const previous = this.previewFramePixelMap;
     this.previewFramePixelMap = pixelMap;
     this.rgbaFallbackActive = true;
+    this.frameWidth = width;
+    this.frameHeight = height;
+    this.viewportModel.setSurfaceSize(width, height);
     this.frameStatus = `RGBA fallback ${width}x${height}`;
+    this.recordSoftwareFrame();
     if (previous && previous !== pixelMap) {
       previous.release().catch((_error: BusinessError) => {});
     }
@@ -5904,6 +5919,33 @@ struct RustDeskIndex {
       this.sessionMessage = `显示器 ${display + 1} 已收到画面`;
       this.applyDisplayConfiguration();
       this.reprojectVirtualCursorOverlay();
+    } else {
+      this.applyDisplayConfiguration();
+    }
+  }
+
+  private recordSoftwareFrame(): void {
+    const now = Date.now();
+    this.softwareRenderTotalFrames += 1;
+    this.softwareFrameWindowCount += 1;
+    if (this.softwareFrameWindowStart === 0) {
+      this.softwareFrameWindowStart = now;
+      this.softwareRenderFps = 0;
+      return;
+    }
+    const elapsed = now - this.softwareFrameWindowStart;
+    if (elapsed >= 1000) {
+      this.softwareRenderFps = Number((this.softwareFrameWindowCount * 1000 / elapsed).toFixed(1));
+      this.softwareFrameWindowCount = 0;
+      this.softwareFrameWindowStart = now;
+      this.renderFpsText = `FPS ${this.softwareRenderFps.toFixed(1)} | Frames ${this.softwareRenderTotalFrames}`;
+      this.toolbarRenderStats = {
+        fps: this.softwareRenderFps,
+        totalFrames: this.softwareRenderTotalFrames,
+        decodeLatencyMs: 0,
+        lastFrameAgeMs: 0,
+        hasRenderedFrame: true,
+      };
     }
   }
 
