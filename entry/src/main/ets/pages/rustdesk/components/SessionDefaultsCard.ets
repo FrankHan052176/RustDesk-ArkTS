@@ -48,6 +48,7 @@ export struct SessionDefaultsCard {
   private copyDefaults(): SessionDefaults {
     const next = new SessionDefaults();
     next.relativeMouseMode = this.defaults.relativeMouseMode;
+    next.twoFingerRightClick = this.defaults.twoFingerRightClick;
     next.audioEnabled = this.defaults.audioEnabled;
     next.clipboardEnabled = this.defaults.clipboardEnabled;
     next.qualityPreset = this.defaults.qualityPreset;
@@ -67,6 +68,12 @@ export struct SessionDefaultsCard {
   private updatePointerMode(relativeMouseMode: boolean): void {
     const next = this.copyDefaults();
     next.relativeMouseMode = relativeMouseMode;
+    this.emit(next);
+  }
+
+  private updateRightClickMode(twoFinger: boolean): void {
+    const next = this.copyDefaults();
+    next.twoFingerRightClick = twoFinger;
     this.emit(next);
   }
 
@@ -323,6 +330,31 @@ export struct SessionDefaultsCard {
   }
 
   @Builder
+  private TouchpadRightClickSelector() {
+    Column({ space: 2 }) {
+      Text('触摸板右键手势')
+        .width('100%')
+        .fontSize($r('app.float.font_label'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.neu_text_secondary'));
+
+      LuminousSegmentedControl({
+        items: [
+          new LuminousSelectionItem('double_tap', '双击右键'),
+          new LuminousSelectionItem('two_finger', '双指右键'),
+        ],
+        selectedIndex: this.defaults.twoFingerRightClick ? 1 : 0,
+        controlWidth: this.selectorWidth(520),
+        controlHeight: 50,
+        motionEnabled: true,
+        onChange: (index: number) => this.updateRightClickMode(index === 1),
+      })
+        .margin({ top: -10 })
+    }
+    .width('100%');
+  }
+
+  @Builder
   private QualitySelector() {
     Column({ space: 2 }) {
       Text($r('app.string.settings_quality_default'))
@@ -520,6 +552,7 @@ export struct SessionDefaultsCard {
         Row({ space: $r('app.float.space_20') }) {
           Column() {
             this.PointerModeSelector()
+            this.TouchpadRightClickSelector()
           }
           .layoutWeight(1);
 
@@ -533,6 +566,7 @@ export struct SessionDefaultsCard {
       } else {
         Column({ space: 2 }) {
           this.PointerModeSelector()
+          this.TouchpadRightClickSelector()
           this.QualitySelector()
         }
         .width('100%');

@@ -39,6 +39,7 @@ export class DirectorySnapshot {
 
 export class SessionDefaults {
   relativeMouseMode: boolean = false;
+  twoFingerRightClick: boolean = false;
   audioEnabled: boolean = true;
   clipboardEnabled: boolean = true;
   qualityPreset: string = 'balanced';
