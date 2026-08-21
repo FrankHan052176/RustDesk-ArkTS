@@ -2852,14 +2852,22 @@ struct RustDeskIndex {
     if (modifier && !down && this.softKeyboardPressedKeys.indexOf(name) < 0) {
       return;
     }
-    if (!modifier && !ctrl && !alt && !command) {
-      const usbHid = this.softKeyboardUsbHid(name);
-      if (usbHid !== undefined) {
-        const character = down ? this.softKeyboardCharacter(name, shift) : '';
-        const payload = new RustDeskFlutterKeyPayload(character, usbHid, 0, down);
-        if (this.sendFlutterKeyPayloadObject(payload)) {
-          return;
-        }
+    const usbHid = this.softKeyboardUsbHid(name);
+    if (!modifier && usbHid !== undefined) {
+      const character = down ? this.softKeyboardCharacter(name, shift) : '';
+      let lockModes = 0;
+      if (shift) {
+        lockModes |= (1 << 0);
+      }
+      if (ctrl) {
+        lockModes |= (1 << 1);
+      }
+      if (alt) {
+        lockModes |= (1 << 2);
+      }
+      const payload = new RustDeskFlutterKeyPayload(character, usbHid, lockModes, down);
+      if (this.sendFlutterKeyPayloadObject(payload)) {
+        return;
       }
     }
     if (!modifier && !down) {
