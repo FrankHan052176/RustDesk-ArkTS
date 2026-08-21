@@ -262,6 +262,9 @@ struct RustDeskIndex {
   @Local rotationTransitionScale: number = 1;
   @Local windowTopAvoidInset: number = 0;
   @Local windowBottomAvoidInset: number = 0;
+  @Local windowCutoutTopHeight: number = 0;
+  @Local windowCutoutLeftWidth: number = 0;
+  @Local windowCutoutRightWidth: number = 0;
   @Local rootFocusedControl: string = '';
   private viewportOrientationInitialized: boolean = false;
   private lastViewportPortrait: boolean = true;
@@ -4240,6 +4243,8 @@ struct RustDeskIndex {
       this.updateWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM, systemArea);
       const navigationArea = currentWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
       this.updateWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR, navigationArea);
+      const cutoutArea = currentWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_CUTOUT);
+      this.updateWindowAvoidArea(window.AvoidAreaType.TYPE_CUTOUT, cutoutArea);
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'refresh window avoid areas failed: %{public}s', String(error));
     }
@@ -4251,7 +4256,21 @@ struct RustDeskIndex {
       this.windowTopAvoidInset = Math.max(Math.round(uiContext.px2vp(area.topRect.height)), 0);
     } else if (type === window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR) {
       this.windowBottomAvoidInset = Math.max(Math.round(uiContext.px2vp(area.bottomRect.height)), 0);
+    } else if (type === window.AvoidAreaType.TYPE_CUTOUT) {
+      this.windowCutoutTopHeight = Math.max(Math.round(uiContext.px2vp(area.topRect.height)), 0);
+      this.windowCutoutLeftWidth = Math.max(Math.round(uiContext.px2vp(area.leftRect.width)), 0);
+      this.windowCutoutRightWidth = Math.max(Math.round(uiContext.px2vp(area.rightRect.width)), 0);
     }
+  }
+
+  private isMiniBarOnSide(): boolean {
+    if (this.isPcDevice()) {
+      return false;
+    }
+    const width = this.previewViewWidth > 0 ? this.previewViewWidth : this.mainViewportWidth;
+    const height = this.previewViewHeight > 0 ? this.previewViewHeight : this.mainViewportHeight;
+    const isPortrait = height >= width;
+    return isPortrait || this.windowCutoutTopHeight > 0;
   }
 
   private registerFoldHoverListeners(): void {
@@ -6188,7 +6207,7 @@ struct RustDeskIndex {
             : (this.previewViewWidth >= 700 ? 580 : 380),
         })
         .padding($r('app.float.space_12'))
-        .margin({ top: $r('app.float.space_16') })
+        .margin({ top: Math.max(16, this.windowTopAvoidInset + 8) })
         .backgroundColor($r('app.color.glass_surface'))
         .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
           adaptiveColor: AdaptiveColor.DEFAULT,
@@ -6213,6 +6232,73 @@ struct RustDeskIndex {
       .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY)
       .zIndex(30);
     } else {
+      if (this.isMiniBarOnSide()) {
+        Row() {
+          Button({ type: ButtonType.Normal, stateEffect: true }) {
+            Stack({ alignContent: Alignment.Center }) {
+              Stack()
+                .width(4)
+                .height(36)
+                .backgroundColor($r('app.color.neu_text_secondary'))
+                .borderRadius(2)
+                .opacity(0.72);
+
+              if (this.rootFocusedControl === 'mini-toolbar') {
+                Row()
+                  .width('100%')
+                  .height('100%')
+                  .border({ width: 2, color: $r('app.color.focus_ring') })
+                  .borderRadius({
+                    topLeft: $r('app.float.radius_14'),
+                    bottomLeft: $r('app.float.radius_14'),
+                  })
+                  .hitTestBehavior(HitTestMode.None);
+              }
+            }
+            .width('100%')
+            .height('100%');
+          }
+          .width(28)
+          .height(68)
+          .padding(0)
+          .backgroundColor($r('app.color.glass_surface'))
+          .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
+            adaptiveColor: AdaptiveColor.DEFAULT,
+            scale: 0.68,
+          })
+          .linearGradient({
+            angle: 142,
+            colors: [
+              [$r('app.color.mica_highlight'), 0],
+              [$r('app.color.transparent'), 0.58],
+              [$r('app.color.transparent'), 1],
+            ],
+          })
+          .border({ width: 1, color: $r('app.color.mica_border') })
+          .borderRadius({
+            topLeft: $r('app.float.radius_14'),
+            bottomLeft: $r('app.float.radius_14'),
+          })
+          .clip(true)
+          .shadow(ShadowStyle.OUTER_DEFAULT_MD)
+          .hoverEffect(HoverEffect.None)
+          .focusOnTouch(true)
+          .accessibilityText('展开远控工具栏')
+          .onFocus(() => this.setRootControlFocused('mini-toolbar', true))
+          .onBlur(() => this.setRootControlFocused('mini-toolbar', false))
+          .onClick((): void => {
+            this.getUIContext()?.animateTo({ duration: 300, curve: Curve.FastOutSlowIn }, () => {
+              this.isMiniBarExpanded = true;
+            });
+          })
+          .transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ x: 10 })));
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.End)
+        .position({ x: 0, y: Math.max(80, this.windowTopAvoidInset + 60) })
+        .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY)
+        .zIndex(30);
+      } else {
       Row() {
         Button({ type: ButtonType.Normal, stateEffect: true }) {
           Stack({ alignContent: Alignment.Center }) {
@@ -6278,6 +6364,7 @@ struct RustDeskIndex {
       .position({ x: 0, y: -14 })
       .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY)
       .zIndex(30);
+      }
     }
   }
 
