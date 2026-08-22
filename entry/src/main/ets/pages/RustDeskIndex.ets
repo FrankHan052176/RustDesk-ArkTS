@@ -388,11 +388,11 @@ struct RustDeskIndex {
   private codecPreferenceApplied: boolean = false;
   @Local passwordDialogVisible: boolean = false;
   @Local authDialogMode: AuthDialogMode = 'password';
+  private authChallengeMode: AuthDialogMode = 'password';
   @Local code2faDraft: string = '';
   @Local trustThisDevice: boolean = false;
   @Local canTrustDevice: boolean = true;
   @Local authErrorMessage: string = '';
-  @Local allowSwitchAuthMode: boolean = false;
   @Local insecureConnectionDialogVisible: boolean = false;
   @Local insecureConnectionMessage: string = '';
   private insecureConnectionSessionId: string = '';
@@ -2296,12 +2296,13 @@ struct RustDeskIndex {
   }
 
   private openPasswordDialog(kind: PasswordSessionKind = 'primary', message: string = '', initialMode: AuthDialogMode = 'password'): void {
-    if (this.passwordDialogVisible) {
-      return;
-    }
+    const wasVisible = this.passwordDialogVisible;
     this.passwordSessionKind = kind;
-    this.passwordDraft = '';
-    this.code2faDraft = '';
+    if (!wasVisible) {
+      this.passwordDraft = '';
+      this.code2faDraft = '';
+    }
+    this.authChallengeMode = initialMode;
     this.authDialogMode = initialMode;
     this.authErrorMessage = message;
     this.passwordDialogVisible = true;
@@ -2347,6 +2348,7 @@ struct RustDeskIndex {
     this.passwordDialogVisible = false;
     this.passwordDraft = '';
     this.code2faDraft = '';
+    this.authChallengeMode = 'password';
     this.authErrorMessage = '';
     this.clearPasswordTimeout();
   }
@@ -2360,8 +2362,21 @@ struct RustDeskIndex {
     }
     if (this.authDialogMode === '2fa') {
       const code = this.code2faDraft.trim();
-      if (code.length === 0) {
-        this.errorText = '请输入 2FA 验证码';
+      if (this.authChallengeMode !== '2fa') {
+        this.authErrorMessage = '远端尚未请求 2FA。RustDesk 必须先完成密码验证，再提交第二因素验证码。';
+        this.errorText = this.authErrorMessage;
+        hilog.warn(
+          DOMAIN,
+          TAG,
+          'blocked premature 2fa submit sessionId=%{public}s challenge=%{public}s',
+          this.activeSessionId,
+          this.authChallengeMode,
+        );
+        return;
+      }
+      if (!/^\d{6}$/.test(code)) {
+        this.authErrorMessage = '请输入完整的 6 位 2FA 验证码';
+        this.errorText = this.authErrorMessage;
         return;
       }
       this.passwordDialogVisible = false;
@@ -2372,8 +2387,25 @@ struct RustDeskIndex {
       this.scheduleConnectionTimeout();
       try {
         const response = this.nativeSessionBridge.send2fa(this.activeSessionId, code, this.trustThisDevice);
+        hilog.info(
+          DOMAIN,
+          TAG,
+          'submit2fa sessionId=%{public}s codeLength=%{public}d trust=%{public}s ok=%{public}s phase=%{public}s message=%{public}s',
+          this.activeSessionId,
+          code.length,
+          String(this.trustThisDevice),
+          String(response.ok),
+          response.session?.phase ?? '',
+          response.message ?? '',
+        );
         this.updateSessionState(response);
         if (!response.ok) {
+          if ((response.message ?? '').includes('has not requested 2FA')) {
+            this.connectionUiPhase = 'awaiting_password';
+            this.connectionUiMessage = '远端尚未请求 2FA，请先完成密码验证。';
+            this.openPasswordDialog('primary', this.connectionUiMessage, 'password');
+            return;
+          }
           this.failConnectionAttempt(response.message ?? '2FA 验证失败');
         }
       } catch (error) {
@@ -5863,7 +5895,6 @@ struct RustDeskIndex {
       const errorMsg = type === 're-input-password' ? '密码错误，请重新输入' : '';
       this.connectionSummary = '等待密码验证';
       this.errorText = message;
-      this.allowSwitchAuthMode = false;
       if (this.tryAutoSubmitHandoffPassword()) {
         return;
       }
@@ -5876,8 +5907,19 @@ struct RustDeskIndex {
         : '';
       this.connectionSummary = '等待二次验证 (2FA)';
       this.errorText = message;
-      this.allowSwitchAuthMode = true;
-      this.canTrustDevice = this.nativeSessionBridge.getEnableTrustedDevices(this.activeSessionId);
+      try {
+        this.canTrustDevice = this.nativeSessionBridge.getEnableTrustedDevices(this.activeSessionId);
+      } catch (error) {
+        // Trust-device support is optional metadata. A stale/mismatched HAR
+        // must never prevent the mandatory 2FA challenge from being shown.
+        this.canTrustDevice = false;
+        hilog.warn(
+          DOMAIN,
+          TAG,
+          'sessionGetEnableTrustedDevices failed; continuing 2fa challenge: %{public}s',
+          String(error),
+        );
+      }
       this.openPasswordDialog('primary', errorMsg, '2fa');
       return;
     }
@@ -7753,13 +7795,11 @@ struct RustDeskIndex {
         visible: this.passwordDialogVisible,
         mode: this.authDialogMode,
         canTrustDevice: this.canTrustDevice,
-        allowSwitchMode: this.allowSwitchAuthMode,
         errorMessage: this.authErrorMessage,
         password: this.passwordDraft,
         rememberPassword: this.rememberPassword,
         code2fa: this.code2faDraft,
         trustThisDevice: this.trustThisDevice,
-        onModeChange: (mode: AuthDialogMode) => { this.authDialogMode = mode; },
         onPasswordChange: (value: string) => this.passwordDraft = value,
         onRememberChange: (value: boolean) => this.rememberPassword = value,
         onCode2faChange: (value: string) => this.code2faDraft = value,

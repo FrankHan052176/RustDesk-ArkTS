@@ -18,7 +18,6 @@ export interface PasswordDialogProps {
   rememberPassword: boolean;
   code2fa: string;
   trustThisDevice: boolean;
-  onModeChange: (mode: AuthDialogMode) => void;
   onPasswordChange: (value: string) => void;
   onRememberChange: (value: boolean) => void;
   onCode2faChange: (value: string) => void;
@@ -32,14 +31,12 @@ export struct PasswordDialog {
   @Param visible: boolean = false;
   @Param mode: AuthDialogMode = 'password';
   @Param canTrustDevice: boolean = true;
-  @Param allowSwitchMode: boolean = false;
   @Param errorMessage: string = '';
   @Param password: string = '';
   @Param rememberPassword: boolean = false;
   @Param code2fa: string = '';
   @Param trustThisDevice: boolean = false;
   @Local viewportWidth: number = 390;
-  @Event onModeChange: (mode: AuthDialogMode) => void = (_mode: AuthDialogMode) => {};
   @Event onPasswordChange: (value: string) => void = (_value: string) => {};
   @Event onRememberChange: (value: boolean) => void = (_value: boolean) => {};
   @Event onCode2faChange: (value: string) => void = (_value: string) => {};
@@ -71,16 +68,6 @@ export struct PasswordDialog {
                 .fontSize($r('app.float.font_title'))
                 .fontWeight(FontWeight.Bold)
                 .fontColor($r('app.color.neu_text_primary'));
-
-              Blank();
-
-              Button(this.mode === '2fa' ? '切换为密码' : '切换为 2FA', { type: ButtonType.Normal })
-                .fontSize($r('app.float.font_caption'))
-                .fontColor($r('app.color.brand_primary'))
-                .backgroundColor(Color.Transparent)
-                .onClick(() => {
-                  this.onModeChange(this.mode === '2fa' ? 'password' : '2fa');
-                });
             }
             .width('100%');
 
