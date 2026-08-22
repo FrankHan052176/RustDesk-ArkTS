@@ -12,11 +12,6 @@ on:
         required: true
         default: rustdesk-ohrs
         type: string
-      package_version:
-        description: Exact Core HAR version; empty uses latest
-        required: false
-        default: ''
-        type: string
 
 permissions:
   actions: read
@@ -29,7 +24,6 @@ concurrency:
 env:
   OHOS_COMMAND_LINE_TOOLS_VERSION: 6.1.1.280
   CORE_HAR_PACKAGE: ${{ github.event.client_payload.package_name || inputs.package_name || 'rustdesk-ohrs' }}
-  CORE_HAR_VERSION: ${{ github.event.client_payload.package_version || inputs.package_version || '' }}
   CORE_HAR_REGISTRY: https://devrepo.devcloud.cn-north-4.huaweicloud.com/artgalaxy/api/ohpm/cn-north-4_c07b1b38744f424b8d87a86532d38003_ohpm_1/
   LUMINOUS_NEO_VERSION: 1.0.2
   SIGNING_REPOSITORY: ${{ vars.SIGNING_REPOSITORY || 'FrankHan052176/AppGallerySigning' }}
@@ -74,9 +68,6 @@ jobs:
 
           ohpm uninstall "$CORE_HAR_PACKAGE"
           core_har_spec="${CORE_HAR_PACKAGE}@latest"
-          if [[ -n "$CORE_HAR_VERSION" ]]; then
-            core_har_spec="${CORE_HAR_PACKAGE}@${CORE_HAR_VERSION}"
-          fi
           echo "Installing Core HAR: $core_har_spec"
           ohpm install "$core_har_spec" \
             --registry "$CORE_HAR_REGISTRY" \
@@ -136,21 +127,28 @@ jobs:
         run: |
           set -euo pipefail
 
-          base_version_name=$(jq -er '.app.versionName' AppScope/app.json5)
-          if [[ "$base_version_name" =~ ^([0-9]+\.[0-9]+\.[0-9]+)(\.[0-9]+)?$ ]]; then
+          configured_version_name=$(jq -er '.app.versionName' AppScope/app.json5)
+          if [[ "$configured_version_name" =~ ^([0-9]+\.[0-9]+\.[0-9]+)(\.([0-9]+))?$ ]]; then
             base_version_name="${BASH_REMATCH[1]}"
           else
-            echo "Unsupported base versionName: $base_version_name" >&2
+            echo "Unsupported base versionName: $configured_version_name" >&2
             exit 1
           fi
 
-          version_start_sha=$(git log \
+          version_start_sha=''
+          while IFS= read -r candidate; do
+            if git show --format= --unified=0 "$candidate" -- AppScope/app.json5 \
+              | grep -E '^\+.*"versionName"[[:space:]]*:[[:space:]]*"'"$base_version_name"'"' \
+              >/dev/null; then
+              version_start_sha="$candidate"
+              break
+            fi
+          done < <(git log \
             -S "\"versionName\": \"$base_version_name\"" \
             --format=%H \
-            -1 \
             -- AppScope/app.json5)
           if [[ -z "$version_start_sha" ]]; then
-            echo "Unable to locate the commit that introduced versionName $base_version_name." >&2
+            echo "Unable to locate the commit that introduced base versionName $base_version_name." >&2
             exit 1
           fi
           version_start_epoch=$(git show -s --format=%ct "$version_start_sha")
