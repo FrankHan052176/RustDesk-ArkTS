@@ -13,7 +13,6 @@ export interface PasswordDialogProps {
   visible: boolean;
   mode: AuthDialogMode;
   canTrustDevice: boolean;
-  allowSwitchMode: boolean;
   errorMessage: string;
   password: string;
   rememberPassword: boolean;
@@ -75,15 +74,13 @@ export struct PasswordDialog {
 
               Blank();
 
-              if (this.allowSwitchMode) {
-                Button(this.mode === '2fa' ? '切换为密码' : '切换为 2FA', { type: ButtonType.Normal })
-                  .fontSize($r('app.float.font_caption'))
-                  .fontColor($r('app.color.brand_primary'))
-                  .backgroundColor(Color.Transparent)
-                  .onClick(() => {
-                    this.onModeChange(this.mode === '2fa' ? 'password' : '2fa');
-                  });
-              }
+              Button(this.mode === '2fa' ? '切换为密码' : '切换为 2FA', { type: ButtonType.Normal })
+                .fontSize($r('app.float.font_caption'))
+                .fontColor($r('app.color.brand_primary'))
+                .backgroundColor(Color.Transparent)
+                .onClick(() => {
+                  this.onModeChange(this.mode === '2fa' ? 'password' : '2fa');
+                });
             }
             .width('100%');
 
