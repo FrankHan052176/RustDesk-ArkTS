@@ -111,18 +111,18 @@ export struct PasswordDialog {
             .justifyContent(FlexAlign.Center)
             .clip(false);
 
-            if (this.canTrustDevice) {
-              LuminousSwitch({
-                label: '信任此设备',
-                description: '下次连接该设备无需重复 2FA 验证',
-                isOn: this.trustThisDevice,
-                rowWidth: this.panelWidth() - 48,
-                motionEnabled: true,
-                onChange: (value: boolean): void => {
-                  this.onTrustThisDeviceChange(value);
-                },
-              })
-            }
+            LuminousSwitch({
+              label: '信任设备',
+              description: this.canTrustDevice
+                ? '开启后，下次连接该设备无需重复 2FA 验证'
+                : '远端支持时，将本机加入受信任设备列表',
+              isOn: this.trustThisDevice,
+              rowWidth: this.panelWidth() - 48,
+              motionEnabled: true,
+              onChange: (value: boolean): void => {
+                this.onTrustThisDeviceChange(value);
+              },
+            })
           } else {
             Row() {
               LuminousTextField({

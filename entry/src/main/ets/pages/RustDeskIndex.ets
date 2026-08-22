@@ -2156,6 +2156,8 @@ struct RustDeskIndex {
       await this.closeSession('正在切换会话');
     }
     this.activeSessionPassword = '';
+    this.trustThisDevice = false;
+    this.canTrustDevice = true;
     this.activeSessionShareTarget = displayTarget;
     const targetKind = handoff?.targetKind ?? this.handoffTargetKind(displayTarget);
     this.activeSessionShareTargetKind = targetKind;
