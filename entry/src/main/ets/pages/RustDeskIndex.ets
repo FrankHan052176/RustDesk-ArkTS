@@ -12,6 +12,7 @@ import { common, OpenLinkOptions } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { BusinessError, Callback, deviceInfo } from '@kit.BasicServicesKit';
 import { display, window } from '@kit.ArkUI';
+import { inputMethod } from '@kit.IMEKit';
 import { image } from '@kit.ImageKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
@@ -54,6 +55,11 @@ import {
 } from './rustdesk/RustDeskDirectoryTypes';
 import { RustDeskSurfaceController } from './rustdesk/RustDeskSurfaceController';
 import { RustDeskInputController } from './rustdesk/RustDeskInputController';
+import {
+  RUSTDESK_IME_INITIAL_TEXT,
+  RustDeskImeInputController,
+  RustDeskImeInputDelta,
+} from './rustdesk/RustDeskImeInputController';
 import { RustDeskCursorModel } from './rustdesk/RustDeskCursorModel';
 import { RustDeskClipboardController } from './rustdesk/RustDeskClipboardController';
 import {
@@ -143,6 +149,7 @@ const RENDER_STALL_THRESHOLD_MS = 3500;
 const RENDER_STALL_RECOVERY_COOLDOWN_MS = 5000;
 const WAITING_FOR_IMAGE_TEXT = 'Connected, waiting for image...';
 const PREVIEW_INPUT_FOCUS_ID = 'rustdesk-preview-input-layer';
+const SYSTEM_IME_INPUT_FOCUS_ID = 'rustdesk-system-ime-input';
 const SESSION_OVERLAY_TRANSITION_CHAT = 'rustdesk-session-overlay-chat';
 const SESSION_OVERLAY_TRANSITION_DISPLAY = 'rustdesk-session-overlay-display';
 const SESSION_OVERLAY_TRANSITION_QUALITY = 'rustdesk-session-overlay-quality';
@@ -216,6 +223,8 @@ struct RustDeskIndex {
   private remoteSessionShareController: RemoteSessionShareController = new RemoteSessionShareController();
   private activeSessionDefaults: SessionDefaults = new SessionDefaults();
   private inputController?: RustDeskInputController;
+  private imeInputController: RustDeskImeInputController = new RustDeskImeInputController();
+  private systemImeTextController: TextInputController = new TextInputController();
   private clipboardController?: RustDeskClipboardController;
   private preferences?: RustDeskPreferences;
   private connectScroller: Scroller = new Scroller();
@@ -242,6 +251,7 @@ struct RustDeskIndex {
   private inputInterceptorActive: boolean = false;
   private previewKeyboardCaptureFocused: boolean = false;
   private previewKeyboardBlurTimer: number = -1;
+  private systemImeBlurTimer: number = -1;
   private softKeyboardPressedKeys: string[] = [];
   private softKeyboardAltActive: boolean = false;
   private softKeyboardCtrlActive: boolean = false;
@@ -333,6 +343,8 @@ struct RustDeskIndex {
   @Local rgbaFallbackActive: boolean = false;
   @Local isFoldHoverMode: boolean = false;
   @Local softKeyboardVisible: boolean = false;
+  @Local systemImeActive: boolean = false;
+  @Local systemImeText: string = RUSTDESK_IME_INITIAL_TEXT;
   @Local softKeyboardDockTop: boolean = false;
   @Local softKeyboardX: number = 0;
   @Local softKeyboardY: number = 12;
@@ -569,6 +581,7 @@ struct RustDeskIndex {
       this.accountOidcOpenedUrl = '';
     }
     this.previewKeyboardCaptureFocused = false;
+    this.hideSystemIme(false);
     this.releaseSoftKeyboardKeys();
     this.stopInputInterceptor();
     this.clipboardController?.reset();
@@ -602,6 +615,7 @@ struct RustDeskIndex {
 
   onPageHide(): void {
     this.pageVisible = false;
+    this.hideSystemIme(false);
     this.disableRemoteSessionSharing(true);
     this.clipboardController?.stop();
     this.stopInputInterceptor();
@@ -2492,6 +2506,7 @@ struct RustDeskIndex {
       const sessionId = this.activeSessionId;
       this.rejectPendingInsecureConnection();
       hilog.info(DOMAIN, TAG, 'closeSession sessionId=%{public}s reason=%{public}s', sessionId, reason ?? '');
+      this.hideSystemIme(false);
       this.releaseSoftKeyboardKeys();
       if (this.relativeMouseMode && sessionId) {
         this.syncRelativeMouseMode(false);
@@ -2581,6 +2596,8 @@ struct RustDeskIndex {
     this.previewUserOffsetY = 0;
     this.previewUserRotation = 0;
     this.softKeyboardVisible = false;
+    this.systemImeActive = false;
+    this.systemImeText = this.imeInputController.reset();
     this.softKeyboardDockTop = false;
     this.softKeyboardX = 0;
     this.softKeyboardY = 12;
@@ -2673,6 +2690,7 @@ struct RustDeskIndex {
     if (!this.overlayState.open(panel)) {
       return;
     }
+    this.hideSystemIme(false);
     this.hideSoftKeyboard();
     this.previewKeyboardCaptureFocused = false;
     this.syncInputInterceptor();
@@ -2726,13 +2744,150 @@ struct RustDeskIndex {
     return this.isRemoteControlSessionActive() || this.isRemoteViewerSessionActive();
   }
 
-  private softKeyboardAvailable(): boolean {
+  private remoteTextInputAvailable(): boolean {
     return !this.isPcDevice()
       && this.isRemoteControlSessionActive()
       && this.remoteKeyboardPermissionAllowed
       && this.showPreviewModal
-      && !this.isFoldHoverMode
       && !this.showTransferWorkspace;
+  }
+
+  private systemImeAvailable(): boolean {
+    return this.remoteTextInputAvailable();
+  }
+
+  private softKeyboardAvailable(): boolean {
+    return this.remoteTextInputAvailable() && !this.isFoldHoverMode;
+  }
+
+  private toggleSystemIme(): void {
+    const available = this.systemImeAvailable();
+    this.logRelativeDebug(
+      'system_ime_toggle',
+      `available=${available} active=${this.systemImeActive}`,
+    );
+    if (!available || this.systemImeActive) {
+      this.hideSystemIme();
+      return;
+    }
+    this.hideSoftKeyboard();
+    this.systemImeText = this.imeInputController.reset();
+    this.systemImeActive = true;
+    setTimeout(() => this.requestSystemImeFocus(), 40);
+  }
+
+  private requestSystemImeFocus(): void {
+    if (!this.systemImeActive || !this.systemImeAvailable()) {
+      return;
+    }
+    this.clearSystemImeBlurTimer();
+    try {
+      this.getUIContext().getFocusController().requestFocus(SYSTEM_IME_INPUT_FOCUS_ID);
+      this.systemImeTextController.caretPosition(this.systemImeText.length);
+    } catch (error) {
+      this.logRelativeDebug('system_ime_focus', `request failed=${String(error)}`);
+      return;
+    }
+    setTimeout(() => {
+      if (!this.systemImeActive) {
+        return;
+      }
+      try {
+        inputMethod.getController().showTextInput()
+          .then((): void => this.logRelativeDebug('system_ime_focus', 'shown'))
+          .catch((error: BusinessError): void => {
+            this.logRelativeDebug('system_ime_focus', `show failed=${error.code}:${error.message}`);
+          });
+      } catch (error) {
+        this.logRelativeDebug('system_ime_focus', `show failed=${String(error)}`);
+      }
+    }, 80);
+  }
+
+  private hideSystemIme(restorePreviewFocus: boolean = true): void {
+    this.clearSystemImeBlurTimer();
+    const wasActive = this.systemImeActive;
+    this.systemImeActive = false;
+    this.systemImeText = this.imeInputController.reset();
+    try {
+      this.systemImeTextController.stopEditing();
+    } catch (error) {
+      this.logRelativeDebug('system_ime_focus', `stop failed=${String(error)}`);
+    }
+    if (wasActive) {
+      try {
+        inputMethod.getController().hideTextInput()
+          .catch((error: BusinessError): void => {
+            this.logRelativeDebug('system_ime_focus', `hide failed=${error.code}:${error.message}`);
+          });
+      } catch (error) {
+        this.logRelativeDebug('system_ime_focus', `hide failed=${String(error)}`);
+      }
+    }
+    if (restorePreviewFocus && this.showPreviewModal) {
+      setTimeout(() => this.requestPreviewInputFocus(), 80);
+    }
+  }
+
+  private scheduleSystemImeDeactivate(): void {
+    if (!this.systemImeActive) {
+      return;
+    }
+    this.clearSystemImeBlurTimer();
+    this.systemImeBlurTimer = setTimeout(() => {
+      this.systemImeBlurTimer = -1;
+      if (this.systemImeActive) {
+        this.hideSystemIme(true);
+      }
+    }, 80) as number;
+  }
+
+  private clearSystemImeBlurTimer(): void {
+    if (this.systemImeBlurTimer >= 0) {
+      clearTimeout(this.systemImeBlurTimer);
+      this.systemImeBlurTimer = -1;
+    }
+  }
+
+  private handleSystemImeChange(value: string, _previewText?: PreviewText, options?: TextChangeOptions): void {
+    const delta: RustDeskImeInputDelta = this.imeInputController.applyCommittedText(value, options?.oldContent);
+    this.systemImeText = delta.localText;
+    if (!this.systemImeActive || !this.isRemoteControlSessionActive()) {
+      return;
+    }
+    for (let index = 0; index < delta.backspaceCount; index += 1) {
+      this.sendSoftKeyboardKey('VK_BACK', true, false, false, false, false);
+    }
+    if (delta.insertedText.length > 0) {
+      this.sendSystemImeText(delta.insertedText);
+    }
+    setTimeout(() => {
+      if (this.systemImeActive) {
+        this.systemImeTextController.caretPosition(this.systemImeText.length);
+      }
+    }, 0);
+  }
+
+  private sendSystemImeText(value: string): void {
+    try {
+      const response = this.nativeSessionBridge.inputString(this.activeSessionId, value);
+      this.logRelativeDebug('system_ime_text', `ok=${response.ok} length=${value.length}`);
+      if (!response.ok) {
+        this.errorText = response.message ?? '输入法文本发送失败';
+      }
+    } catch (error) {
+      this.errorText = `输入法文本发送失败: ${String(error)}`;
+      this.logRelativeDebug('system_ime_text', `failed=${String(error)}`);
+    }
+  }
+
+  private handleSystemImeSubmit(event: SubmitEvent): void {
+    event.keepEditableState();
+    if (!this.systemImeActive) {
+      return;
+    }
+    this.sendSoftKeyboardKey('VK_RETURN', true, false, false, false, false);
+    setTimeout(() => this.requestSystemImeFocus(), 0);
   }
 
   private toggleSoftKeyboard(): void {
@@ -2750,6 +2905,7 @@ struct RustDeskIndex {
       setTimeout(() => this.requestPreviewInputFocus(), 80);
       return;
     }
+    this.hideSystemIme(false);
     this.resetSoftKeyboardPosition();
     this.softKeyboardVisible = true;
     this.logRelativeDebug('soft_keyboard_toggle', 'visible=true');
@@ -3321,6 +3477,8 @@ struct RustDeskIndex {
       && this.transferSessionTarget !== target) {
       this.errorText = `已有 ${this.transferSessionTarget} 的文件传输会话，请先结束该会话再切换设备`;
       if (this.transferManager.canTransfer()) {
+        this.hideSystemIme(false);
+        this.hideSoftKeyboard();
         this.showTransferWorkspace = true;
       }
       return;
@@ -3346,6 +3504,8 @@ struct RustDeskIndex {
         this.transferConnectionPending = false;
         this.connectionUiPhase = 'idle';
         this.connectionUiMessage = '';
+        this.hideSystemIme(false);
+        this.hideSoftKeyboard();
         this.showTransferWorkspace = true;
         this.syncTransferState();
         return;
@@ -3522,6 +3682,8 @@ struct RustDeskIndex {
         this.transferConnectionPending = false;
         this.connectionUiPhase = 'idle';
         this.connectionUiMessage = '';
+        this.hideSystemIme(false);
+        this.hideSoftKeyboard();
         this.showTransferWorkspace = true;
         this.previewKeyboardCaptureFocused = false;
         this.syncInputInterceptor();
@@ -5154,7 +5316,7 @@ struct RustDeskIndex {
   }
 
   private requestPreviewInputFocus(): void {
-    if (!this.showPreviewModal) {
+    if (!this.showPreviewModal || this.systemImeActive) {
       return;
     }
     try {
@@ -5765,6 +5927,7 @@ struct RustDeskIndex {
         const keyboardPermission = String(event.keyboard).trim().toLowerCase();
         if (keyboardPermission === 'false') {
           this.remoteKeyboardPermissionAllowed = false;
+          this.hideSystemIme(false);
           this.hideSoftKeyboard();
         } else if (keyboardPermission === 'true') {
           this.remoteKeyboardPermissionAllowed = true;
@@ -6357,7 +6520,7 @@ struct RustDeskIndex {
         .hitTestBehavior(HitTestMode.Block)
         .focusable(true)
         .defaultFocus(true)
-        .focusOnTouch(true)
+        .focusOnTouch(!this.systemImeActive)
         .onVisibleAreaChange([1.0], (_isExpanding: boolean, currentRatio: number): void => {
           if (currentRatio >= 0.999 && this.showPreviewModal) {
             this.requestPreviewInputFocus();
@@ -6397,6 +6560,53 @@ struct RustDeskIndex {
           this.reprojectVirtualCursorOverlay();
         })
         .zIndex(10);
+
+        if (this.systemImeAvailable()) {
+          TextInput({
+            text: this.systemImeText,
+            controller: this.systemImeTextController,
+          })
+            .id(SYSTEM_IME_INPUT_FOCUS_ID)
+            .type(InputType.Normal)
+            .enterKeyType(EnterKeyType.NEW_LINE)
+            .enablePreviewText(true)
+            .enableKeyboardOnFocus(true)
+            .selectionMenuHidden(true)
+            .showUnderline(false)
+            .fontColor($r('app.color.transparent'))
+            .caretColor($r('app.color.transparent'))
+            .backgroundColor($r('app.color.transparent'))
+            .padding(0)
+            .width(1)
+            .height(1)
+            .opacity(0.01)
+            .position({ x: 0, y: 0 })
+            .hitTestBehavior(HitTestMode.None)
+            .focusable(true)
+            .onFocus((): void => {
+              this.clearSystemImeBlurTimer();
+              if (this.systemImeActive) {
+                this.systemImeTextController.caretPosition(this.systemImeText.length);
+              }
+            })
+            .onBlur((): void => {
+              this.scheduleSystemImeDeactivate();
+            })
+            .onEditChange((isEditing: boolean): void => {
+              if (isEditing) {
+                this.clearSystemImeBlurTimer();
+              } else {
+                this.scheduleSystemImeDeactivate();
+              }
+            })
+            .onChange((value: string, previewText?: PreviewText, options?: TextChangeOptions): void => {
+              this.handleSystemImeChange(value, previewText, options);
+            })
+            .onSubmit((_enterKey: EnterKeyType, event: SubmitEvent): void => {
+              this.handleSystemImeSubmit(event);
+            })
+            .zIndex(11);
+        }
 
         if (this.previewTransformMode) {
           this.previewTransformGestureLayer();
@@ -6489,6 +6699,8 @@ struct RustDeskIndex {
             androidNavigationVisible: this.androidNavigationVisible,
             softKeyboardAvailable: this.softKeyboardAvailable(),
             softKeyboardVisible: this.softKeyboardVisible,
+            systemImeAvailable: this.systemImeAvailable(),
+            systemImeActive: this.systemImeActive,
             audioAvailable: this.remoteAudioState.available,
             audioMuted: this.remoteAudioState.muted,
             wideLayout: this.activeSessionKind === 'remote_control' && this.previewViewWidth >= 700,
@@ -6507,6 +6719,7 @@ struct RustDeskIndex {
             onOpenDisplay: () => this.openDisplaySheet(),
             onOpenQuality: () => this.openQualitySheet(),
             onToggleSoftKeyboard: () => this.toggleSoftKeyboard(),
+            onToggleSystemIme: () => this.toggleSystemIme(),
             onToggleAndroidNavigation: () => {
               this.androidNavigationVisible = !this.androidNavigationVisible;
               if (this.androidNavigationVisible && this.previewViewWidth > 0 && this.previewViewHeight > 0) {

@@ -2,6 +2,7 @@ import { SessionOverlayPanel } from '../SessionOverlayState';
 import { SessionToolbarMetrics } from '../SessionToolbarMetrics';
 
 const SOFT_KEYBOARD_TRANSITION_ID = 'rustdesk-session-soft-keyboard';
+const SYSTEM_IME_TRANSITION_ID = 'rustdesk-session-system-ime';
 
 interface ToolbarActionOptions {
   label: string;
@@ -24,6 +25,8 @@ export interface SessionToolbarProps {
   androidNavigationVisible: boolean;
   softKeyboardAvailable: boolean;
   softKeyboardVisible: boolean;
+  systemImeAvailable: boolean;
+  systemImeActive: boolean;
   audioAvailable: boolean;
   audioMuted: boolean;
   wideLayout: boolean;
@@ -41,6 +44,7 @@ export interface SessionToolbarProps {
   onOpenDisplay: () => void;
   onOpenQuality: () => void;
   onToggleSoftKeyboard: () => void;
+  onToggleSystemIme: () => void;
   onToggleAndroidNavigation: () => void;
   onAudioChange: (enabled: boolean) => void;
   onDisconnect: () => void;
@@ -73,6 +77,8 @@ export struct SessionToolbar {
   @Local displayedAndroidNavigationVisible: boolean = false;
   @Param softKeyboardAvailable: boolean = false;
   @Param softKeyboardVisible: boolean = false;
+  @Param systemImeAvailable: boolean = false;
+  @Param systemImeActive: boolean = false;
   @Param audioAvailable: boolean = false;
   @Param audioMuted: boolean = false;
   @Param wideLayout: boolean = false;
@@ -91,6 +97,7 @@ export struct SessionToolbar {
   @Event onOpenDisplay: () => void = () => {};
   @Event onOpenQuality: () => void = () => {};
   @Event onToggleSoftKeyboard: () => void = () => {};
+  @Event onToggleSystemIme: () => void = () => {};
   @Event onToggleAndroidNavigation: () => void = () => {};
   @Event onAudioChange: (enabled: boolean) => void = (_enabled: boolean) => {};
   @Event onDisconnect: () => void = () => {};
@@ -531,9 +538,17 @@ export struct SessionToolbar {
       Column({ space: $r('app.float.space_8') }) {
         Row({ space: $r('app.float.space_8') }) {
           this.PointerModeAction()
+          if (this.systemImeAvailable) {
+            this.ToolbarAction({
+              label: '输入法',
+              active: this.systemImeActive,
+              transitionId: SYSTEM_IME_TRANSITION_ID,
+              onClick: () => this.onToggleSystemIme(),
+            })
+          }
           if (this.softKeyboardAvailable) {
             this.ToolbarAction({
-              label: this.softKeyboardVisible ? '键盘开' : '键盘',
+              label: '虚拟键盘',
               active: this.softKeyboardVisible,
               transitionId: SOFT_KEYBOARD_TRANSITION_ID,
               onClick: () => this.onToggleSoftKeyboard(),
@@ -575,9 +590,17 @@ export struct SessionToolbar {
       Column({ space: $r('app.float.space_8') }) {
         Row({ space: $r('app.float.space_8') }) {
           this.PointerModeAction()
+          if (this.systemImeAvailable) {
+            this.ToolbarAction({
+              label: '输入法',
+              active: this.systemImeActive,
+              transitionId: SYSTEM_IME_TRANSITION_ID,
+              onClick: () => this.onToggleSystemIme(),
+            })
+          }
           if (this.softKeyboardAvailable) {
             this.ToolbarAction({
-              label: this.softKeyboardVisible ? '键盘开' : '键盘',
+              label: '虚拟键盘',
               active: this.softKeyboardVisible,
               transitionId: SOFT_KEYBOARD_TRANSITION_ID,
               onClick: () => this.onToggleSoftKeyboard(),
