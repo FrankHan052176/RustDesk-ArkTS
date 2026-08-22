@@ -392,6 +392,7 @@ struct RustDeskIndex {
   @Local trustThisDevice: boolean = false;
   @Local canTrustDevice: boolean = true;
   @Local authErrorMessage: string = '';
+  @Local allowSwitchAuthMode: boolean = false;
   @Local insecureConnectionDialogVisible: boolean = false;
   @Local insecureConnectionMessage: string = '';
   private insecureConnectionSessionId: string = '';
@@ -5862,6 +5863,7 @@ struct RustDeskIndex {
       const errorMsg = type === 're-input-password' ? '密码错误，请重新输入' : '';
       this.connectionSummary = '等待密码验证';
       this.errorText = message;
+      this.allowSwitchAuthMode = false;
       if (this.tryAutoSubmitHandoffPassword()) {
         return;
       }
@@ -5874,6 +5876,7 @@ struct RustDeskIndex {
         : '';
       this.connectionSummary = '等待二次验证 (2FA)';
       this.errorText = message;
+      this.allowSwitchAuthMode = true;
       this.canTrustDevice = this.nativeSessionBridge.getEnableTrustedDevices(this.activeSessionId);
       this.openPasswordDialog('primary', errorMsg, '2fa');
       return;
@@ -7750,6 +7753,7 @@ struct RustDeskIndex {
         visible: this.passwordDialogVisible,
         mode: this.authDialogMode,
         canTrustDevice: this.canTrustDevice,
+        allowSwitchMode: this.allowSwitchAuthMode,
         errorMessage: this.authErrorMessage,
         password: this.passwordDraft,
         rememberPassword: this.rememberPassword,
