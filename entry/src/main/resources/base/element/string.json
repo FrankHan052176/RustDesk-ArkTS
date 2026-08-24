@@ -69,6 +69,18 @@
       "value": "局域网"
     },
     {
+      "name": "device_status_checking",
+      "value": "未检测"
+    },
+    {
+      "name": "device_status_online",
+      "value": "在线"
+    },
+    {
+      "name": "device_status_offline",
+      "value": "离线"
+    },
+    {
       "name": "device_search_placeholder",
       "value": "搜索 ID、别名或设备名"
     },
@@ -154,7 +166,39 @@
     },
     {
       "name": "settings_server_test",
-      "value": "验证配置"
+      "value": "测试配置"
+    },
+    {
+      "name": "settings_server_status_unconfigured",
+      "value": "未配置"
+    },
+    {
+      "name": "settings_server_status_untested",
+      "value": "未测试"
+    },
+    {
+      "name": "settings_server_status_testing",
+      "value": "测试中"
+    },
+    {
+      "name": "settings_server_status_success",
+      "value": "测试成功"
+    },
+    {
+      "name": "settings_server_status_failed",
+      "value": "测试失败"
+    },
+    {
+      "name": "settings_server_action_test",
+      "value": "测试"
+    },
+    {
+      "name": "settings_server_action_retest",
+      "value": "重测"
+    },
+    {
+      "name": "settings_server_action_retry",
+      "value": "重试"
     },
     {
       "name": "settings_server_save",
@@ -182,7 +226,11 @@
     },
     {
       "name": "settings_server_remote_pending",
-      "value": "尚未检查地址"
+      "value": "尚未测试连接"
+    },
+    {
+      "name": "settings_server_remote_unconfigured",
+      "value": "未配置（可直接留空）"
     },
     {
       "name": "settings_server_account_ready",
@@ -214,7 +262,7 @@
     },
     {
       "name": "settings_server_testing",
-      "value": "正在验证…"
+      "value": "正在测试…"
     },
     {
       "name": "settings_server_saving",
@@ -222,7 +270,7 @@
     },
     {
       "name": "settings_server_validation_note",
-      "value": "这里只检查格式和地址解析，不代表端口或账户 API 已连通；实际远控能力以建立会话为准。"
+      "value": "测试会执行 RustDesk ID、Relay 协议探测以及 API /api/login-options 校验；普通网站或仅端口可连接不会判定为正常。全部留空表示不使用自定义服务器。"
     },
     {
       "name": "settings_server_error_id_required",
@@ -242,7 +290,23 @@
     },
     {
       "name": "settings_server_custom_hint",
-      "value": "应用不预置服务器；配置 API 后会从该服务加载账户密码、OAuth 与通讯簿能力。"
+      "value": "所有服务器均可留空；仅使用局域网直连时无需配置服务器。配置 API 后会从该服务加载账户与通讯簿能力。"
+    },
+    {
+      "name": "settings_server_test_success",
+      "value": "RustDesk 服务响应正常"
+    },
+    {
+      "name": "settings_server_test_failed",
+      "value": "不是有效的 RustDesk 服务或配置有误"
+    },
+    {
+      "name": "settings_server_save_success",
+      "value": "配置已保存"
+    },
+    {
+      "name": "settings_server_empty_success",
+      "value": "未配置服务器"
     },
     {
       "name": "settings_defaults_title",
@@ -383,6 +447,18 @@
     {
       "name": "settings_account_oidc_microsoft",
       "value": "继续使用 Microsoft"
+    },
+    {
+      "name": "settings_account_oidc_github_short",
+      "value": "GitHub"
+    },
+    {
+      "name": "settings_account_oidc_google_short",
+      "value": "Google"
+    },
+    {
+      "name": "settings_account_oidc_microsoft_short",
+      "value": "微软"
     },
     {
       "name": "settings_account_oidc_cancel",

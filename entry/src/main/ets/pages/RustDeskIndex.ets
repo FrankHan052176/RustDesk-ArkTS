@@ -49,6 +49,7 @@ import {
   AccountLoginProvider,
   AccountState,
   DirectorySnapshot,
+  PeerDirectProbeTarget,
   PeerRecord,
   ServerConfig,
   SessionDefaults,
@@ -258,9 +259,17 @@ struct RustDeskIndex {
   private softKeyboardShiftActive: boolean = false;
   private softKeyboardCommandActive: boolean = false;
   private lanScanTimer: number = -1;
+  private lanScanStartedAt: number = 0;
+  private lanScanGeneration: number = 0;
+  private serverTestTimer: number = -1;
+  private serverTestGeneration: number = 0;
+  private systemImeCaretTimer: number = -1;
   private accountPollTimer: number = -1;
   private accountOptionsPollTimer: number = -1;
   private addressBookPollTimer: number = -1;
+  private peerOnlinePollTimer: number = -1;
+  private peerOnlinePollGeneration: number = 0;
+  private peerOnlinePollInFlight: boolean = false;
   private accountOidcActive: boolean = false;
   private accountOidcOpenedUrl: string = '';
   private sessionReturnTabIndex: number = 0;
@@ -524,6 +533,11 @@ struct RustDeskIndex {
   };
   private onRemoteSessionAppState = (foreground: boolean): void => {
     this.appForeground = foreground;
+    if (foreground && this.pageVisible) {
+      this.schedulePeerOnlineProbe(0);
+    } else {
+      this.stopPeerOnlinePolling();
+    }
     this.syncRemoteSessionSharing();
   };
   private onRemoteSessionContinueHandoff = (): void => {
@@ -571,10 +585,14 @@ struct RustDeskIndex {
     this.clearConnectionTimeout();
     this.clearPasswordTimeout();
     this.clearPreviewKeyboardBlurTimer();
+    this.clearSystemImeCaretTimer();
     this.clearLanScanTimer();
+    this.serverTestGeneration += 1;
+    this.clearServerTestTimer();
     this.clearAccountPollTimer();
     this.clearAccountOptionsPollTimer();
     this.clearAddressBookPollTimer();
+    this.stopPeerOnlinePolling();
     if (this.accountOidcActive) {
       this.mainBridge.cancelAccountOidc();
       this.accountOidcActive = false;
@@ -610,6 +628,7 @@ struct RustDeskIndex {
     if (this.accountOidcActive) {
       this.scheduleAccountPoll(200);
     }
+    this.schedulePeerOnlineProbe(0);
     this.syncRemoteSessionSharing();
   }
 
@@ -617,6 +636,7 @@ struct RustDeskIndex {
     this.pageVisible = false;
     this.hideSystemIme(false);
     this.disableRemoteSessionSharing(true);
+    this.stopPeerOnlinePolling();
     this.clipboardController?.stop();
     this.stopInputInterceptor();
   }
@@ -1125,6 +1145,7 @@ struct RustDeskIndex {
     config.usingPublicServer = this.serverConfig.usingPublicServer;
     config.remoteReachable = this.serverConfig.remoteReachable;
     config.accountAvailable = loggedIn;
+    config.resultState = this.serverConfig.resultState;
     config.message = this.serverConfig.message;
     this.serverConfig = config;
   }
@@ -1531,21 +1552,66 @@ struct RustDeskIndex {
   }
 
   private testServerConfiguration(config: ServerConfig): void {
+    if (this.serverValidating || this.serverSaving) {
+      return;
+    }
+    this.clearServerTestTimer();
+    const generation = ++this.serverTestGeneration;
     this.serverValidating = true;
+    this.serverTestTimer = setTimeout(() => {
+      this.serverTestTimer = -1;
+      if (generation !== this.serverTestGeneration) {
+        return;
+      }
+      this.performServerConfigurationTest(config, generation);
+    }, 0) as number;
+  }
+
+  private async performServerConfigurationTest(config: ServerConfig, generation: number): Promise<void> {
     try {
-      this.serverConfig = this.mainBridge.testServerConfig(config);
+      const result = await this.mainBridge.testServerConfig(config);
+      if (generation === this.serverTestGeneration) {
+        this.serverConfig = result;
+      }
+    } catch (error) {
+      if (generation === this.serverTestGeneration) {
+        config.remoteReachable = false;
+        config.resultState = 'error';
+        config.message = String(error);
+        this.serverConfig = config;
+      }
     } finally {
-      this.serverValidating = false;
+      if (generation === this.serverTestGeneration) {
+        this.serverValidating = false;
+      }
     }
   }
 
+  private updateServerConfigDraft(config: ServerConfig): void {
+    this.serverTestGeneration += 1;
+    this.clearServerTestTimer();
+    this.serverValidating = false;
+    this.serverConfig = config;
+  }
+
+  private clearServerTestTimer(): void {
+    if (this.serverTestTimer < 0) {
+      return;
+    }
+    clearTimeout(this.serverTestTimer);
+    this.serverTestTimer = -1;
+  }
+
   private saveServerConfiguration(config: ServerConfig): void {
+    this.serverTestGeneration += 1;
+    this.clearServerTestTimer();
+    this.serverValidating = false;
     const previousApiServer = this.serverConfig.effectiveApiServer;
     this.serverSaving = true;
     try {
       const result = this.mainBridge.saveServerConfig(config);
       this.serverConfig = result;
-      if (!result.remoteReachable) {
+      if (result.resultState !== 'save-success') {
         return;
       }
       const accountResetRequired = previousApiServer !== result.effectiveApiServer;
@@ -1578,8 +1644,245 @@ struct RustDeskIndex {
     snapshot.recent = this.mainBridge.listRecentPeers();
     snapshot.addressBook = this.mainBridge.listAddressBookPeers();
     snapshot.lan = this.mainBridge.listLanPeers();
+    this.preserveKnownPeerStatuses(snapshot.recent);
+    this.preserveKnownPeerStatuses(snapshot.addressBook);
+    this.preserveKnownPeerStatuses(snapshot.lan);
     snapshot.message = this.mainBridge.getDirectoryMessage();
     this.directorySnapshot = snapshot;
+    this.schedulePeerOnlineProbe(120);
+  }
+
+  private preserveKnownPeerStatuses(peers: PeerRecord[]): void {
+    const previousLists: PeerRecord[][] = [
+      this.directorySnapshot.recent,
+      this.directorySnapshot.addressBook,
+      this.directorySnapshot.lan,
+    ];
+    for (let index = 0; index < peers.length; index += 1) {
+      if (peers[index].onlineKnown) {
+        continue;
+      }
+      for (let listIndex = 0; listIndex < previousLists.length; listIndex += 1) {
+        const previous = previousLists[listIndex];
+        for (let peerIndex = 0; peerIndex < previous.length; peerIndex += 1) {
+          if (previous[peerIndex].id === peers[index].id && previous[peerIndex].onlineKnown) {
+            peers[index].onlineKnown = true;
+            peers[index].online = previous[peerIndex].online;
+            listIndex = previousLists.length;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  private collectPeerOnlineIds(): string[] {
+    const ids: string[] = [];
+    const lists: PeerRecord[][] = [
+      this.directorySnapshot.recent,
+      this.directorySnapshot.addressBook,
+      this.directorySnapshot.lan,
+    ];
+    for (let listIndex = 0; listIndex < lists.length; listIndex += 1) {
+      for (let peerIndex = 0; peerIndex < lists[listIndex].length; peerIndex += 1) {
+        const id = this.peerOnlineQueryId(lists[listIndex][peerIndex]);
+        if (id.length > 0 && ids.indexOf(id) < 0) {
+          ids.push(id);
+        }
+      }
+    }
+    return ids;
+  }
+
+  private isDirectIpAddress(value: string): boolean {
+    const normalized = value.trim();
+    let host = normalized;
+    if (normalized.startsWith('[')) {
+      const closingBracket = normalized.indexOf(']');
+      if (closingBracket <= 1) {
+        return false;
+      }
+      host = normalized.substring(1, closingBracket);
+    } else {
+      const firstColon = normalized.indexOf(':');
+      const lastColon = normalized.lastIndexOf(':');
+      if (firstColon > 0 && firstColon === lastColon) {
+        const portText = normalized.substring(lastColon + 1);
+        const port = Number(portText);
+        if (portText.length > 0 && Number.isInteger(port) && port > 0 && port <= 65535) {
+          host = normalized.substring(0, lastColon);
+        }
+      }
+    }
+    const parts = host.split('.');
+    if (parts.length === 4) {
+      for (let index = 0; index < parts.length; index += 1) {
+        if (parts[index].length === 0) {
+          return false;
+        }
+        const octet = Number(parts[index]);
+        if (!Number.isInteger(octet) || octet < 0 || octet > 255) {
+          return false;
+        }
+      }
+      return true;
+    }
+    return host.indexOf(':') >= 0 && host.indexOf('@') < 0;
+  }
+
+  private collectPeerDirectProbeTargets(): PeerDirectProbeTarget[] {
+    const targets: PeerDirectProbeTarget[] = [];
+    const keys: string[] = [];
+    const lists: PeerRecord[][] = [
+      this.directorySnapshot.recent,
+      this.directorySnapshot.addressBook,
+      this.directorySnapshot.lan,
+    ];
+    for (let listIndex = 0; listIndex < lists.length; listIndex += 1) {
+      for (let peerIndex = 0; peerIndex < lists[listIndex].length; peerIndex += 1) {
+        const peer = lists[listIndex][peerIndex];
+        const peerId = peer.id.trim();
+        const target = this.isDirectIpAddress(peerId) ? peerId : peer.lanIp.trim();
+        if (peerId.length === 0 || !this.isDirectIpAddress(target) || keys.indexOf(peerId) >= 0) {
+          continue;
+        }
+        const probeTarget = new PeerDirectProbeTarget();
+        probeTarget.key = peerId;
+        probeTarget.target = target;
+        targets.push(probeTarget);
+        keys.push(peerId);
+      }
+    }
+    return targets;
+  }
+
+  private peersShareLanIdentity(source: PeerRecord, lanPeer: PeerRecord): boolean {
+    const sourceId = source.id.trim();
+    const sourceLanIp = source.lanIp.trim();
+    const lanId = lanPeer.id.trim();
+    const lanIp = lanPeer.lanIp.trim();
+    if ((lanIp.length > 0 && sourceId === lanIp) ||
+      (sourceLanIp.length > 0 && sourceLanIp === lanIp) ||
+      (sourceLanIp.length > 0 && sourceLanIp === lanId)) {
+      return true;
+    }
+    const sourceHostname = source.hostname.trim().toLowerCase();
+    const lanHostname = lanPeer.hostname.trim().toLowerCase();
+    if (sourceHostname.length > 0 && sourceHostname === lanHostname) {
+      return true;
+    }
+    const sourceAlias = source.alias.trim().toLowerCase();
+    const lanAlias = lanPeer.alias.trim().toLowerCase();
+    return sourceAlias.length > 0 && sourceAlias === lanAlias;
+  }
+
+  private peerOnlineQueryId(source: PeerRecord): string {
+    const id = source.id.trim();
+    if (id.length === 0 || !this.isDirectIpAddress(id)) {
+      return id;
+    }
+    for (let index = 0; index < this.directorySnapshot.lan.length; index += 1) {
+      const lanPeer = this.directorySnapshot.lan[index];
+      if (this.peersShareLanIdentity(source, lanPeer)) {
+        return lanPeer.id.trim();
+      }
+    }
+    return '';
+  }
+
+  private schedulePeerOnlineProbe(delayMs: number): void {
+    if (!this.runtimeInitialized || !this.pageVisible || !this.appForeground) {
+      return;
+    }
+    if (this.peerOnlinePollTimer >= 0) {
+      clearTimeout(this.peerOnlinePollTimer);
+    }
+    const generation = this.peerOnlinePollGeneration;
+    this.peerOnlinePollTimer = setTimeout(() => {
+      this.peerOnlinePollTimer = -1;
+      void this.performPeerOnlineProbe(generation);
+    }, Math.max(0, delayMs)) as number;
+  }
+
+  private stopPeerOnlinePolling(): void {
+    this.peerOnlinePollGeneration += 1;
+    if (this.peerOnlinePollTimer >= 0) {
+      clearTimeout(this.peerOnlinePollTimer);
+      this.peerOnlinePollTimer = -1;
+    }
+    this.peerOnlinePollInFlight = false;
+  }
+
+  private async performPeerOnlineProbe(generation: number): Promise<void> {
+    if (generation !== this.peerOnlinePollGeneration || !this.pageVisible || !this.appForeground) {
+      return;
+    }
+    if (this.peerOnlinePollInFlight) {
+      this.schedulePeerOnlineProbe(1000);
+      return;
+    }
+    const ids = this.collectPeerOnlineIds();
+    const directTargets = this.collectPeerDirectProbeTargets();
+    if (ids.length === 0 && directTargets.length === 0) {
+      this.schedulePeerOnlineProbe(20000);
+      return;
+    }
+    this.peerOnlinePollInFlight = true;
+    try {
+      const onlines: string[] = [];
+      const offlines: string[] = [];
+      let hasResult = false;
+      if (ids.length > 0) {
+        const result = await this.mainBridge.queryPeerOnlineStates(ids);
+        if (result.ok) {
+          hasResult = true;
+          onlines.push(...result.onlines);
+          offlines.push(...result.offlines);
+        }
+      }
+      if (directTargets.length > 0) {
+        const result = await this.mainBridge.probePeerDirectStates(directTargets);
+        if (result.ok) {
+          hasResult = true;
+          onlines.push(...result.onlines);
+          offlines.push(...result.offlines);
+        }
+      }
+      if (generation === this.peerOnlinePollGeneration && hasResult) {
+        this.applyPeerOnlineStates(onlines, offlines);
+      }
+    } finally {
+      if (generation === this.peerOnlinePollGeneration) {
+        this.peerOnlinePollInFlight = false;
+        this.schedulePeerOnlineProbe(20000);
+      }
+    }
+  }
+
+  private updatePeerOnlineState(peer: PeerRecord, onlines: string[], offlines: string[]): void {
+    const queryId = this.peerOnlineQueryId(peer);
+    const directKey = peer.id.trim();
+    if ((queryId.length > 0 && onlines.indexOf(queryId) >= 0) ||
+      (directKey.length > 0 && onlines.indexOf(directKey) >= 0)) {
+      peer.online = true;
+      peer.onlineKnown = true;
+    } else if ((queryId.length > 0 && offlines.indexOf(queryId) >= 0) ||
+      (directKey.length > 0 && offlines.indexOf(directKey) >= 0)) {
+      peer.online = false;
+      peer.onlineKnown = true;
+    }
+  }
+
+  private updatePeerListOnlineStates(peers: PeerRecord[], onlines: string[], offlines: string[]): void {
+    for (let index = 0; index < peers.length; index += 1) {
+      this.updatePeerOnlineState(peers[index], onlines, offlines);
+    }
+  }
+
+  private applyPeerOnlineStates(onlines: string[], offlines: string[]): void {
+    this.updatePeerListOnlineStates(this.directorySnapshot.recent, onlines, offlines);
+    this.updatePeerListOnlineStates(this.directorySnapshot.addressBook, onlines, offlines);
+    this.updatePeerListOnlineStates(this.directorySnapshot.lan, onlines, offlines);
   }
 
   private directoryScanSnapshot(scanning: boolean, message: string): DirectorySnapshot {
@@ -1595,18 +1898,40 @@ struct RustDeskIndex {
 
   private scanLanPeers(): void {
     this.clearLanScanTimer();
-    this.directorySnapshot = this.directoryScanSnapshot(true, '正在扫描局域网设备');
+    const scanGeneration = ++this.lanScanGeneration;
+    this.lanScanStartedAt = Date.now();
+    const scanningSnapshot = this.directoryScanSnapshot(true, '正在扫描局域网设备');
+    scanningSnapshot.lan = [];
+    this.directorySnapshot = scanningSnapshot;
     if (!this.mainBridge.scanLan()) {
+      this.lanScanStartedAt = 0;
       this.directorySnapshot = this.directoryScanSnapshot(false, '无法启动局域网扫描');
       return;
     }
+    this.scheduleLanScanPoll(250, scanGeneration);
+  }
+
+  private scheduleLanScanPoll(delayMs: number, scanGeneration: number): void {
     this.lanScanTimer = setTimeout(() => {
       this.lanScanTimer = -1;
+      if (scanGeneration !== this.lanScanGeneration) {
+        return;
+      }
       this.refreshDirectorySnapshot();
-    }, 3800) as number;
+      const elapsed = Date.now() - this.lanScanStartedAt;
+      if (elapsed < 4300) {
+        this.directorySnapshot = this.directoryScanSnapshot(true, '正在扫描局域网设备');
+        this.scheduleLanScanPoll(400, scanGeneration);
+      } else {
+        this.lanScanStartedAt = 0;
+        this.directorySnapshot = this.directoryScanSnapshot(false, '局域网扫描完成');
+      }
+    }, delayMs) as number;
   }
 
   private clearLanScanTimer(): void {
+    this.lanScanGeneration += 1;
+    this.lanScanStartedAt = 0;
     if (this.lanScanTimer < 0) {
       return;
     }
@@ -1637,6 +1962,7 @@ struct RustDeskIndex {
     peer.addressBookName = source.addressBookName;
     peer.tags = source.tags.slice();
     peer.online = source.online;
+    peer.onlineKnown = source.onlineKnown;
     peer.favorite = source.id === peerId ? favorite : source.favorite;
     return peer;
   }
@@ -2849,8 +3175,16 @@ struct RustDeskIndex {
     }
   }
 
-  private handleSystemImeChange(value: string, _previewText?: PreviewText, options?: TextChangeOptions): void {
-    const delta: RustDeskImeInputDelta = this.imeInputController.applyCommittedText(value, options?.oldContent);
+  private handleSystemImeChange(value: string, previewText?: PreviewText, options?: TextChangeOptions): void {
+    const oldPreviewText: PreviewText | undefined = options === undefined ? undefined : options.oldPreviewText;
+    const delta: RustDeskImeInputDelta = this.imeInputController.applyTextChange(
+      value,
+      previewText?.offset ?? -1,
+      previewText?.value ?? '',
+      options?.oldContent,
+      oldPreviewText?.offset ?? -1,
+      oldPreviewText?.value ?? '',
+    );
     this.systemImeText = delta.localText;
     if (!this.systemImeActive || !this.isRemoteControlSessionActive()) {
       return;
@@ -2861,11 +3195,23 @@ struct RustDeskIndex {
     if (delta.insertedText.length > 0) {
       this.sendSystemImeText(delta.insertedText);
     }
-    setTimeout(() => {
-      if (this.systemImeActive) {
-        this.systemImeTextController.caretPosition(this.systemImeText.length);
-      }
-    }, 0);
+    if (previewText === undefined || previewText.value.length === 0) {
+      this.clearSystemImeCaretTimer();
+      this.systemImeCaretTimer = setTimeout(() => {
+        this.systemImeCaretTimer = -1;
+        if (this.systemImeActive) {
+          this.systemImeTextController.caretPosition(this.systemImeText.length);
+        }
+      }, 0) as number;
+    }
+  }
+
+  private clearSystemImeCaretTimer(): void {
+    if (this.systemImeCaretTimer < 0) {
+      return;
+    }
+    clearTimeout(this.systemImeCaretTimer);
+    this.systemImeCaretTimer = -1;
   }
 
   private sendSystemImeText(value: string): void {
@@ -7488,7 +7834,7 @@ struct RustDeskIndex {
       scroller: this.settingsScroller,
       titleSpacerHeight: this.boundMainTitleSpacerHeight(),
       bottomAvoidInset: this.windowBottomAvoidInset,
-      onServerConfigChange: (config: ServerConfig) => this.serverConfig = config,
+      onServerConfigChange: (config: ServerConfig) => this.updateServerConfigDraft(config),
       onValidateServerConfig: (config: ServerConfig) => this.testServerConfiguration(config),
       onSaveServerConfig: (config: ServerConfig) => this.saveServerConfiguration(config),
       onSessionDefaultsChange: (defaults: SessionDefaults) => this.saveSessionDefaults(defaults),

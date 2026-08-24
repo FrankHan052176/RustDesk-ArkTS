@@ -445,7 +445,9 @@ export struct DeviceDirectoryPanel {
             onViewCamera: (peerId: string) => this.onViewCamera(peerId),
             onOpenTransfer: (peerId: string) => this.onOpenTransfer(peerId),
           });
-        }, (peer: PeerRecord) => `${peer.source}-${peer.addressBookName}-${peer.id}`);
+        }, (peer: PeerRecord) => `${peer.source}-${peer.addressBookName}-${peer.id}-${peer.source === 'lan'
+          ? peer.lanIp
+          : ''}`);
       }
       .width(this.controlWidth())
       .alignItems(HorizontalAlign.Start);
@@ -465,7 +467,9 @@ export struct DeviceDirectoryPanel {
           })
             .width(this.cardWidth())
             .margin({ bottom: 18 });
-        }, (peer: PeerRecord) => `${peer.source}-${peer.addressBookName}-${peer.id}`);
+        }, (peer: PeerRecord) => `${peer.source}-${peer.addressBookName}-${peer.id}-${peer.source === 'lan'
+          ? peer.lanIp
+          : ''}`);
       }
       .width(this.controlWidth());
     }

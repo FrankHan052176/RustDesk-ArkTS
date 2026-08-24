@@ -2,6 +2,7 @@ import { AccountLoginProvider, AccountState } from '../RustDeskDirectoryTypes';
 import {
   LuminousButton,
   LuminousControlSize,
+  LuminousNeoTokens,
   LuminousSurface,
   LuminousTextField,
   LuminousTone,
@@ -72,7 +73,15 @@ export struct AccountSettingsCard {
     if (this.loginProviders.length <= 1) {
       return this.actionButtonWidth();
     }
-    return Math.max(118, (this.actionButtonWidth() - 36) / 2);
+    const columnCount = Math.min(3, this.loginProviders.length);
+    const shadowPadding = LuminousNeoTokens.shadowPaddingFor(
+      LuminousNeoTokens.controlHeight(LuminousControlSize.Compact),
+    );
+    return Math.max(92, this.fieldFrameWidth() / columnCount - shadowPadding * 2 - 4);
+  }
+
+  private providerSlotWidth(): number {
+    return this.fieldFrameWidth() / Math.min(3, Math.max(1, this.loginProviders.length));
   }
 
   private hasChallenge(): boolean {
@@ -145,6 +154,20 @@ export struct AccountSettingsCard {
   private providerLabel(provider: AccountLoginProvider): string {
     const label = provider.label.trim();
     return label.length > 0 ? label : provider.name.trim();
+  }
+
+  private providerCompactLabel(provider: AccountLoginProvider): ResourceStr {
+    const normalizedProvider = provider.name.trim().toLowerCase();
+    if (normalizedProvider === 'github') {
+      return $r('app.string.settings_account_oidc_github_short');
+    }
+    if (normalizedProvider === 'google') {
+      return $r('app.string.settings_account_oidc_google_short');
+    }
+    if (normalizedProvider === 'microsoft' || normalizedProvider === 'azure') {
+      return $r('app.string.settings_account_oidc_microsoft_short');
+    }
+    return this.providerLabel(provider);
   }
 
   private providerActionLabel(provider: AccountLoginProvider): ResourceStr {
@@ -443,7 +466,7 @@ export struct AccountSettingsCard {
   @Builder
   private OidcProviderButton(provider: AccountLoginProvider) {
     LuminousButton({
-      label: this.providerActionLabel(provider),
+      label: this.providerCompactLabel(provider),
       controlWidth: this.providerButtonWidth(),
       controlSizeMode: LuminousControlSize.Compact,
       tone: LuminousTone.Neutral,
@@ -460,7 +483,9 @@ export struct AccountSettingsCard {
         Row() {
           this.OidcProviderButton(provider)
         }
-        .margin({ left: 3, right: 3, bottom: -8 });
+        .width(this.providerSlotWidth())
+        .justifyContent(FlexAlign.Center)
+        .margin({ bottom: -8 });
       })
     }
     .width(this.fieldFrameWidth());

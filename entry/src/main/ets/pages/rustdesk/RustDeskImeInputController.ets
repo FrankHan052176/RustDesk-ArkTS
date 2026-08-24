@@ -32,6 +32,20 @@ export class RustDeskImeInputController {
     return this.committedText;
   }
 
+  applyTextChange(value: string, previewOffset: number, previewValue: string,
+    oldContent?: string, oldPreviewOffset: number = -1, oldPreviewValue: string = ''): RustDeskImeInputDelta {
+    const committedValue = this.withoutPreviewText(value, previewOffset, previewValue);
+    const oldCommittedValue = oldContent === undefined
+      ? undefined
+      : this.withoutPreviewText(oldContent, oldPreviewOffset, oldPreviewValue);
+    const delta = this.applyCommittedText(committedValue, oldCommittedValue);
+    // Keep ArkUI's complete local value, including the current composing range,
+    // bound to TextInput. Replacing it with the committed-only value while an
+    // IME is composing moves the insertion point and can reorder pinyin.
+    delta.localText = value;
+    return delta;
+  }
+
   applyCommittedText(value: string, oldContent?: string): RustDeskImeInputDelta {
     if (value === this.committedText && oldContent !== undefined && oldContent !== this.committedText) {
       return new RustDeskImeInputDelta(0, '', this.committedText);
@@ -81,6 +95,18 @@ export class RustDeskImeInputController {
       index -= 1;
     }
     return index;
+  }
+
+  private withoutPreviewText(value: string, previewOffset: number, previewValue: string): string {
+    if (previewValue.length === 0) {
+      return value;
+    }
+    const start = previewOffset;
+    const end = start + previewValue.length;
+    if (start < 0 || end > value.length || value.substring(start, end) !== previewValue) {
+      return value;
+    }
+    return `${value.substring(0, start)}${value.substring(end)}`;
   }
 
   private unicodeCodePointLength(value: string): number {

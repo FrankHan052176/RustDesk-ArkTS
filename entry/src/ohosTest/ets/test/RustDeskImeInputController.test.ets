@@ -59,5 +59,100 @@ export default function rustDeskImeInputControllerTest(): void {
       expect(removed.backspaceCount).assertEqual(1);
       expect(removed.insertedText).assertEqual('');
     });
+
+    it('does not send pinyin preview text before the Chinese commit', 0, () => {
+      const controller = new RustDeskImeInputController();
+      const composingZ = `${RUSTDESK_IME_INITIAL_TEXT}z`;
+      const first = controller.applyTextChange(
+        composingZ,
+        RUSTDESK_IME_INITIAL_TEXT.length,
+        'z',
+        RUSTDESK_IME_INITIAL_TEXT,
+      );
+      expect(first.insertedText).assertEqual('');
+      expect(first.localText).assertEqual(composingZ);
+
+      const composingZe = `${RUSTDESK_IME_INITIAL_TEXT}z'e`;
+      const second = controller.applyTextChange(
+        composingZe,
+        RUSTDESK_IME_INITIAL_TEXT.length,
+        "z'e",
+        composingZ,
+        RUSTDESK_IME_INITIAL_TEXT.length,
+        'z',
+      );
+      expect(second.insertedText).assertEqual('');
+      expect(second.backspaceCount).assertEqual(0);
+      expect(second.localText).assertEqual(composingZe);
+
+      const committed = controller.applyTextChange(
+        `${RUSTDESK_IME_INITIAL_TEXT}这`,
+        RUSTDESK_IME_INITIAL_TEXT.length + 1,
+        '',
+        composingZe,
+        RUSTDESK_IME_INITIAL_TEXT.length,
+        "z'e",
+      );
+      expect(committed.insertedText).assertEqual('这');
+      expect(committed.backspaceCount).assertEqual(0);
+    });
+
+    it('keeps ordinary ASCII input ordered outside composition', 0, () => {
+      const controller = new RustDeskImeInputController();
+      const first = controller.applyTextChange(`${RUSTDESK_IME_INITIAL_TEXT}z`, -1, '');
+      const second = controller.applyTextChange(`${RUSTDESK_IME_INITIAL_TEXT}z'e`, -1, '');
+      expect(first.insertedText).assertEqual('z');
+      expect(second.insertedText).assertEqual("'e");
+      expect(second.backspaceCount).assertEqual(0);
+    });
+
+    it('handles preview offsets after a supplementary unicode prefix', 0, () => {
+      const controller = new RustDeskImeInputController();
+      const prefix = `${RUSTDESK_IME_INITIAL_TEXT}😀`;
+      const prefixDelta = controller.applyTextChange(prefix, -1, '');
+      expect(prefixDelta.insertedText).assertEqual('😀');
+
+      const composing = `${prefix}zhong`;
+      const previewDelta = controller.applyTextChange(
+        composing,
+        prefix.length,
+        'zhong',
+        prefix,
+      );
+      expect(previewDelta.insertedText).assertEqual('');
+      expect(previewDelta.localText).assertEqual(composing);
+
+      const committed = controller.applyTextChange(
+        `${prefix}中`,
+        -1,
+        '',
+        composing,
+        prefix.length,
+        'zhong',
+      );
+      expect(committed.insertedText).assertEqual('中');
+      expect(committed.backspaceCount).assertEqual(0);
+    });
+
+    it('does not emit stale text when composition is cancelled', 0, () => {
+      const controller = new RustDeskImeInputController();
+      const composing = `${RUSTDESK_IME_INITIAL_TEXT}zhong`;
+      controller.applyTextChange(
+        composing,
+        RUSTDESK_IME_INITIAL_TEXT.length,
+        'zhong',
+        RUSTDESK_IME_INITIAL_TEXT,
+      );
+      const cancelled = controller.applyTextChange(
+        RUSTDESK_IME_INITIAL_TEXT,
+        -1,
+        '',
+        composing,
+        RUSTDESK_IME_INITIAL_TEXT.length,
+        'zhong',
+      );
+      expect(cancelled.insertedText).assertEqual('');
+      expect(cancelled.backspaceCount).assertEqual(0);
+    });
   });
 }

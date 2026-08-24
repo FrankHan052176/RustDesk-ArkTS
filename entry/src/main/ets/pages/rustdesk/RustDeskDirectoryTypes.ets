@@ -1,4 +1,5 @@
 export type ServerMode = 'custom';
+export type ServerEndpointTestState = 'untested' | 'success' | 'error';
 export type PeerSource = 'recent' | 'addressBook' | 'lan';
 
 export class ServerConfig {
@@ -11,9 +12,17 @@ export class ServerConfig {
   usingPublicServer: boolean = false;
   remoteReachable: boolean = false;
   accountAvailable: boolean = false;
+  resultState: string = 'idle';
   message: string = '';
+  idServerTestState: ServerEndpointTestState = 'untested';
+  relayServerTestState: ServerEndpointTestState = 'untested';
+  apiServerTestState: ServerEndpointTestState = 'untested';
+  idServerTestMessage: string = '';
+  relayServerTestMessage: string = '';
+  apiServerTestMessage: string = '';
 }
 
+@ObservedV2
 export class PeerRecord {
   id: string = '';
   username: string = '';
@@ -24,8 +33,9 @@ export class PeerRecord {
   source: PeerSource = 'recent';
   addressBookName: string = '';
   tags: string[] = [];
-  online: boolean = false;
-  favorite: boolean = false;
+  @Trace online: boolean = false;
+  @Trace onlineKnown: boolean = false;
+  @Trace favorite: boolean = false;
 }
 
 export class DirectorySnapshot {
@@ -35,6 +45,19 @@ export class DirectorySnapshot {
   favorites: string[] = [];
   lanScanning: boolean = false;
   message: string = '';
+}
+
+export class PeerOnlineStatusResult {
+  ok: boolean = false;
+  onlines: string[] = [];
+  offlines: string[] = [];
+  unknowns: string[] = [];
+  message: string = '';
+}
+
+export class PeerDirectProbeTarget {
+  key: string = '';
+  target: string = '';
 }
 
 export class SessionDefaults {

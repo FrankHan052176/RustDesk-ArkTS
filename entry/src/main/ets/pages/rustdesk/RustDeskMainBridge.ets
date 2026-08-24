@@ -4,9 +4,12 @@ import {
   AccountLoginOptionsResult,
   AccountLoginProvider,
   AccountState,
+  PeerDirectProbeTarget,
+  PeerOnlineStatusResult,
   PeerRecord,
   PeerSource,
   ServerConfig,
+  ServerEndpointTestState,
 } from './RustDeskDirectoryTypes';
 
 interface AccountLoginPayload {
@@ -36,17 +39,40 @@ export class RustDeskMainBridge {
       const response: ESObject = JSON.parse(native.runtimeGetServerConfig());
       return this.copyServerConfig(response.config, false, String(response.message ?? ''));
     } catch (error) {
-      fallback.message = String(error);
+      const message = String(error);
+      fallback.message = message;
+      fallback.resultState = 'error';
+      this.markConfiguredEndpointsFailed(fallback, message);
       return fallback;
     }
   }
 
-  testServerConfig(config: ServerConfig): ServerConfig {
-    return this.runServerConfigAction('runtimeTestServerConfig', config);
+  async testServerConfig(config: ServerConfig): Promise<ServerConfig> {
+    const fallback = this.copyServerConfig(config as ESObject, false, '');
+    try {
+      const response: ESObject = JSON.parse(await native.runtimeTestServerConfig(JSON.stringify(config)));
+      let source: ESObject = response.config;
+      if (source === undefined || source === null) {
+        source = config as ESObject;
+      }
+      const ok = Boolean(response.ok);
+      const result = this.copyServerConfig(source, ok, this.serverResponseMessage(response));
+      this.applyEndpointTestResults(result, response.errors, ok);
+      if (!ok) {
+        result.resultState = 'error';
+      }
+      return result;
+    } catch (error) {
+      const message = String(error);
+      fallback.message = message;
+      fallback.resultState = 'error';
+      this.markConfiguredEndpointsFailed(fallback, message);
+      return fallback;
+    }
   }
 
   saveServerConfig(config: ServerConfig): ServerConfig {
-    return this.runServerConfigAction('runtimeSetServerConfig', config);
+    return this.runServerConfigAction(config);
   }
 
   loadAccountState(): AccountState {
@@ -180,6 +206,40 @@ export class RustDeskMainBridge {
     }
   }
 
+  async queryPeerOnlineStates(peerIds: string[]): Promise<PeerOnlineStatusResult> {
+    const result = new PeerOnlineStatusResult();
+    try {
+      const response: ESObject = JSON.parse(
+        await native.runtimeQueryPeerOnlineStates(JSON.stringify(peerIds)),
+      );
+      result.ok = Boolean(response.ok);
+      result.message = String(response.message ?? '');
+      result.onlines = this.copyStringArray(response.onlines);
+      result.offlines = this.copyStringArray(response.offlines);
+      result.unknowns = this.copyStringArray(response.unknowns);
+    } catch (error) {
+      result.message = String(error);
+    }
+    return result;
+  }
+
+  async probePeerDirectStates(targets: PeerDirectProbeTarget[]): Promise<PeerOnlineStatusResult> {
+    const result = new PeerOnlineStatusResult();
+    try {
+      const response: ESObject = JSON.parse(
+        await native.runtimeProbePeerDirectStates(JSON.stringify(targets)),
+      );
+      result.ok = Boolean(response.ok);
+      result.message = String(response.message ?? '');
+      result.onlines = this.copyStringArray(response.onlines);
+      result.offlines = this.copyStringArray(response.offlines);
+      result.unknowns = this.copyStringArray(response.unknowns);
+    } catch (error) {
+      result.message = String(error);
+    }
+    return result;
+  }
+
   removeRecentPeer(peerId: string): boolean {
     try {
       const response: ESObject = JSON.parse(native.runtimeRemoveRecentPeer(peerId.trim()));
@@ -274,23 +334,25 @@ export class RustDeskMainBridge {
       : entry;
   }
 
-  private runServerConfigAction(exportName: string, config: ServerConfig): ServerConfig {
+  private runServerConfigAction(config: ServerConfig): ServerConfig {
     const fallback = this.copyServerConfig(config as ESObject, false, '');
     try {
-      let response: ESObject;
       const payload = JSON.stringify(config);
-      if (exportName === 'runtimeTestServerConfig') {
-        response = JSON.parse(native.runtimeTestServerConfig(payload));
-      } else {
-        response = JSON.parse(native.runtimeSetServerConfig(payload));
-      }
+      const response: ESObject = JSON.parse(native.runtimeSetServerConfig(payload));
       let source: ESObject = response.config;
       if (source === undefined || source === null) {
         source = config as ESObject;
       }
-      return this.copyServerConfig(source, Boolean(response.ok), this.serverResponseMessage(response));
+      const ok = Boolean(response.ok);
+      const result = this.copyServerConfig(source, ok, this.serverResponseMessage(response));
+      this.copyEndpointTestResults(config, result);
+      if (!ok) {
+        result.resultState = 'error';
+      }
+      return result;
     } catch (error) {
       fallback.message = String(error);
+      fallback.resultState = 'error';
       return fallback;
     }
   }
@@ -315,8 +377,74 @@ export class RustDeskMainBridge {
     config.accountAvailable = source.accountAvailable === undefined
       ? false
       : Boolean(source.accountAvailable);
+    config.resultState = String(source.resultState ?? '').trim();
+    if (config.resultState.length === 0) {
+      config.resultState = message.length === 0 ? 'idle' : (reachable ? 'success' : 'error');
+    }
     config.message = message.length > 0 ? message : String(source.message ?? '');
+    config.idServerTestState = String(source.idServerTestState ?? 'untested') as ServerEndpointTestState;
+    config.relayServerTestState = String(source.relayServerTestState ?? 'untested') as ServerEndpointTestState;
+    config.apiServerTestState = String(source.apiServerTestState ?? 'untested') as ServerEndpointTestState;
+    config.idServerTestMessage = String(source.idServerTestMessage ?? '').trim();
+    config.relayServerTestMessage = String(source.relayServerTestMessage ?? '').trim();
+    config.apiServerTestMessage = String(source.apiServerTestMessage ?? '').trim();
     return config;
+  }
+
+  private endpointTestState(value: string, error: string, ok: boolean,
+    hasEndpointResult: boolean): ServerEndpointTestState {
+    if (value.trim().length === 0) {
+      return 'untested';
+    }
+    if (error.length > 0) {
+      return 'error';
+    }
+    if (ok || hasEndpointResult) {
+      return 'success';
+    }
+    return 'error';
+  }
+
+  private applyEndpointTestResults(config: ServerConfig, rawErrors: ESObject, ok: boolean): void {
+    let idError = '';
+    let relayError = '';
+    let apiError = '';
+    if (rawErrors !== undefined && rawErrors !== null) {
+      idError = String(rawErrors.idServer ?? '').trim();
+      relayError = String(rawErrors.relayServer ?? '').trim();
+      apiError = String(rawErrors.apiServer ?? '').trim();
+    }
+    const hasEndpointResult = idError.length > 0 || relayError.length > 0 || apiError.length > 0;
+    config.idServerTestState = this.endpointTestState(config.idServer, idError, ok, hasEndpointResult);
+    config.relayServerTestState = this.endpointTestState(config.relayServer, relayError, ok, hasEndpointResult);
+    config.apiServerTestState = this.endpointTestState(config.apiServer, apiError, ok, hasEndpointResult);
+    config.idServerTestMessage = idError;
+    config.relayServerTestMessage = relayError;
+    config.apiServerTestMessage = apiError;
+  }
+
+  private copyEndpointTestResults(source: ServerConfig, target: ServerConfig): void {
+    target.idServerTestState = source.idServerTestState;
+    target.relayServerTestState = source.relayServerTestState;
+    target.apiServerTestState = source.apiServerTestState;
+    target.idServerTestMessage = source.idServerTestMessage;
+    target.relayServerTestMessage = source.relayServerTestMessage;
+    target.apiServerTestMessage = source.apiServerTestMessage;
+  }
+
+  private markConfiguredEndpointsFailed(config: ServerConfig, message: string): void {
+    if (config.idServer.trim().length > 0) {
+      config.idServerTestState = 'error';
+      config.idServerTestMessage = message;
+    }
+    if (config.relayServer.trim().length > 0) {
+      config.relayServerTestState = 'error';
+      config.relayServerTestMessage = message;
+    }
+    if (config.apiServer.trim().length > 0) {
+      config.apiServerTestState = 'error';
+      config.apiServerTestMessage = message;
+    }
   }
 
   private serverResponseMessage(response: ESObject): string {
@@ -396,7 +524,8 @@ export class RustDeskMainBridge {
       record.source = peerSource;
       record.addressBookName = addressBookName;
       record.tags = this.copyStringArray(row.tags);
-      record.online = row.online === undefined ? peerSource === 'lan' : Boolean(row.online);
+      record.onlineKnown = row.online !== undefined;
+      record.online = record.onlineKnown && Boolean(row.online);
       record.favorite = this.containsString(favorites, record.id);
       records.push(record);
     }

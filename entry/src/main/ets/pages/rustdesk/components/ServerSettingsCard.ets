@@ -1,11 +1,12 @@
 import {
   LuminousButton,
   LuminousControlSize,
+  LuminousNeoTokens,
   LuminousSurface,
   LuminousTextField,
   LuminousTone,
 } from 'luminous_neo';
-import { ServerConfig } from '../RustDeskDirectoryTypes';
+import { ServerConfig, ServerEndpointTestState } from '../RustDeskDirectoryTypes';
 
 export interface ServerSettingsCardProps {
   showHeader: boolean;
@@ -43,17 +44,19 @@ export struct ServerSettingsCard {
   }
 
   private inputWidth(): number {
-    if (this.isWide()) {
-      return Math.max(280, (this.viewportWidth - 72) / 2);
-    }
-    return Math.max(280, Math.min(this.viewportWidth - 40, 560));
+    return Math.max(280, this.viewportWidth - this.surfaceHorizontalInset() * 2);
+  }
+
+  private surfaceHorizontalInset(): number {
+    return 8;
+  }
+
+  private inputShadowPadding(): number {
+    return LuminousNeoTokens.shadowPaddingFor(48);
   }
 
   private actionButtonWidth(): number {
-    if (this.viewportWidth >= 520) {
-      return Math.max(150, (this.viewportWidth - 96) / 2);
-    }
-    return Math.max(104, (this.viewportWidth - 84) / 2);
+    return Math.max(240, this.inputWidth() - 32);
   }
 
   private statusSummaryHeight(): number {
@@ -75,14 +78,28 @@ export struct ServerSettingsCard {
     next.usingPublicServer = false;
     next.remoteReachable = this.config.remoteReachable;
     next.accountAvailable = this.config.accountAvailable;
+    next.resultState = this.config.resultState;
     next.message = this.config.message;
+    next.idServerTestState = this.config.idServerTestState;
+    next.relayServerTestState = this.config.relayServerTestState;
+    next.apiServerTestState = this.config.apiServerTestState;
+    next.idServerTestMessage = this.config.idServerTestMessage;
+    next.relayServerTestMessage = this.config.relayServerTestMessage;
+    next.apiServerTestMessage = this.config.apiServerTestMessage;
     return next;
   }
 
   private emitDraft(next: ServerConfig): void {
     next.remoteReachable = false;
     next.accountAvailable = false;
+    next.resultState = 'idle';
     next.message = '';
+    next.idServerTestState = 'untested';
+    next.relayServerTestState = 'untested';
+    next.apiServerTestState = 'untested';
+    next.idServerTestMessage = '';
+    next.relayServerTestMessage = '';
+    next.apiServerTestMessage = '';
     this.validationMessage = '';
     this.validationField = '';
     this.onConfigChange(next);
@@ -122,9 +139,6 @@ export struct ServerSettingsCard {
   }
 
   private validateFormat(config: ServerConfig): ResourceStr {
-    if (config.idServer.length === 0) {
-      return $r('app.string.settings_server_error_id_required');
-    }
     if (config.idServer.includes(' ')) {
       return $r('app.string.settings_server_error_id_space');
     }
@@ -140,7 +154,7 @@ export struct ServerSettingsCard {
   }
 
   private findValidationField(config: ServerConfig): string {
-    if (config.idServer.length === 0 || config.idServer.includes(' ')) {
+    if (config.idServer.includes(' ')) {
       return 'id-server';
     }
     if (config.relayServer.includes(' ')) {
@@ -183,10 +197,58 @@ export struct ServerSettingsCard {
   }
 
   private remoteStatusText(): ResourceStr {
+    if (this.config.idServer.trim().length === 0 && this.config.relayServer.trim().length === 0) {
+      return $r('app.string.settings_server_remote_unconfigured');
+    }
     if (this.config.remoteReachable) {
       return $r('app.string.settings_server_remote_ready');
     }
     return $r('app.string.settings_server_remote_pending');
+  }
+
+  private resultIsSuccess(): boolean {
+    return this.config.resultState === 'test-success' || this.config.resultState === 'save-success' ||
+      this.config.resultState === 'empty-success' || this.config.resultState === 'success';
+  }
+
+  private resultTitle(): ResourceStr {
+    if (this.config.resultState === 'save-success') {
+      return $r('app.string.settings_server_save_success');
+    }
+    if (this.config.resultState === 'empty-success') {
+      return $r('app.string.settings_server_empty_success');
+    }
+    return this.resultIsSuccess()
+      ? $r('app.string.settings_server_test_success')
+      : $r('app.string.settings_server_test_failed');
+  }
+
+  @Builder
+  private ResultBanner() {
+    Row({ space: $r('app.float.space_12') }) {
+      Circle()
+        .width($r('app.float.space_12'))
+        .height($r('app.float.space_12'))
+        .fill(this.resultIsSuccess() ? $r('app.color.success') : $r('app.color.error'));
+      Column({ space: 2 }) {
+        Text(this.resultTitle())
+          .width('100%')
+          .fontSize($r('app.float.font_body'))
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.resultIsSuccess() ? $r('app.color.success') : $r('app.color.error'));
+        Text(this.config.message)
+          .width('100%')
+          .fontSize($r('app.float.font_label'))
+          .lineHeight(18)
+          .fontColor($r('app.color.text_primary'));
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start);
+    }
+    .width('100%')
+    .padding($r('app.float.space_16'))
+    .borderRadius(16)
+    .backgroundColor(this.resultIsSuccess() ? $r('app.color.success_soft') : $r('app.color.error_soft'));
   }
 
   private accountStatusText(): ResourceStr {
@@ -220,27 +282,180 @@ export struct ServerSettingsCard {
         onChange: onChange,
       })
         .margin({ top: -10 })
+        .translate({ x: -(this.inputShadowPadding() - this.surfaceHorizontalInset()) })
     }
     .width('100%')
     .justifyContent(FlexAlign.Center);
   }
 
+  private endpointStatusText(value: string, state: ServerEndpointTestState): ResourceStr {
+    if (value.trim().length === 0) {
+      return $r('app.string.settings_server_status_unconfigured');
+    }
+    if (state === 'success') {
+      return $r('app.string.settings_server_status_success');
+    }
+    if (state === 'error') {
+      return $r('app.string.settings_server_status_failed');
+    }
+    return $r('app.string.settings_server_status_untested');
+  }
+
+  private endpointStatusColor(value: string, state: ServerEndpointTestState): ResourceColor {
+    if (value.trim().length === 0 || state === 'untested') {
+      return $r('app.color.text_secondary');
+    }
+    return state === 'success' ? $r('app.color.success') : $r('app.color.error');
+  }
+
+  private endpointActionText(state: ServerEndpointTestState): ResourceStr {
+    if (state === 'success') {
+      return $r('app.string.settings_server_action_retest');
+    }
+    if (state === 'error') {
+      return $r('app.string.settings_server_action_retry');
+    }
+    return $r('app.string.settings_server_action_test');
+  }
+
+  private endpointErrorPrefix(controlId: string): string {
+    if (controlId === 'id-server') {
+      return 'ID Server:';
+    }
+    if (controlId === 'relay-server') {
+      return 'Relay Server:';
+    }
+    return 'API Server:';
+  }
+
+  private hasEndpointErrorDetails(): boolean {
+    return this.config.message.includes('ID Server:') || this.config.message.includes('Relay Server:') ||
+      this.config.message.includes('API Server:');
+  }
+
+  private endpointDisplayState(controlId: string, value: string,
+    state: ServerEndpointTestState): ServerEndpointTestState {
+    if (this.validationField === controlId) {
+      return 'error';
+    }
+    if (state !== 'untested' || value.trim().length === 0) {
+      return state;
+    }
+    if (this.config.resultState === 'test-success' || this.config.resultState === 'success') {
+      return 'success';
+    }
+    if (this.config.resultState === 'error') {
+      if (!this.hasEndpointErrorDetails()) {
+        return 'error';
+      }
+      return this.config.message.includes(this.endpointErrorPrefix(controlId)) ? 'error' : 'success';
+    }
+    return 'untested';
+  }
+
+  private endpointDisplayMessage(controlId: string, message: string): string {
+    if (message.length > 0) {
+      return message;
+    }
+    const prefix = this.endpointErrorPrefix(controlId);
+    const entries = this.config.message.split(' · ');
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index].trim();
+      if (entry.startsWith(prefix)) {
+        return entry.substring(prefix.length).trim();
+      }
+    }
+    return '';
+  }
+
+  @Builder
+  private EndpointTestStatus(controlId: string, value: string, state: ServerEndpointTestState) {
+    Row({ space: $r('app.float.space_8') }) {
+      if (this.validating && value.trim().length > 0) {
+        LoadingProgress()
+          .width(16)
+          .height(16)
+          .color($r('app.color.brand_primary'));
+        Text($r('app.string.settings_server_status_testing'))
+          .fontSize($r('app.float.font_label'))
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.brand_primary'));
+      } else {
+        Circle()
+          .width($r('app.float.space_8'))
+          .height($r('app.float.space_8'))
+          .fill(this.endpointStatusColor(value, this.endpointDisplayState(controlId, value, state)));
+        Text(this.endpointStatusText(value, this.endpointDisplayState(controlId, value, state)))
+          .fontSize($r('app.float.font_label'))
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.endpointStatusColor(value, this.endpointDisplayState(controlId, value, state)));
+
+        if (value.trim().length > 0) {
+          Button(this.endpointActionText(this.endpointDisplayState(controlId, value, state)), {
+            type: ButtonType.Capsule,
+            stateEffect: true,
+          })
+            .height(30)
+            .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_8') })
+            .fontSize($r('app.float.font_caption'))
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.brand_primary'))
+            .backgroundColor($r('app.color.neu_base'))
+            .border({ width: 1, color: $r('app.color.outline') })
+            .enabled(!this.isBusy())
+            .onClick((): void => {
+              if (!this.isBusy()) {
+                this.requestValidation();
+              }
+            })
+            .accessibilityText($r('app.string.settings_server_test'));
+        }
+      }
+    }
+    .height(32)
+    .padding({ left: $r('app.float.space_4') });
+  }
+
   @Builder
   private ServerField(controlId: string, label: ResourceStr, placeholder: ResourceStr, value: string,
+    state: ServerEndpointTestState, testMessage: string, testable: boolean,
     onChange: (value: string) => void) {
-    Column({ space: 2 }) {
-      Text(label)
-        .width('100%')
-        .fontSize($r('app.float.font_label'))
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.validationField === controlId
-          ? $r('app.color.error')
-          : $r('app.color.text_secondary'));
+    Column({ space: 4 }) {
+      Row() {
+        Text(label)
+          .layoutWeight(1)
+          .fontSize($r('app.float.font_label'))
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.validationField === controlId
+            ? $r('app.color.error')
+            : $r('app.color.text_secondary'));
+
+        if (testable) {
+          this.EndpointTestStatus(controlId, value, state)
+        }
+      }
+      .width(this.inputWidth())
+      .alignItems(VerticalAlign.Center);
 
       this.ServerInput(controlId, placeholder, value, onChange)
+
+      if (this.validationField === controlId && this.validationMessage !== '') {
+        Text(this.validationMessage)
+          .width(this.inputWidth())
+          .fontSize($r('app.float.font_caption'))
+          .fontColor($r('app.color.error'));
+      } else if (this.endpointDisplayState(controlId, value, state) === 'error' &&
+        this.endpointDisplayMessage(controlId, testMessage).length > 0) {
+        Text(this.endpointDisplayMessage(controlId, testMessage))
+          .width(this.inputWidth())
+          .fontSize($r('app.float.font_caption'))
+          .fontColor($r('app.color.error'))
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
+      }
     }
     .width('100%')
-    .alignItems(HorizontalAlign.Start);
+    .alignItems(HorizontalAlign.Center);
   }
 
   @Builder
@@ -274,94 +489,50 @@ export struct ServerSettingsCard {
 
   @Builder
   private CustomFields() {
-    if (this.isWide()) {
-      Column({ space: 0 }) {
-        Row({ space: $r('app.float.space_16') }) {
-          Column() {
-            this.ServerField(
-              'id-server',
-              $r('app.string.settings_id_server'),
-              $r('app.string.settings_id_server_placeholder'),
-              this.config.idServer,
-              (value: string) => this.updateIdServer(value),
-            )
-          }
-          .layoutWeight(1);
-
-          Column() {
-            this.ServerField(
-              'relay-server',
-              $r('app.string.settings_relay_server'),
-              $r('app.string.settings_relay_server_placeholder'),
-              this.config.relayServer,
-              (value: string) => this.updateRelayServer(value),
-            )
-          }
-          .layoutWeight(1);
-        }
-        .width('100%')
-        .alignItems(VerticalAlign.Top);
-
-        Row({ space: $r('app.float.space_16') }) {
-          Column() {
-            this.ServerField(
-              'api-server',
-              $r('app.string.settings_api_server'),
-              $r('app.string.settings_api_server_placeholder'),
-              this.config.apiServer,
-              (value: string) => this.updateApiServer(value),
-            )
-          }
-          .layoutWeight(1);
-
-          Column() {
-            this.ServerField(
-              'server-key',
-              $r('app.string.settings_server_key'),
-              $r('app.string.settings_server_key_placeholder'),
-              this.config.key,
-              (value: string) => this.updateKey(value),
-            )
-          }
-          .layoutWeight(1);
-        }
-        .width('100%')
-        .alignItems(VerticalAlign.Top);
-      }
-      .width('100%');
-    } else {
-      Column({ space: 0 }) {
-        this.ServerField(
-          'id-server',
-          $r('app.string.settings_id_server'),
-          $r('app.string.settings_id_server_placeholder'),
-          this.config.idServer,
-          (value: string) => this.updateIdServer(value),
-        )
-        this.ServerField(
-          'relay-server',
-          $r('app.string.settings_relay_server'),
-          $r('app.string.settings_relay_server_placeholder'),
-          this.config.relayServer,
-          (value: string) => this.updateRelayServer(value),
-        )
-        this.ServerField(
-          'api-server',
-          $r('app.string.settings_api_server'),
-          $r('app.string.settings_api_server_placeholder'),
-          this.config.apiServer,
-          (value: string) => this.updateApiServer(value),
-        )
-        this.ServerField(
-          'server-key',
-          $r('app.string.settings_server_key'),
-          $r('app.string.settings_server_key_placeholder'),
-          this.config.key,
-          (value: string) => this.updateKey(value),
-        )
-      }
-      .width('100%');
+    Column({ space: $r('app.float.space_8') }) {
+      this.ServerField(
+        'id-server',
+        $r('app.string.settings_id_server'),
+        $r('app.string.settings_id_server_placeholder'),
+        this.config.idServer,
+        this.config.idServerTestState,
+        this.config.idServerTestMessage,
+        true,
+        (value: string) => this.updateIdServer(value),
+      )
+      this.ServerField(
+        'relay-server',
+        $r('app.string.settings_relay_server'),
+        $r('app.string.settings_relay_server_placeholder'),
+        this.config.relayServer,
+        this.config.relayServerTestState,
+        this.config.relayServerTestMessage,
+        true,
+        (value: string) => this.updateRelayServer(value),
+      )
+      this.ServerField(
+        'api-server',
+        $r('app.string.settings_api_server'),
+        $r('app.string.settings_api_server_placeholder'),
+        this.config.apiServer,
+        this.config.apiServerTestState,
+        this.config.apiServerTestMessage,
+        true,
+        (value: string) => this.updateApiServer(value),
+      )
+      this.ServerField(
+        'server-key',
+        $r('app.string.settings_server_key'),
+        $r('app.string.settings_server_key_placeholder'),
+        this.config.key,
+        'untested',
+        '',
+        false,
+        (value: string) => this.updateKey(value),
+      )
     }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start);
   }
 
   @Builder
@@ -431,43 +602,8 @@ export struct ServerSettingsCard {
 
   @Builder
   private ActionButtons() {
-    if (this.viewportWidth >= 300) {
-      Row({ space: 8 }) {
-        Column() {
-          this.ActionButton(
-            this.validating
-              ? $r('app.string.settings_server_testing')
-              : $r('app.string.settings_server_test'),
-            false,
-            !this.isBusy(),
-            () => this.requestValidation(),
-          )
-        }
-        .layoutWeight(1);
-
-        Column() {
-          this.ActionButton(
-            this.saving
-              ? $r('app.string.settings_server_saving')
-              : $r('app.string.settings_server_save'),
-            true,
-            !this.isBusy(),
-            () => this.requestSave(),
-          )
-        }
-        .layoutWeight(1);
-      }
-      .width('100%');
-    } else {
-      Column({ space: $r('app.float.space_12') }) {
-        this.ActionButton(
-          this.validating
-            ? $r('app.string.settings_server_testing')
-            : $r('app.string.settings_server_test'),
-          false,
-          !this.isBusy(),
-          () => this.requestValidation(),
-        )
+    Row() {
+      Column() {
         this.ActionButton(
           this.saving
             ? $r('app.string.settings_server_saving')
@@ -477,8 +613,9 @@ export struct ServerSettingsCard {
           () => this.requestSave(),
         )
       }
-      .width('100%');
     }
+    .width('100%')
+    .justifyContent(FlexAlign.Center);
   }
 
   build() {
@@ -516,31 +653,17 @@ export struct ServerSettingsCard {
 
       this.CustomFields()
 
-      this.StatusSummary()
-
-      if (this.validationMessage !== '') {
-        Text(this.validationMessage)
-          .width('100%')
-          .fontSize($r('app.float.font_label'))
-          .lineHeight(18)
-          .fontColor($r('app.color.error'));
-      } else if (this.config.message.trim().length > 0) {
-        Text(this.config.message)
-          .width('100%')
-          .fontSize($r('app.float.font_label'))
-          .lineHeight(18)
-          .fontColor(this.config.remoteReachable
-            ? $r('app.color.text_secondary')
-            : $r('app.color.warning'));
-      }
-
-      Text($r('app.string.settings_server_validation_note'))
-        .width('100%')
-        .fontSize($r('app.float.font_caption'))
-        .lineHeight(17)
-        .fontColor($r('app.color.text_secondary'));
-
       this.ActionButtons()
+
+      Row() {
+        Text($r('app.string.settings_server_validation_note'))
+          .width(this.inputWidth())
+          .fontSize($r('app.float.font_caption'))
+          .lineHeight(17)
+          .fontColor($r('app.color.text_secondary'));
+      }
+      .width('100%')
+      .justifyContent(FlexAlign.Center);
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)

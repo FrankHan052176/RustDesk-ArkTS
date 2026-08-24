@@ -87,6 +87,33 @@ export struct PeerCard {
     return $r('app.color.brand_primary_soft');
   }
 
+  private avatarAccent(): ResourceColor {
+    return this.peer.onlineKnown && this.peer.online
+      ? this.sourceAccent()
+      : $r('app.color.neu_text_disabled');
+  }
+
+  private avatarBackground(): ResourceColor {
+    return this.peer.onlineKnown && this.peer.online
+      ? this.sourceBackground()
+      : $r('app.color.surface_tertiary');
+  }
+
+  private onlineStatusText(): ResourceStr {
+    if (!this.peer.onlineKnown) {
+      return $r('app.string.device_status_checking');
+    }
+    return this.peer.online
+      ? $r('app.string.device_status_online')
+      : $r('app.string.device_status_offline');
+  }
+
+  private onlineStatusColor(): ResourceColor {
+    return this.peer.onlineKnown && this.peer.online
+      ? $r('app.color.success')
+      : $r('app.color.neu_text_secondary');
+  }
+
   private sourceText(): ResourceStr {
     if (this.peer.source === 'addressBook' && this.peer.addressBookName.trim().length > 0) {
       return this.peer.addressBookName.trim();
@@ -107,7 +134,7 @@ export struct PeerCard {
   }
 
   private cardHeight(): number {
-    return this.compact ? 156 : 184;
+    return this.compact ? 180 : 184;
   }
 
   private sessionSurfaceWidth(): number {
@@ -210,12 +237,12 @@ export struct PeerCard {
       Stack({ alignContent: Alignment.Center }) {
         SymbolGlyph($r('sys.symbol.person_crop_circle_fill'))
           .fontSize(22)
-          .fontColor([this.sourceAccent()]);
+          .fontColor([this.avatarAccent()]);
       }
       .width(42)
       .height(42)
       .borderRadius(21)
-      .backgroundColor(this.sourceBackground());
+      .backgroundColor(this.avatarBackground());
 
       Column({ space: 3 }) {
         Text(this.displayName())
@@ -254,11 +281,13 @@ export struct PeerCard {
       Circle()
         .width(8)
         .height(8)
-        .fill(this.peer.online ? $r('app.color.success') : $r('app.color.neu_text_disabled'));
-      Text(this.peer.online ? '在线' : '离线')
+        .fill(this.peer.onlineKnown && this.peer.online
+          ? $r('app.color.success')
+          : $r('app.color.neu_text_disabled'));
+      Text(this.onlineStatusText())
         .fontSize(11)
         .fontWeight(FontWeight.Medium)
-        .fontColor(this.peer.online ? $r('app.color.success') : $r('app.color.neu_text_secondary'));
+        .fontColor(this.onlineStatusColor());
       Text(this.sourceText())
         .fontSize(11)
         .fontColor(this.sourceAccent());
@@ -345,11 +374,9 @@ export struct PeerCard {
         surfaceWidth: this.cardWidth,
         surfaceHeight: this.cardHeight(),
       }) {
-        Column({ space: this.compact ? 10 : 12 }) {
+        Column({ space: this.compact ? 8 : 12 }) {
           this.IdentityRow();
-          if (!this.compact) {
-            this.StatusRow();
-          }
+          this.StatusRow();
           this.SessionActions();
         }
         .width('100%')
