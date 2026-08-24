@@ -30,6 +30,7 @@ const ANDROID_NAVIGATION_Y_KEY = 'android_navigation_y';
 const EASYTIER_PRECONNECT_ENABLED_KEY = 'easytier_preconnect_enabled';
 const EASYTIER_INSTANCE_ID_KEY = 'easytier_instance_id';
 const EASYTIER_INSTANCE_NAME_KEY = 'easytier_instance_name';
+const BEGINNER_GUIDE_SHOWN_KEY = 'beginner_guide_shown_v1';
 
 export class AndroidNavigationPreferenceState {
   visible: boolean = true;
@@ -56,6 +57,30 @@ export class RustDeskPreferences {
       return preferences.getPreferencesSync(this.context, { name: PREF_NAME });
     } catch (_) {
       return null;
+    }
+  }
+
+  shouldShowBeginnerGuide(): boolean {
+    const store = this.getStore();
+    if (!store) {
+      return false;
+    }
+    try {
+      return !(store.getSync(BEGINNER_GUIDE_SHOWN_KEY, false) as boolean);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  markBeginnerGuideShown(): void {
+    const store = this.getStore();
+    if (!store) {
+      return;
+    }
+    try {
+      store.putSync(BEGINNER_GUIDE_SHOWN_KEY, true);
+      store.flushSync();
+    } catch (_) {
     }
   }
 

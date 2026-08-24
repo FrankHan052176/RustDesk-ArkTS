@@ -15,10 +15,11 @@ import { AccountLoginProvider, AccountState, ServerConfig, SessionDefaults } fro
 import { DecoderCapability } from '../RustDeskTypes';
 import { RustDeskLayoutTokens } from '../RustDeskLayoutTokens';
 import { AccountSettingsCard } from './AccountSettingsCard';
+import { BeginnerGuidePage } from './BeginnerGuidePage';
 import { ServerSettingsCard } from './ServerSettingsCard';
 import { SessionDefaultsCard } from './SessionDefaultsCard';
 
-type SettingsSection = 'server' | 'account' | 'session' | 'diagnostics';
+type SettingsSection = 'tutorial' | 'server' | 'account' | 'session' | 'diagnostics';
 
 export interface SettingsTabProps {
   nativeVersion: string;
@@ -39,6 +40,7 @@ export interface SettingsTabProps {
   wideLayout: boolean;
   titleSpacerHeight: number;
   bottomAvoidInset: number;
+  tutorialLaunchToken: number;
   onServerConfigChange: (config: ServerConfig) => void;
   onValidateServerConfig: (config: ServerConfig) => void;
   onSaveServerConfig: (config: ServerConfig) => void;
@@ -51,6 +53,7 @@ export interface SettingsTabProps {
   onAddressBookSync: () => void;
   onAccountLogout: () => void;
   onRefresh: () => void;
+  onTutorialAutoOpened: () => void;
 }
 
 @ComponentV2
@@ -72,6 +75,7 @@ export struct SettingsTab {
   @Param wideLayout: boolean = false;
   @Param titleSpacerHeight: number = 56;
   @Param bottomAvoidInset: number = 0;
+  @Param tutorialLaunchToken: number = 0;
   @Local viewportWidth: number = 390;
   @Local sheetViewportWidth: number = 390;
   @Local hubViewportHeight: number = 0;
@@ -82,6 +86,7 @@ export struct SettingsTab {
   @Local sessionDefaultsDraft: SessionDefaults = new SessionDefaults();
   @Param scroller: Scroller = new Scroller();
   private sheetScroller: Scroller = new Scroller();
+  private handledTutorialLaunchToken: number = 0;
   @Event onServerConfigChange: (config: ServerConfig) => void = (_config: ServerConfig) => {};
   @Event onValidateServerConfig: (config: ServerConfig) => void = (_config: ServerConfig) => {};
   @Event onSaveServerConfig: (config: ServerConfig) => void = (_config: ServerConfig) => {};
@@ -94,6 +99,25 @@ export struct SettingsTab {
   @Event onAddressBookSync: () => void = () => {};
   @Event onAccountLogout: () => void = () => {};
   @Event onRefresh: () => void = () => {};
+  @Event onTutorialAutoOpened: () => void = () => {};
+
+  aboutToAppear(): void {
+    setTimeout((): void => this.openRequestedTutorialIfNeeded(), 0);
+  }
+
+  @Monitor('tutorialLaunchToken')
+  private onTutorialLaunchTokenChanged(_monitor: IMonitor): void {
+    this.openRequestedTutorialIfNeeded();
+  }
+
+  private openRequestedTutorialIfNeeded(): void {
+    if (this.tutorialLaunchToken <= 0 || this.tutorialLaunchToken <= this.handledTutorialLaunchToken) {
+      return;
+    }
+    this.handledTutorialLaunchToken = this.tutorialLaunchToken;
+    this.selectSection('tutorial');
+    this.onTutorialAutoOpened();
+  }
 
   private hasError(): boolean {
     return this.errorText.trim().length > 0;
@@ -222,6 +246,9 @@ export struct SettingsTab {
   }
 
   private sheetTitle(): ResourceStr {
+    if (this.selectedSection === 'tutorial') {
+      return $r('app.string.settings_tutorial_title');
+    }
     if (this.selectedSection === 'server') {
       return $r('app.string.settings_server_title');
     }
@@ -235,6 +262,9 @@ export struct SettingsTab {
   }
 
   private sheetSubtitle(): ResourceStr {
+    if (this.selectedSection === 'tutorial') {
+      return $r('app.string.settings_tutorial_subtitle');
+    }
     if (this.selectedSection === 'server') {
       return $r('app.string.settings_server_subtitle');
     }
@@ -391,17 +421,17 @@ export struct SettingsTab {
       Column({ space: 16 }) {
         Row({ space: 14 }) {
           this.SettingsTile(
+            'tutorial',
+            $r('sys.symbol.book'),
+            $r('app.string.settings_tutorial_title'),
+            $r('app.string.settings_tutorial_summary'),
+            $r('app.color.neu_accent'),
+          )
+          this.SettingsTile(
             'server',
             $r('sys.symbol.wifi_router'),
             '服务器',
             this.serverSummary(),
-            $r('app.color.neu_accent'),
-          )
-          this.SettingsTile(
-            'account',
-            $r('sys.symbol.person_crop_circle_fill'),
-            '账户',
-            this.accountSummary(),
             $r('app.color.neu_accent'),
           )
         }
@@ -409,12 +439,23 @@ export struct SettingsTab {
 
         Row({ space: 14 }) {
           this.SettingsTile(
+            'account',
+            $r('sys.symbol.person_crop_circle_fill'),
+            '账户',
+            this.accountSummary(),
+            $r('app.color.neu_accent'),
+          )
+          this.SettingsTile(
             'session',
             $r('sys.symbol.slider_horizontal_2'),
             '远控默认',
             this.sessionSummary(),
             $r('app.color.success'),
           )
+        }
+        .width(this.hubFrameWidth());
+
+        Row() {
           this.SettingsTile(
             'diagnostics',
             $r('sys.symbol.info_circle'),
@@ -428,6 +469,13 @@ export struct SettingsTab {
       .width(this.hubFrameWidth());
     } else {
       Column({ space: 16 }) {
+        this.SettingsTile(
+          'tutorial',
+          $r('sys.symbol.book'),
+          $r('app.string.settings_tutorial_title'),
+          $r('app.string.settings_tutorial_summary'),
+          $r('app.color.neu_accent'),
+        )
         this.SettingsTile(
           'server',
           $r('sys.symbol.wifi_router'),
@@ -818,7 +866,9 @@ export struct SettingsTab {
 
   @Builder
   private SelectedSettingsContent() {
-    if (this.selectedSection === 'server') {
+    if (this.selectedSection === 'tutorial') {
+      BeginnerGuidePage()
+    } else if (this.selectedSection === 'server') {
       ServerSettingsCard({
         showHeader: false,
         config: this.serverConfig,

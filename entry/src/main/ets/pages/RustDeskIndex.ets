@@ -275,6 +275,8 @@ struct RustDeskIndex {
   private sessionReturnTabIndex: number = 0;
 
   @Local currentTabIndex: number = 0;
+  @Local firstLaunchTutorialPending: boolean = false;
+  @Local firstLaunchTutorialRequest: number = 0;
   @Local mainTabTransitionDirection: number = 1;
   @Local mainViewportWidth: number = 390;
   @Local mainViewportHeight: number = 844;
@@ -287,6 +289,7 @@ struct RustDeskIndex {
   @Local windowCutoutRightWidth: number = 0;
   @Local rootFocusedControl: string = '';
   private viewportOrientationInitialized: boolean = false;
+  private firstLaunchTutorialSchedulePending: boolean = false;
   private lastViewportPortrait: boolean = true;
 
   @Local nativeVersion: string = 'loading...';
@@ -629,6 +632,7 @@ struct RustDeskIndex {
       this.scheduleAccountPoll(200);
     }
     this.schedulePeerOnlineProbe(0);
+    this.scheduleFirstLaunchTutorial();
     this.syncRemoteSessionSharing();
   }
 
@@ -855,6 +859,10 @@ struct RustDeskIndex {
     try {
       const hostContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
       this.preferences = new RustDeskPreferences(hostContext);
+      if (this.preferences.shouldShowBeginnerGuide()) {
+        this.firstLaunchTutorialPending = true;
+        this.scheduleFirstLaunchTutorial();
+      }
       this.clipboardController = new RustDeskClipboardController(hostContext, {
         sendText: (content: string) => this.sendClipboardText(content),
         log: (label: string, payload: string) => this.logRelativeDebug(label, payload),
@@ -920,6 +928,35 @@ struct RustDeskIndex {
       capabilities.push(capability);
     }
     return capabilities;
+  }
+
+  private markFirstLaunchTutorialShown(): void {
+    if (!this.firstLaunchTutorialPending) {
+      return;
+    }
+    this.firstLaunchTutorialPending = false;
+    this.firstLaunchTutorialRequest = 0;
+    this.preferences?.markBeginnerGuideShown();
+  }
+
+  private scheduleFirstLaunchTutorial(): void {
+    if (!this.firstLaunchTutorialPending || this.firstLaunchTutorialSchedulePending
+      || !this.pageVisible || !this.appForeground) {
+      return;
+    }
+    this.firstLaunchTutorialSchedulePending = true;
+    setTimeout((): void => {
+      this.firstLaunchTutorialSchedulePending = false;
+      if (!this.firstLaunchTutorialPending || !this.pageVisible || !this.appForeground) {
+        return;
+      }
+      this.openMainTab(2);
+      setTimeout((): void => {
+        if (this.firstLaunchTutorialPending && this.pageVisible && this.appForeground) {
+          this.firstLaunchTutorialRequest += 1;
+        }
+      }, 420);
+    }, 400);
   }
 
   private applySavedSettings(settings: SavedConnectionSettings): void {
@@ -7834,6 +7871,7 @@ struct RustDeskIndex {
       scroller: this.settingsScroller,
       titleSpacerHeight: this.boundMainTitleSpacerHeight(),
       bottomAvoidInset: this.windowBottomAvoidInset,
+      tutorialLaunchToken: this.firstLaunchTutorialRequest,
       onServerConfigChange: (config: ServerConfig) => this.updateServerConfigDraft(config),
       onValidateServerConfig: (config: ServerConfig) => this.testServerConfiguration(config),
       onSaveServerConfig: (config: ServerConfig) => this.saveServerConfiguration(config),
@@ -7846,6 +7884,7 @@ struct RustDeskIndex {
       onAddressBookSync: () => this.startAddressBookSync(),
       onAccountLogout: () => this.logoutAccount(),
       onRefresh: () => this.refreshNativeState(),
+      onTutorialAutoOpened: () => this.markFirstLaunchTutorialShown(),
     })
   }
 

@@ -587,6 +587,126 @@
     {
       "name": "settings_session_sharing_description",
       "value": "仅控制本设备作为分享方；接收连接无需开启"
+    },
+    {
+      "name": "settings_tutorial_title",
+      "value": "新手教程"
+    },
+    {
+      "name": "settings_tutorial_subtitle",
+      "value": "安装 RustDesk，并选择适合你的连接方式"
+    },
+    {
+      "name": "settings_tutorial_summary",
+      "value": "安装与两种连接方式"
+    },
+    {
+      "name": "guide_install_heading",
+      "value": "安装 RustDesk"
+    },
+    {
+      "name": "guide_install_heading_subtitle",
+      "value": "先在需要被控制的设备上完成安装"
+    },
+    {
+      "name": "guide_install_title",
+      "value": "在受控设备安装 RustDesk"
+    },
+    {
+      "name": "guide_install_body",
+      "value": "在受控设备的浏览器中搜索 RustDesk，下载并完成安装；如果找不到合适的安装包，也可以加入 App 反馈群询问。"
+    },
+    {
+      "name": "guide_feedback_group_action",
+      "value": "加入 App 反馈群"
+    },
+    {
+      "name": "guide_feedback_group_number",
+      "value": "QQ群：1072745132"
+    },
+    {
+      "name": "guide_feedback_group_open_failed",
+      "value": "无法打开 QQ，请手动搜索群号 1072745132"
+    },
+    {
+      "name": "guide_path_heading",
+      "value": "选择连接方式"
+    },
+    {
+      "name": "guide_path_heading_subtitle",
+      "value": "根据网络环境选择局域网直连或服务器连接"
+    },
+    {
+      "name": "guide_direct_description",
+      "value": "适合只需要在同一局域网或远程组网环境内进行控制的用户。"
+    },
+    {
+      "name": "guide_direct_step_1_title",
+      "value": "打开受控设备设置"
+    },
+    {
+      "name": "guide_direct_step_1_body",
+      "value": "在受控设备的 RustDesk 首页点击右上角三条杠，进入设置。"
+    },
+    {
+      "name": "guide_direct_step_2_title",
+      "value": "允许 IP 直接访问"
+    },
+    {
+      "name": "guide_direct_step_2_body",
+      "value": "点击“安全”标签，向下滑动并找到“允许 IP 直接访问”，然后将其开启。"
+    },
+    {
+      "name": "guide_direct_step_3_title",
+      "value": "输入 IP 和一次性密码"
+    },
+    {
+      "name": "guide_direct_step_3_body",
+      "value": "在本设备输入受控设备的 IP，再输入受控设备首页显示的一次性密码即可访问。"
+    },
+    {
+      "name": "guide_server_description",
+      "value": "适合已有自建服务器，或无法使用局域网与远程组网、只能通过服务器远程访问的用户。"
+    },
+    {
+      "name": "guide_server_help_title",
+      "value": "没有自建服务器？"
+    },
+    {
+      "name": "guide_server_help_body",
+      "value": "如果你没有可用的自建服务器，请先加入 App 反馈群，向其他群友寻求帮助。"
+    },
+    {
+      "name": "guide_server_step_1_title",
+      "value": "填写服务器并登录"
+    },
+    {
+      "name": "guide_server_step_1_body",
+      "value": "进入“设置 > 服务器”填写服务器信息，再前往“设置 > 账户”完成登录。"
+    },
+    {
+      "name": "guide_server_step_2_title",
+      "value": "输入 ID 和一次性密码"
+    },
+    {
+      "name": "guide_server_step_2_body",
+      "value": "在本设备输入受控设备首页显示的 RustDesk ID，再输入其一次性密码即可访问。"
+    },
+    {
+      "name": "guide_defaults_heading",
+      "value": "设置你习惯的操作"
+    },
+    {
+      "name": "guide_defaults_heading_subtitle",
+      "value": "提前设置新远控会话的默认操作方式"
+    },
+    {
+      "name": "guide_defaults_title",
+      "value": "打开“设置 > 远控默认”"
+    },
+    {
+      "name": "guide_defaults_body",
+      "value": "在“远控默认”中设置你习惯的控制模式、手势、画质和其他新会话默认行为。"
     }
   ]
 }
