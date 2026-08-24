@@ -12,6 +12,11 @@ on:
         required: true
         default: rustdesk-ohrs
         type: string
+      package_version:
+        description: Exact Core HAR version; latest when empty
+        required: false
+        default: ''
+        type: string
 
 permissions:
   actions: read
@@ -24,7 +29,7 @@ concurrency:
 env:
   OHOS_COMMAND_LINE_TOOLS_VERSION: 6.1.1.280
   CORE_HAR_PACKAGE: ${{ github.event.client_payload.package_name || inputs.package_name || 'rustdesk-ohrs' }}
-  EXPECTED_CORE_SHA: ${{ github.event.client_payload.core_sha || '' }}
+  CORE_HAR_VERSION: ${{ github.event.client_payload.package_version || inputs.package_version || '' }}
   CORE_HAR_REGISTRY: https://devrepo.devcloud.cn-north-4.huaweicloud.com/artgalaxy/api/ohpm/cn-north-4_c07b1b38744f424b8d87a86532d38003_ohpm_1/
   LUMINOUS_NEO_VERSION: 1.0.2
   SIGNING_REPOSITORY: ${{ vars.SIGNING_REPOSITORY || 'FrankHan052176/AppGallerySigning' }}
@@ -68,27 +73,16 @@ jobs:
           printf '%s' "$CODEARTS_PRIVATE_OHPM_READ" > "$private_config"
 
           core_har_spec="${CORE_HAR_PACKAGE}@latest"
-          expected_core_short="${EXPECTED_CORE_SHA:0:8}"
-          core_har_version=""
-          for attempt in $(seq 1 8); do
-            ohpm uninstall "$CORE_HAR_PACKAGE" >/dev/null 2>&1 || true
-            rm -rf "oh_modules/${CORE_HAR_PACKAGE}"
-            echo "Installing Core HAR: $core_har_spec (attempt $attempt/8)"
-            ohpm install "$core_har_spec" \
-              --registry "$CORE_HAR_REGISTRY" \
-              --retry_times 5 \
-              --retry_interval 3000
-            core_har_version="$(jq -er '.version' "oh_modules/${CORE_HAR_PACKAGE}/oh-package.json5")"
-            if [[ -z "$expected_core_short" || "$core_har_version" == *"-g${expected_core_short}" ]]; then
-              break
-            fi
-            if [[ "$attempt" -eq 8 ]]; then
-              echo "Expected Core HAR for ${EXPECTED_CORE_SHA}, but latest is ${core_har_version}" >&2
-              exit 1
-            fi
-            echo "Core HAR latest is still ${core_har_version}; waiting for ${expected_core_short}"
-            sleep 15
-          done
+          if [[ -n "$CORE_HAR_VERSION" ]]; then
+            core_har_spec="${CORE_HAR_PACKAGE}@${CORE_HAR_VERSION}"
+          fi
+          ohpm uninstall "$CORE_HAR_PACKAGE" >/dev/null 2>&1 || true
+          rm -rf "oh_modules/${CORE_HAR_PACKAGE}"
+          echo "Installing Core HAR: $core_har_spec"
+          ohpm install "$core_har_spec" \
+            --registry "$CORE_HAR_REGISTRY" \
+            --retry_times 5 \
+            --retry_interval 3000
           (
             cd entry
             echo "Installing Luminous Neo: luminous_neo@$LUMINOUS_NEO_VERSION"
@@ -107,6 +101,10 @@ jobs:
 
           core_har_version="$(jq -er '.version' "oh_modules/${CORE_HAR_PACKAGE}/oh-package.json5")"
           luminous_neo_version="$(jq -er '.version' "entry/oh_modules/luminous_neo/oh-package.json5")"
+          if [[ -n "$CORE_HAR_VERSION" && "$core_har_version" != "$CORE_HAR_VERSION" ]]; then
+            echo "Expected ${CORE_HAR_PACKAGE}@${CORE_HAR_VERSION}, got ${core_har_version}" >&2
+            exit 1
+          fi
           if [[ "$luminous_neo_version" != "$LUMINOUS_NEO_VERSION" ]]; then
             echo "Expected luminous_neo@$LUMINOUS_NEO_VERSION, got $luminous_neo_version" >&2
             exit 1
