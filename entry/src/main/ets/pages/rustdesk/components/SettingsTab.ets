@@ -19,7 +19,9 @@ import { BeginnerGuidePage } from './BeginnerGuidePage';
 import { ServerSettingsCard } from './ServerSettingsCard';
 import { SessionDefaultsCard } from './SessionDefaultsCard';
 
-type SettingsSection = 'tutorial' | 'server' | 'account' | 'session' | 'diagnostics';
+type SettingsSection = 'tutorial' | 'server' | 'account'
+  | 'session_input' | 'session_quality' | 'session_security' | 'session_other'
+  | 'diagnostics';
 
 export interface SettingsTabProps {
   nativeVersion: string;
@@ -212,6 +214,7 @@ export struct SettingsTab {
     const defaults = new SessionDefaults();
     defaults.touchMode = source.touchMode;
     defaults.relativeMouseMode = source.relativeMouseMode;
+    defaults.rightClickGesture = source.rightClickGesture;
     defaults.audioEnabled = source.audioEnabled;
     defaults.clipboardEnabled = source.clipboardEnabled;
     defaults.qualityPreset = source.qualityPreset;
@@ -231,7 +234,10 @@ export struct SettingsTab {
   }
 
   private selectSection(section: SettingsSection): void {
-    if (section === 'session') {
+    if (section === 'session_input'
+      || section === 'session_quality'
+      || section === 'session_security'
+      || section === 'session_other') {
       this.sessionDefaultsDraft = this.copySessionDefaults(this.sessionDefaults);
     }
     this.selectedSection = section;
@@ -255,8 +261,17 @@ export struct SettingsTab {
     if (this.selectedSection === 'account') {
       return $r('app.string.settings_account_title');
     }
-    if (this.selectedSection === 'session') {
-      return '新会话默认行为';
+    if (this.selectedSection === 'session_input') {
+      return '输入模式';
+    }
+    if (this.selectedSection === 'session_quality') {
+      return '画质';
+    }
+    if (this.selectedSection === 'session_security') {
+      return '安全';
+    }
+    if (this.selectedSection === 'session_other') {
+      return '其他';
     }
     return '诊断与关于';
   }
@@ -271,8 +286,17 @@ export struct SettingsTab {
     if (this.selectedSection === 'account') {
       return $r('app.string.settings_account_subtitle');
     }
-    if (this.selectedSection === 'session') {
-      return $r('app.string.settings_defaults_subtitle');
+    if (this.selectedSection === 'session_input') {
+      return '设置新远控会话的操作方式与右键手势';
+    }
+    if (this.selectedSection === 'session_quality') {
+      return '设置默认画质、帧率和编码器偏好';
+    }
+    if (this.selectedSection === 'session_security') {
+      return '预留给服务端安全策略与访问控制';
+    }
+    if (this.selectedSection === 'session_other') {
+      return '音频、剪贴板、手势和工具栏等默认行为';
     }
     return this.diagnosticSummary();
   }
@@ -307,6 +331,19 @@ export struct SettingsTab {
     return this.sessionDefaults.relativeMouseMode
       ? $r('app.string.settings_pointer_relative')
       : $r('app.string.settings_pointer_mouse');
+  }
+
+  private qualitySummary(): string {
+    if (this.sessionDefaults.qualityPreset === 'best') {
+      return '最佳画质';
+    }
+    if (this.sessionDefaults.qualityPreset === 'low') {
+      return '低带宽';
+    }
+    if (this.sessionDefaults.qualityPreset === 'custom') {
+      return `自定义 · ${this.sessionDefaults.customQuality}% · ${this.sessionDefaults.customFps} FPS`;
+    }
+    return '平衡';
   }
 
   private diagnosticSummary(): string {
@@ -449,16 +486,41 @@ export struct SettingsTab {
             $r('app.color.neu_accent'),
           )
           this.SettingsTile(
-            'session',
+            'session_input',
             $r('sys.symbol.slider_horizontal_2'),
-            '远控默认',
+            '输入模式',
             this.sessionSummary(),
             $r('app.color.success'),
           )
         }
         .width(this.hubFrameWidth());
 
-        Row() {
+        Row({ space: 14 }) {
+          this.SettingsTile(
+            'session_quality',
+            $r('sys.symbol.display'),
+            '画质',
+            this.qualitySummary(),
+            $r('app.color.neu_accent'),
+          )
+          this.SettingsTile(
+            'session_security',
+            $r('sys.symbol.info_circle'),
+            '安全',
+            '服务端安全设置（预留）',
+            $r('app.color.warning'),
+          )
+        }
+        .width(this.hubFrameWidth());
+
+        Row({ space: 14 }) {
+          this.SettingsTile(
+            'session_other',
+            $r('sys.symbol.gearshape'),
+            '其他',
+            '音频、剪贴板、手势与工具栏',
+            $r('app.color.neu_accent'),
+          )
           this.SettingsTile(
             'diagnostics',
             $r('sys.symbol.info_circle'),
@@ -494,11 +556,32 @@ export struct SettingsTab {
           $r('app.color.neu_accent'),
         )
         this.SettingsTile(
-          'session',
+          'session_input',
           $r('sys.symbol.slider_horizontal_2'),
-          '远控默认',
+          '输入模式',
           this.sessionSummary(),
           $r('app.color.success'),
+        )
+        this.SettingsTile(
+          'session_quality',
+          $r('sys.symbol.display'),
+          '画质',
+          this.qualitySummary(),
+          $r('app.color.neu_accent'),
+        )
+        this.SettingsTile(
+          'session_security',
+          $r('sys.symbol.info_circle'),
+          '安全',
+          '服务端安全设置（预留）',
+          $r('app.color.warning'),
+        )
+        this.SettingsTile(
+          'session_other',
+          $r('sys.symbol.gearshape'),
+          '其他',
+          '音频、剪贴板、手势与工具栏',
+          $r('app.color.neu_accent'),
         )
         this.SettingsTile(
           'diagnostics',
@@ -868,6 +951,30 @@ export struct SettingsTab {
   }
 
   @Builder
+  private SessionSecurityPlaceholder() {
+    Column({ space: 12 }) {
+      SymbolGlyph($r('sys.symbol.info_circle'))
+        .fontSize(36)
+        .fontColor([$r('app.color.warning')]);
+      Text('服务端安全设置')
+        .fontSize($r('app.float.font_title'))
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.neu_text_primary'));
+      Text('此页面为后续服务端访问控制、密码策略和授权规则预留。')
+        .fontSize($r('app.float.font_body'))
+        .fontColor($r('app.color.neu_text_secondary'))
+        .textAlign(TextAlign.Center);
+    }
+    .width('100%')
+    .constraintSize({ minHeight: 220 })
+    .padding($r('app.float.space_24'))
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor($r('app.color.mica_control'))
+    .border({ width: 1, color: $r('app.color.mica_border') })
+    .borderRadius($r('app.float.radius_24'));
+  }
+
+  @Builder
   private SelectedSettingsContent() {
     if (this.selectedSection === 'tutorial') {
       BeginnerGuidePage()
@@ -894,9 +1001,26 @@ export struct SettingsTab {
         onSync: () => this.onAddressBookSync(),
         onLogout: () => this.onAccountLogout(),
       })
-    } else if (this.selectedSection === 'session') {
+    } else if (this.selectedSection === 'session_input') {
       SessionDefaultsCard({
         showHeader: false,
+        section: 'input',
+        defaults: this.sessionDefaultsDraft,
+        onDefaultsChange: (defaults: SessionDefaults) => this.updateSessionDefaultsDraft(defaults),
+      })
+    } else if (this.selectedSection === 'session_quality') {
+      SessionDefaultsCard({
+        showHeader: false,
+        section: 'quality',
+        defaults: this.sessionDefaultsDraft,
+        onDefaultsChange: (defaults: SessionDefaults) => this.updateSessionDefaultsDraft(defaults),
+      })
+    } else if (this.selectedSection === 'session_security') {
+      this.SessionSecurityPlaceholder()
+    } else if (this.selectedSection === 'session_other') {
+      SessionDefaultsCard({
+        showHeader: false,
+        section: 'other',
         defaults: this.sessionDefaultsDraft,
         onDefaultsChange: (defaults: SessionDefaults) => this.updateSessionDefaultsDraft(defaults),
       })

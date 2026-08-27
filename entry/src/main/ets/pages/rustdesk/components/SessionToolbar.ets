@@ -14,9 +14,9 @@ interface ToolbarActionOptions {
 export interface SessionToolbarProps {
   touchMode: boolean;
   relativeMouseMode: boolean;
-  relativeMouseModeSupported: boolean;
   metrics: SessionToolbarMetrics;
   activeOverlayPanel: SessionOverlayPanel;
+  inputTransitionId: string;
   chatTransitionId: string;
   displayTransitionId: string;
   qualityTransitionId: string;
@@ -38,7 +38,7 @@ export interface SessionToolbarProps {
   windowControlsAvailable: boolean;
   windowFullscreen: boolean;
   windowControlBusy: boolean;
-  onTogglePointerMode: () => void;
+  onOpenInput: () => void;
   onResetTransform: () => void;
   onOpenChat: () => void;
   onOpenDisplay: () => void;
@@ -60,7 +60,6 @@ export struct SessionToolbar {
   @Local displayedTouchMode: boolean = true;
   @Param relativeMouseMode: boolean = false;
   @Local displayedRelativeMouseMode: boolean = false;
-  @Param relativeMouseModeSupported: boolean = false;
   @Param metrics: SessionToolbarMetrics = {
     fps: '--',
     frames: '--',
@@ -69,6 +68,7 @@ export struct SessionToolbar {
     codec: '--',
   };
   @Param activeOverlayPanel: SessionOverlayPanel = 'home';
+  @Param inputTransitionId: string = '';
   @Param chatTransitionId: string = '';
   @Param displayTransitionId: string = '';
   @Param qualityTransitionId: string = '';
@@ -91,7 +91,7 @@ export struct SessionToolbar {
   @Param windowControlsAvailable: boolean = false;
   @Param windowFullscreen: boolean = false;
   @Param windowControlBusy: boolean = false;
-  @Event onTogglePointerMode: () => void = () => {};
+  @Event onOpenInput: () => void = () => {};
   @Event onResetTransform: () => void = () => {};
   @Event onOpenChat: () => void = () => {};
   @Event onOpenDisplay: () => void = () => {};
@@ -179,41 +179,40 @@ export struct SessionToolbar {
   @Builder
   private PointerModeAction() {
     Button({ type: ButtonType.Normal, stateEffect: true }) {
-      Text(this.pointerModeLabel())
+      Text(`输入 · ${this.pointerModeLabel()}`)
         .fontSize($r('app.float.font_label'))
         .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.neu_text_primary'))
+        .fontColor(this.activeOverlayPanel === 'input'
+          ? $r('app.color.white')
+          : $r('app.color.neu_text_primary'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis });
     }
     .layoutWeight(1)
     .height(this.actionHeight())
     .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_8') })
-    .backgroundColor($r('app.color.mica_control'))
+    .backgroundColor(this.activeOverlayPanel === 'input'
+      ? $r('app.color.brand_primary')
+      : $r('app.color.mica_control'))
     .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
       adaptiveColor: AdaptiveColor.DEFAULT,
       scale: 0.56,
     })
     .border({
       width: 1,
-      color: $r('app.color.mica_border'),
+      color: this.activeOverlayPanel === 'input'
+        ? $r('app.color.brand_primary')
+        : $r('app.color.mica_border'),
     })
     .borderRadius($r('app.float.radius_14'))
     .shadow(ShadowStyle.OUTER_DEFAULT_SM)
     .hoverEffect(HoverEffect.None)
-    .accessibilityText(`控制模式：${this.pointerModeLabel()}`)
+    .accessibilityText(`打开输入模式设置，当前${this.pointerModeLabel()}`)
+    .accessibilitySelected(this.activeOverlayPanel === 'input')
+    .geometryTransition(this.inputTransitionId)
     .transition(TransitionEffect.OPACITY)
     .onClick((): void => {
-      if (this.displayedTouchMode) {
-        this.displayedTouchMode = false;
-        this.displayedRelativeMouseMode = false;
-      } else if (!this.displayedRelativeMouseMode && this.relativeMouseModeSupported) {
-        this.displayedRelativeMouseMode = true;
-      } else {
-        this.displayedTouchMode = true;
-        this.displayedRelativeMouseMode = false;
-      }
-      this.onTogglePointerMode();
+      this.onOpenInput();
     });
   }
 

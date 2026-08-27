@@ -1,6 +1,6 @@
 import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
-import { SessionDefaults } from './RustDeskDirectoryTypes';
+import { RustDeskRightClickGesture, SessionDefaults } from './RustDeskDirectoryTypes';
 import { SavedConnectionSettings } from './RustDeskTypes';
 
 const PREF_NAME = 'rustdesk_connection';
@@ -13,6 +13,7 @@ const LEGACY_DEFAULT_TARGET = '10.52.176.1';
 const LEGACY_DEFAULT_RELATIVE_MOUSE_KEY = 'default_relative_mouse';
 const DEFAULT_TOUCH_MODE_KEY = 'default_touch_mode_v2';
 const DEFAULT_RELATIVE_MOUSE_KEY = 'default_relative_mouse_v2';
+const DEFAULT_RIGHT_CLICK_GESTURE_KEY = 'default_right_click_gesture';
 const DEFAULT_AUDIO_ENABLED_KEY = 'default_audio_enabled';
 const DEFAULT_CLIPBOARD_ENABLED_KEY = 'default_clipboard_enabled';
 const DEFAULT_QUALITY_PRESET_KEY = 'default_quality_preset';
@@ -214,6 +215,15 @@ export class RustDeskPreferences {
       if (defaults.touchMode) {
         defaults.relativeMouseMode = false;
       }
+      const rightClickGesture = store.getSync(
+        DEFAULT_RIGHT_CLICK_GESTURE_KEY,
+        defaults.rightClickGesture,
+      ) as string;
+      if (rightClickGesture === 'double_tap'
+        || rightClickGesture === 'two_finger_tap'
+        || rightClickGesture === 'long_press') {
+        defaults.rightClickGesture = rightClickGesture as RustDeskRightClickGesture;
+      }
       defaults.audioEnabled = store.getSync(DEFAULT_AUDIO_ENABLED_KEY, defaults.audioEnabled) as boolean;
       defaults.clipboardEnabled = store.getSync(
         DEFAULT_CLIPBOARD_ENABLED_KEY,
@@ -263,6 +273,7 @@ export class RustDeskPreferences {
     try {
       store.putSync(DEFAULT_TOUCH_MODE_KEY, defaults.touchMode);
       store.putSync(DEFAULT_RELATIVE_MOUSE_KEY, !defaults.touchMode && defaults.relativeMouseMode);
+      store.putSync(DEFAULT_RIGHT_CLICK_GESTURE_KEY, defaults.rightClickGesture);
       store.putSync(DEFAULT_AUDIO_ENABLED_KEY, defaults.audioEnabled);
       store.putSync(DEFAULT_CLIPBOARD_ENABLED_KEY, defaults.clipboardEnabled);
       store.putSync(DEFAULT_QUALITY_PRESET_KEY, defaults.qualityPreset.trim());

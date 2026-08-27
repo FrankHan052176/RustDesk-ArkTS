@@ -1,6 +1,8 @@
 export type ServerMode = 'custom';
 export type ServerEndpointTestState = 'untested' | 'success' | 'error';
 export type PeerSource = 'recent' | 'addressBook' | 'lan';
+export type RustDeskInputMode = 'touch' | 'mouse' | 'relative';
+export type RustDeskRightClickGesture = 'double_tap' | 'two_finger_tap' | 'long_press';
 
 export class ServerConfig {
   mode: ServerMode = 'custom';
@@ -63,6 +65,7 @@ export class PeerDirectProbeTarget {
 export class SessionDefaults {
   touchMode: boolean = true;
   relativeMouseMode: boolean = false;
+  rightClickGesture: RustDeskRightClickGesture = 'two_finger_tap';
   audioEnabled: boolean = true;
   clipboardEnabled: boolean = true;
   qualityPreset: string = 'balanced';

@@ -38,6 +38,7 @@ import {
 import { ChatDrawer } from './rustdesk/components/ChatDrawer';
 import { DisplaySelectorSheet } from './rustdesk/components/DisplaySelectorSheet';
 import { QualityControlSheet, QualityPreset } from './rustdesk/components/QualityControlSheet';
+import { InputModeSheet } from './rustdesk/components/InputModeSheet';
 import { SessionPanelFrame } from './rustdesk/components/SessionPanelFrame';
 import { TransferDrawer } from './rustdesk/components/TransferDrawer';
 import { ChatStore } from './rustdesk/ChatStore';
@@ -51,6 +52,8 @@ import {
   DirectorySnapshot,
   PeerDirectProbeTarget,
   PeerRecord,
+  RustDeskInputMode,
+  RustDeskRightClickGesture,
   ServerConfig,
   SessionDefaults,
 } from './rustdesk/RustDeskDirectoryTypes';
@@ -152,6 +155,7 @@ const WAITING_FOR_IMAGE_TEXT = 'Connected, waiting for image...';
 const PREVIEW_INPUT_FOCUS_ID = 'rustdesk-preview-input-layer';
 const SYSTEM_IME_INPUT_FOCUS_ID = 'rustdesk-system-ime-input';
 const SESSION_OVERLAY_TRANSITION_CHAT = 'rustdesk-session-overlay-chat';
+const SESSION_OVERLAY_TRANSITION_INPUT = 'rustdesk-session-overlay-input';
 const SESSION_OVERLAY_TRANSITION_DISPLAY = 'rustdesk-session-overlay-display';
 const SESSION_OVERLAY_TRANSITION_QUALITY = 'rustdesk-session-overlay-quality';
 const MAIN_PAGE_TRANSITION_DURATION_MS = 280;
@@ -345,6 +349,7 @@ struct RustDeskIndex {
   @Local previewSurfaceGeneration: number = 0;
   @Local touchMode: boolean = true;
   @Local relativeMouseMode: boolean = false;
+  @Local rightClickGesture: RustDeskRightClickGesture = 'two_finger_tap';
   @Local previewViewWidth: number = 0;
   @Local previewViewHeight: number = 0;
   @Local previewUserScale: number = 1;
@@ -702,6 +707,7 @@ struct RustDeskIndex {
         isPeerAndroid: () => this.isPeerAndroid(),
         isPeerMobile: () => this.isPeerMobile(),
         gesturesEnabled: () => this.activeSessionDefaults.gesturesEnabled,
+        rightClickGesture: () => this.rightClickGesture,
         getCoordinateSpace: () => this.getCoordinateSpace(),
         sendMouse: (payload: RustDeskMousePayload) => this.sendMousePayload(payload),
         sendFlutterKey: (payload: RustDeskFlutterKeyPayload) => this.sendFlutterKeyPayloadObject(payload),
@@ -987,6 +993,7 @@ struct RustDeskIndex {
     const defaults = new SessionDefaults();
     defaults.touchMode = source.touchMode;
     defaults.relativeMouseMode = source.relativeMouseMode;
+    defaults.rightClickGesture = source.rightClickGesture;
     defaults.audioEnabled = source.audioEnabled;
     defaults.clipboardEnabled = source.clipboardEnabled;
     defaults.qualityPreset = source.qualityPreset;
@@ -1157,6 +1164,7 @@ struct RustDeskIndex {
   private applySessionDefaultsToIdleState(capabilities: DecoderCapability[]): void {
     this.touchMode = this.sessionDefaults.touchMode;
     this.relativeMouseMode = !this.touchMode && this.sessionDefaults.relativeMouseMode;
+    this.rightClickGesture = this.sessionDefaults.rightClickGesture;
     this.clipboardSyncEnabled = this.sessionDefaults.clipboardEnabled;
     this.selectedQualityPreset = this.defaultQualityPreset();
     this.preferredCodec = this.resolvePreferredCodec(this.sessionDefaults.preferredCodec, capabilities);
@@ -3032,6 +3040,7 @@ struct RustDeskIndex {
     this.renderStallRecoveryAttempts = 0;
     this.touchMode = this.activeSessionDefaults.touchMode;
     this.relativeMouseMode = !this.touchMode && this.activeSessionDefaults.relativeMouseMode;
+    this.rightClickGesture = this.activeSessionDefaults.rightClickGesture;
     this.resetRemoteCursorVisualState();
     this.cursorModel.reset();
     this.remoteCursorOptionApplied = false;
@@ -3100,6 +3109,13 @@ struct RustDeskIndex {
     this.chatStore.markRead();
     this.refreshChatState();
     this.openOverlayPanel('chat');
+  }
+
+  private openInputModePanel(): void {
+    if (!this.isRemoteControlSessionActive()) {
+      return;
+    }
+    this.openOverlayPanel('input');
   }
 
   private unavailableRemoteAudioState(): RemoteAudioState {
@@ -5258,26 +5274,52 @@ struct RustDeskIndex {
     }
   }
 
-  private async cyclePointerMode(): Promise<void> {
+  private setPointerMode(mode: RustDeskInputMode): void {
     if (!this.isRemoteControlSessionActive()) {
       return;
     }
-    if (this.touchMode) {
-      this.touchMode = false;
+    if (mode === 'relative' && !this.relativeMouseModeSupported()) {
+      this.sessionMessage = '当前远端不支持相对鼠标模式';
+      return;
+    }
+    const nextTouchMode = mode === 'touch';
+    const nextRelativeMode = mode === 'relative';
+    if (this.relativeMouseMode && !nextRelativeMode) {
       this.relativeMouseMode = false;
-      this.syncTouchMode(false);
-    } else if (!this.relativeMouseMode && this.relativeMouseModeSupported()) {
+      this.syncRelativeMouseMode(false);
+    }
+    if (this.touchMode !== nextTouchMode) {
+      this.touchMode = nextTouchMode;
+      this.syncTouchMode(nextTouchMode);
+    }
+    if (!this.relativeMouseMode && nextRelativeMode) {
       this.relativeMouseMode = true;
       this.syncRelativeMouseMode(true);
-    } else {
-      if (this.relativeMouseMode) {
-        this.relativeMouseMode = false;
-        this.syncRelativeMouseMode(false);
-      }
-      this.touchMode = true;
-      this.syncTouchMode(true);
     }
     this.sessionMessage = `已切换到${this.getPointerModeName()}`;
+  }
+
+  private async cyclePointerMode(): Promise<void> {
+    if (this.touchMode) {
+      this.setPointerMode('mouse');
+      return;
+    }
+    if (!this.relativeMouseMode && this.relativeMouseModeSupported()) {
+      this.setPointerMode('relative');
+      return;
+    }
+    this.setPointerMode('touch');
+  }
+
+  private setRightClickGesture(gesture: RustDeskRightClickGesture): void {
+    this.rightClickGesture = gesture;
+    if (gesture === 'double_tap') {
+      this.sessionMessage = '右键手势已切换为双击';
+    } else if (gesture === 'two_finger_tap') {
+      this.sessionMessage = '右键手势已切换为双指点击';
+    } else {
+      this.sessionMessage = '右键手势已切换为长按';
+    }
   }
 
   private getPointerModeName(): string {
@@ -5285,6 +5327,13 @@ struct RustDeskIndex {
       return '触控模式';
     }
     return this.relativeMouseMode ? '相对鼠标模式' : '鼠标模式';
+  }
+
+  private currentPointerMode(): RustDeskInputMode {
+    if (this.touchMode) {
+      return 'touch';
+    }
+    return this.relativeMouseMode ? 'relative' : 'mouse';
   }
 
   private clampPreviewScale(value: number): number {
@@ -7093,9 +7142,9 @@ struct RustDeskIndex {
           SessionToolbar({
             touchMode: this.touchMode,
             relativeMouseMode: this.relativeMouseMode,
-            relativeMouseModeSupported: this.relativeMouseModeSupported(),
             metrics: this.sessionToolbarMetrics(),
             activeOverlayPanel: this.activeOverlayPanel,
+            inputTransitionId: SESSION_OVERLAY_TRANSITION_INPUT,
             chatTransitionId: SESSION_OVERLAY_TRANSITION_CHAT,
             displayTransitionId: SESSION_OVERLAY_TRANSITION_DISPLAY,
             qualityTransitionId: SESSION_OVERLAY_TRANSITION_QUALITY,
@@ -7117,7 +7166,7 @@ struct RustDeskIndex {
             windowControlsAvailable: this.sessionWindowControlsAvailable(),
             windowFullscreen: this.sessionWindowFullscreen,
             windowControlBusy: this.sessionWindowControlBusy,
-            onTogglePointerMode: () => this.cyclePointerMode(),
+            onOpenInput: () => this.openInputModePanel(),
             onResetTransform: () => this.resetPreviewViewTransform(),
             onOpenChat: () => this.openChatDrawer(),
             onAudioChange: (enabled: boolean) => this.setRemoteAudioEnabled(enabled),
@@ -7148,7 +7197,9 @@ struct RustDeskIndex {
             onMinimizeWindow: () => this.minimizeSessionWindow(),
             onToggleWindowFullscreen: () => this.toggleSessionWindowFullscreen(),
             content: () => {
-              if (this.isOverlayPanelOpen('chat')) {
+              if (this.isOverlayPanelOpen('input')) {
+                this.inputModeOverlayPanel();
+              } else if (this.isOverlayPanelOpen('chat')) {
                 this.chatOverlayPanel();
               } else if (this.isOverlayPanelOpen('display')) {
                 this.displayOverlayPanel();
@@ -7439,6 +7490,23 @@ struct RustDeskIndex {
     .focusable(true)
     .focusOnTouch(true)
     .onKeyEvent((event: KeyEvent) => this.handlePreviewRootKeyEvent(event));
+  }
+
+  @Builder
+  private inputModeOverlayPanel() {
+    SessionPanelFrame({
+      title: '输入模式',
+      transitionId: SESSION_OVERLAY_TRANSITION_INPUT,
+      onBack: () => this.closeOverlayPanel(),
+    }) {
+      InputModeSheet({
+        selectedMode: this.currentPointerMode(),
+        rightClickGesture: this.rightClickGesture,
+        relativeModeSupported: this.relativeMouseModeSupported(),
+        onSelectMode: (mode: RustDeskInputMode) => this.setPointerMode(mode),
+        onSelectRightClick: (gesture: RustDeskRightClickGesture) => this.setRightClickGesture(gesture),
+      });
+    }
   }
 
   @Builder

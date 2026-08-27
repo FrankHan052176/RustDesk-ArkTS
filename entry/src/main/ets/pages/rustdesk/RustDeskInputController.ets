@@ -28,6 +28,7 @@ import {
   TOUCH_TRANSFORM_SCALE_SLOP,
   TOUCH_TWO_FINGER_TAP_MAX_MS,
 } from './RustDeskTouchGestureState';
+import { RustDeskRightClickGesture } from './RustDeskDirectoryTypes';
 
 const TOUCHPAD_MOVE_SENSITIVITY = 1.0;
 const RELATIVE_MOUSE_RAW_SENSITIVITY = 1.0;
@@ -46,6 +47,7 @@ export interface RustDeskInputControllerCallbacks {
   isPeerAndroid: () => boolean;
   isPeerMobile: () => boolean;
   gesturesEnabled: () => boolean;
+  rightClickGesture: () => RustDeskRightClickGesture;
   getCoordinateSpace: () => RustDeskCoordinateSpace | undefined;
   sendMouse: (payload: RustDeskMousePayload) => void;
   sendFlutterKey: (payload: RustDeskFlutterKeyPayload) => boolean;
@@ -839,7 +841,7 @@ export class RustDeskInputController {
       if (!this.touchPrimaryReleased || !this.touchSecondaryReleased) {
         return;
       }
-      const shouldRightClick = this.mouseModeActive
+      const shouldRightClick = this.callbacks.rightClickGesture() === 'two_finger_tap'
         && !this.touchTwoFingerMoved
         && Date.now() - this.touchSequenceStartedAt <= TOUCH_TWO_FINGER_TAP_MAX_MS;
       this.cancelTouchTimers();
@@ -872,7 +874,9 @@ export class RustDeskInputController {
     }
     this.touchLongPressTimer = setTimeout(() => {
       this.touchLongPressTimer = -1;
-      this.applyTouchActions(this.touchGestureState.onHold(Date.now(), this.callbacks.isPeerMobile()));
+      const preserveMobileLongPress = this.callbacks.isPeerMobile()
+        && this.callbacks.rightClickGesture() !== 'long_press';
+      this.applyTouchActions(this.touchGestureState.onHold(Date.now(), preserveMobileLongPress));
     }, delay === 0 ? 1 : delay) as number;
   }
 
@@ -903,10 +907,16 @@ export class RustDeskInputController {
         this.applyTouchClick(action.x, action.y, 'left');
         return;
       case 'click_right':
-        this.applyTouchClick(action.x, action.y, 'right');
+        if (this.callbacks.rightClickGesture() === 'long_press') {
+          this.applyTouchClick(action.x, action.y, 'right');
+        }
         return;
       case 'double_click_left':
-        this.applyTouchDoubleClick(action.x, action.y);
+        if (this.callbacks.rightClickGesture() === 'double_tap') {
+          this.applyTouchClick(action.x, action.y, 'right');
+        } else {
+          this.applyTouchDoubleClick(action.x, action.y);
+        }
         return;
       case 'drag_start':
         if (this.mouseModeActive) {

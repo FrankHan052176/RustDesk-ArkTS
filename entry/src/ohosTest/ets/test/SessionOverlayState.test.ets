@@ -6,10 +6,10 @@ export default function sessionOverlayStateTest(): void {
     it('keeps exactly one detail panel active', 0, () => {
       const state = new SessionOverlayState();
       expect(state.getActivePanel()).assertEqual('home');
-      expect(state.open('chat')).assertTrue();
-      expect(state.isOpen('chat')).assertTrue();
+      expect(state.open('input')).assertTrue();
+      expect(state.isOpen('input')).assertTrue();
       expect(state.open('quality')).assertTrue();
-      expect(state.isOpen('chat')).assertFalse();
+      expect(state.isOpen('input')).assertFalse();
       expect(state.isOpen('quality')).assertTrue();
     });
 

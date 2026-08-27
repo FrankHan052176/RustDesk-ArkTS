@@ -4,10 +4,13 @@ import {
   LuminousSlider,
   LuminousSwitch,
 } from 'luminous_neo';
-import { SessionDefaults } from '../RustDeskDirectoryTypes';
+import { RustDeskRightClickGesture, SessionDefaults } from '../RustDeskDirectoryTypes';
+
+export type SessionDefaultsSection = 'all' | 'input' | 'quality' | 'other';
 
 export interface SessionDefaultsCardProps {
   showHeader: boolean;
+  section: SessionDefaultsSection;
   defaults: SessionDefaults;
   onDefaultsChange: (defaults: SessionDefaults) => void;
 }
@@ -15,6 +18,7 @@ export interface SessionDefaultsCardProps {
 @ComponentV2
 export struct SessionDefaultsCard {
   @Param showHeader: boolean = true;
+  @Param section: SessionDefaultsSection = 'all';
   @Param defaults: SessionDefaults = new SessionDefaults();
   @Local viewportWidth: number = 390;
   @Local displayedAudioEnabled: boolean = true;
@@ -49,6 +53,7 @@ export struct SessionDefaultsCard {
     const next = new SessionDefaults();
     next.touchMode = this.defaults.touchMode;
     next.relativeMouseMode = this.defaults.relativeMouseMode;
+    next.rightClickGesture = this.defaults.rightClickGesture;
     next.audioEnabled = this.defaults.audioEnabled;
     next.clipboardEnabled = this.defaults.clipboardEnabled;
     next.qualityPreset = this.defaults.qualityPreset;
@@ -77,6 +82,22 @@ export struct SessionDefaultsCard {
       return 0;
     }
     return this.defaults.relativeMouseMode ? 2 : 1;
+  }
+
+  private updateRightClickGesture(index: number): void {
+    const next = this.copyDefaults();
+    const gesture: RustDeskRightClickGesture = index === 0
+      ? 'double_tap'
+      : (index === 1 ? 'two_finger_tap' : 'long_press');
+    next.rightClickGesture = gesture;
+    this.emit(next);
+  }
+
+  private rightClickGestureIndex(): number {
+    if (this.defaults.rightClickGesture === 'double_tap') {
+      return 0;
+    }
+    return this.defaults.rightClickGesture === 'two_finger_tap' ? 1 : 2;
   }
 
   private updateAudio(enabled: boolean): void {
@@ -333,6 +354,120 @@ export struct SessionDefaultsCard {
   }
 
   @Builder
+  private RightClickGestureSelector() {
+    Column({ space: 2 }) {
+      Text('右键手势')
+        .width('100%')
+        .fontSize($r('app.float.font_label'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.neu_text_secondary'));
+
+      LuminousSegmentedControl({
+        items: [
+          new LuminousSelectionItem('double_tap', '双击'),
+          new LuminousSelectionItem('two_finger_tap', '双指点击'),
+          new LuminousSelectionItem('long_press', '长按'),
+        ],
+        selectedIndex: this.rightClickGestureIndex(),
+        controlWidth: this.selectorWidth(520),
+        controlHeight: 50,
+        motionEnabled: true,
+        onChange: (index: number) => this.updateRightClickGesture(index),
+      })
+        .margin({ top: -10 })
+    }
+    .width('100%');
+  }
+
+  @Builder
+  private InputModeHelpCard(
+    modeIndex: number,
+    title: string,
+    description: string,
+    gestures: string,
+  ) {
+    Column({ space: 5 }) {
+      Row() {
+        Text(title)
+          .layoutWeight(1)
+          .fontSize($r('app.float.font_label'))
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.pointerModeIndex() === modeIndex
+            ? $r('app.color.white')
+            : $r('app.color.neu_text_primary'));
+
+        if (this.pointerModeIndex() === modeIndex) {
+          Text('当前默认')
+            .fontSize($r('app.float.font_caption'))
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.white'));
+        }
+      }
+      .width('100%');
+
+      Text(description)
+        .width('100%')
+        .fontSize($r('app.float.font_caption'))
+        .fontColor(this.pointerModeIndex() === modeIndex
+          ? $r('app.color.white')
+          : $r('app.color.neu_text_secondary'));
+
+      Text(`手势：${gestures}`)
+        .width('100%')
+        .fontSize(11)
+        .lineHeight(16)
+        .fontColor(this.pointerModeIndex() === modeIndex
+          ? $r('app.color.white')
+          : $r('app.color.neu_text_secondary'));
+    }
+    .width('100%')
+    .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+    .alignItems(HorizontalAlign.Start)
+    .backgroundColor(this.pointerModeIndex() === modeIndex
+      ? $r('app.color.brand_primary')
+      : $r('app.color.mica_control'))
+    .border({
+      width: 1,
+      color: this.pointerModeIndex() === modeIndex
+        ? $r('app.color.brand_primary')
+        : $r('app.color.mica_border'),
+    })
+    .borderRadius($r('app.float.radius_14'));
+  }
+
+  @Builder
+  private InputModeHelp() {
+    Column({ space: 10 }) {
+      Text('模式与手势说明')
+        .width('100%')
+        .fontSize($r('app.float.font_label'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.neu_text_secondary'));
+
+      this.InputModeHelpCard(
+        1,
+        '鼠标模式',
+        '把屏幕当作触控板，通过虚拟光标精确操作远端。',
+        '单指移动光标 · 单击左键 · 双击并移动可拖拽 · 双指移动或捏合调整画面 · 三指纵向滑动滚轮（Android 远端除外）',
+      )
+      this.InputModeHelpCard(
+        0,
+        '触控模式',
+        '触点直接对应远端位置，适合窗口、列表和普通桌面操作。',
+        '单击左键 · 单指拖动直接拖拽 · 双指移动或捏合调整画面 · 三指纵向滑动滚轮（Android 远端除外）',
+      )
+      this.InputModeHelpCard(
+        2,
+        '相对鼠标',
+        '只发送位移增量，适合游戏、3D 软件和需要无限移动的场景。',
+        '单指相对移动 · 单击左键 · 双击并移动可拖拽 · 三指纵向滑动滚轮（Android 远端除外）',
+      )
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start);
+  }
+
+  @Builder
   private QualitySelector() {
     Column({ space: 2 }) {
       Text($r('app.string.settings_quality_default'))
@@ -526,30 +661,49 @@ export struct SessionDefaultsCard {
         .alignItems(HorizontalAlign.Start);
       }
 
-      if (this.isWide()) {
-        Row({ space: $r('app.float.space_20') }) {
-          Column() {
-            this.PointerModeSelector()
-          }
-          .layoutWeight(1);
-
-          Column() {
-            this.QualitySelector()
-          }
-          .layoutWeight(1);
-        }
-        .width('100%')
-        .alignItems(VerticalAlign.Top);
-      } else {
+      if (this.section === 'input') {
         Column({ space: 2 }) {
           this.PointerModeSelector()
-          this.QualitySelector()
+          this.RightClickGestureSelector()
+          this.InputModeHelp()
         }
         .width('100%');
-      }
+      } else if (this.section === 'quality') {
+        Column({ space: 2 }) {
+          this.QualitySelector()
+          this.CodecSelector()
+        }
+        .width('100%');
+      } else if (this.section === 'other') {
+        this.ToggleGrid()
+      } else {
+        if (this.isWide()) {
+          Row({ space: $r('app.float.space_20') }) {
+            Column({ space: 2 }) {
+              this.PointerModeSelector()
+              this.RightClickGestureSelector()
+            }
+            .layoutWeight(1);
 
-      this.CodecSelector()
-      this.ToggleGrid()
+            Column() {
+              this.QualitySelector()
+            }
+            .layoutWeight(1);
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Top);
+        } else {
+          Column({ space: 2 }) {
+            this.PointerModeSelector()
+            this.RightClickGestureSelector()
+            this.QualitySelector()
+          }
+          .width('100%');
+        }
+
+        this.CodecSelector()
+        this.ToggleGrid()
+      }
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
