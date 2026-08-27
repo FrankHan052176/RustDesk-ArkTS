@@ -61,8 +61,8 @@ export class PeerDirectProbeTarget {
 }
 
 export class SessionDefaults {
+  touchMode: boolean = true;
   relativeMouseMode: boolean = false;
-  twoFingerRightClick: boolean = false;
   audioEnabled: boolean = true;
   clipboardEnabled: boolean = true;
   qualityPreset: string = 'balanced';

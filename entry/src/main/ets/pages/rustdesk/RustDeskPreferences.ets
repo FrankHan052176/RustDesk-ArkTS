@@ -10,8 +10,9 @@ const PASSWORD_KEY = 'password';
 const REMEMBER_PASSWORD_KEY = 'remember_password';
 export const DOWNLOAD_ROOT_URI_KEY = 'download_root_uri';
 const LEGACY_DEFAULT_TARGET = '10.52.176.1';
-const DEFAULT_RELATIVE_MOUSE_KEY = 'default_relative_mouse';
-const DEFAULT_TWO_FINGER_RIGHT_CLICK_KEY = 'default_two_finger_right_click';
+const LEGACY_DEFAULT_RELATIVE_MOUSE_KEY = 'default_relative_mouse';
+const DEFAULT_TOUCH_MODE_KEY = 'default_touch_mode_v2';
+const DEFAULT_RELATIVE_MOUSE_KEY = 'default_relative_mouse_v2';
 const DEFAULT_AUDIO_ENABLED_KEY = 'default_audio_enabled';
 const DEFAULT_CLIPBOARD_ENABLED_KEY = 'default_clipboard_enabled';
 const DEFAULT_QUALITY_PRESET_KEY = 'default_quality_preset';
@@ -207,14 +208,9 @@ export class RustDeskPreferences {
       return defaults;
     }
     try {
-      defaults.relativeMouseMode = store.getSync(
-        DEFAULT_RELATIVE_MOUSE_KEY,
-        defaults.relativeMouseMode,
-      ) as boolean;
-      defaults.twoFingerRightClick = store.getSync(
-        DEFAULT_TWO_FINGER_RIGHT_CLICK_KEY,
-        defaults.twoFingerRightClick,
-      ) as boolean;
+      const legacyMouseMode = store.getSync(LEGACY_DEFAULT_RELATIVE_MOUSE_KEY, false) as boolean;
+      defaults.touchMode = store.getSync(DEFAULT_TOUCH_MODE_KEY, !legacyMouseMode) as boolean;
+      defaults.relativeMouseMode = store.getSync(DEFAULT_RELATIVE_MOUSE_KEY, defaults.relativeMouseMode) as boolean;
       defaults.audioEnabled = store.getSync(DEFAULT_AUDIO_ENABLED_KEY, defaults.audioEnabled) as boolean;
       defaults.clipboardEnabled = store.getSync(
         DEFAULT_CLIPBOARD_ENABLED_KEY,
@@ -262,8 +258,8 @@ export class RustDeskPreferences {
       return;
     }
     try {
+      store.putSync(DEFAULT_TOUCH_MODE_KEY, defaults.touchMode);
       store.putSync(DEFAULT_RELATIVE_MOUSE_KEY, defaults.relativeMouseMode);
-      store.putSync(DEFAULT_TWO_FINGER_RIGHT_CLICK_KEY, defaults.twoFingerRightClick);
       store.putSync(DEFAULT_AUDIO_ENABLED_KEY, defaults.audioEnabled);
       store.putSync(DEFAULT_CLIPBOARD_ENABLED_KEY, defaults.clipboardEnabled);
       store.putSync(DEFAULT_QUALITY_PRESET_KEY, defaults.qualityPreset.trim());

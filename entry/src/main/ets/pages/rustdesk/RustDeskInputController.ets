@@ -22,11 +22,14 @@ import {
 import {
   RustDeskTouchAction,
   RustDeskTouchGestureState,
-  TOUCH_LONG_PRESS_MS,
+  RustDeskTouchInteractionMode,
+  TOUCH_THREE_FINGER_SCROLL_DIVISOR,
+  TOUCH_TRANSFORM_PAN_SLOP,
+  TOUCH_TRANSFORM_SCALE_SLOP,
+  TOUCH_TWO_FINGER_TAP_MAX_MS,
 } from './RustDeskTouchGestureState';
 
 const TOUCHPAD_MOVE_SENSITIVITY = 1.0;
-const TOUCHPAD_SCROLL_SENSITIVITY = 1.6;
 const RELATIVE_MOUSE_RAW_SENSITIVITY = 1.0;
 const RELATIVE_MOUSE_FLUSH_MS = 16;
 const RELATIVE_MOUSE_MAX_DELTA = 10000;
@@ -38,10 +41,11 @@ const LOCK_MODE_SCROLL = 1 << 3;
 
 export interface RustDeskInputControllerCallbacks {
   isSessionActive: () => boolean;
-  isRelativeMode: () => boolean;
+  isMouseMode: () => boolean;
   isPeerMacOS: () => boolean;
   isPeerAndroid: () => boolean;
-  twoFingerRightClick: () => boolean;
+  isPeerMobile: () => boolean;
+  gesturesEnabled: () => boolean;
   getCoordinateSpace: () => RustDeskCoordinateSpace | undefined;
   sendMouse: (payload: RustDeskMousePayload) => void;
   sendFlutterKey: (payload: RustDeskFlutterKeyPayload) => boolean;
@@ -51,23 +55,45 @@ export interface RustDeskInputControllerCallbacks {
   overlayCursorDebugText: (label: string) => string;
   // Flutter-mobile local virtual cursor moved to (remoteX, remoteY) in remote coords.
   onVirtualCursorMoved: (remoteX: number, remoteY: number) => void;
+  onCanvasTransform: (
+    scaleFactor: number,
+    panX: number,
+    panY: number,
+    focalX: number,
+    focalY: number,
+  ) => void;
 }
 
 export class RustDeskInputController {
   private callbacks: RustDeskInputControllerCallbacks;
+  private mouseModeActive: boolean;
   private relativeModeActive: boolean;
   private activeModifiers: Set<RustDeskModifierKey> = new Set();
   private interceptedKeysDown: Set<number> = new Set();
   private touchGestureState: RustDeskTouchGestureState = new RustDeskTouchGestureState();
   private touchPrimaryId: number = -1;
   private touchSecondaryId: number = -1;
+  private touchThirdId: number = -1;
   private touchLastX: number = 0;
   private touchLastY: number = 0;
   private touchSecondaryLastX: number = 0;
   private touchSecondaryLastY: number = 0;
-  private touchTwoFingerDownAt: number = 0;
+  private touchThirdLastX: number = 0;
+  private touchThirdLastY: number = 0;
+  private touchPrimaryReleased: boolean = false;
+  private touchSecondaryReleased: boolean = false;
+  private touchSequenceStartedAt: number = 0;
+  private touchTwoFingerInitialCenterX: number = 0;
+  private touchTwoFingerInitialCenterY: number = 0;
+  private touchTwoFingerLastCenterX: number = 0;
+  private touchTwoFingerLastCenterY: number = 0;
+  private touchTwoFingerInitialDistance: number = 0;
+  private touchTwoFingerLastDistance: number = 0;
   private touchTwoFingerMoved: boolean = false;
-  private touchTwoFingerTriggered: boolean = false;
+  private touchTwoFingerTransformActive: boolean = false;
+  private touchThreeFingerLastCenterY: number = 0;
+  private touchThreeFingerScrollIntegral: number = 0;
+  private touchSuppressUntilAllReleased: boolean = false;
   private touchLongPressTimer: number = -1;
   private touchTapTimeoutTimer: number = -1;
   private relativeLastX: number = 0;
@@ -88,7 +114,8 @@ export class RustDeskInputController {
 
   constructor(callbacks: RustDeskInputControllerCallbacks) {
     this.callbacks = callbacks;
-    this.relativeModeActive = callbacks.isRelativeMode();
+    this.mouseModeActive = callbacks.isMouseMode();
+    this.relativeModeActive = false;
   }
 
   reset(): void {
@@ -97,25 +124,51 @@ export class RustDeskInputController {
     this.flushRelativeMouseMove();
     this.clearRelativeMouseState(false);
     this.clearTouchPointerState();
+    this.touchSuppressUntilAllReleased = false;
     this.releasePressedButtons();
     this.releaseInterceptedKeys();
     this.activeModifiers.clear();
     this.virtualCursorValid = false;
   }
 
-  setRelativeMode(active: boolean): void {
+  setMouseMode(active: boolean): void {
+    if (this.mouseModeActive === active) {
+      return;
+    }
     this.cancelTouchTimers();
     this.applyTouchActions(this.touchGestureState.reset());
     this.clearTouchPointerState();
+    this.touchSuppressUntilAllReleased = false;
     this.releasePressedButtons();
     if (this.relativeModeActive) {
       this.flushRelativeMouseMove();
     }
     this.clearRelativeMouseState(false);
-    this.relativeModeActive = active;
+    this.mouseModeActive = active;
     this.callbacks.log(
       'mode',
-      `touchpad=${active} absoluteVirtualCursor=true ${this.callbacks.overlayCursorDebugText('overlay')} ${this.callbacks.remoteCursorDebugText()}`,
+      `interaction=${active ? 'mouse' : 'touch'} relative=${this.relativeModeActive} ${this.callbacks.overlayCursorDebugText('overlay')} ${this.callbacks.remoteCursorDebugText()}`,
+    );
+  }
+
+  setRelativeMode(active: boolean): void {
+    if (this.relativeModeActive === active) {
+      return;
+    }
+    this.cancelTouchTimers();
+    this.applyTouchActions(this.touchGestureState.reset());
+    this.clearTouchPointerState();
+    this.touchSuppressUntilAllReleased = false;
+    this.releasePressedButtons();
+    if (this.relativeModeActive) {
+      this.flushRelativeMouseMove();
+    }
+    this.clearRelativeMouseState(false);
+    this.sendRelativeModeMarker(active);
+    this.relativeModeActive = active;
+    this.callbacks.log(
+      'relative_mode',
+      `active=${active} ${this.callbacks.overlayCursorDebugText('overlay')} ${this.callbacks.remoteCursorDebugText()}`,
     );
   }
 
@@ -462,13 +515,9 @@ export class RustDeskInputController {
     }
     if (this.relativeModeActive) {
       this.rebaseRelativeMouseAt(event.x, event.y, false);
-      if (isPress) {
-        this.discardRelativeMouseMove();
-      } else {
-        this.flushRelativeMouseMove();
-      }
+      this.flushRelativeMouseMove();
       this.relativeSuppressMoveUntil = Date.now() + RELATIVE_MOUSE_BUTTON_SUPPRESS_MS;
-      this.transitionMouseButton(button, isPress, 'physical_mouse', false);
+      this.transitionMouseButton(button, isPress, 'physical_mouse', false, 'relative');
       return;
     }
     if (inside) {
@@ -478,37 +527,59 @@ export class RustDeskInputController {
   }
 
   private handleTouchDown(event: TouchEvent): void {
-    const twoFingerRightClick = this.callbacks.twoFingerRightClick();
-    this.touchGestureState.setTwoFingerRightClick(twoFingerRightClick);
+    if (this.touchSuppressUntilAllReleased) {
+      return;
+    }
+    const now = Date.now();
     const changedTouches = event.changedTouches;
     for (let index = 0; index < changedTouches.length; index++) {
       const touch = changedTouches[index];
       if (this.touchPrimaryId === -1) {
-        if (!this.relativeModeActive && !this.isInsideContent(touch.x, touch.y)) {
+        if (!this.mouseModeActive && !this.isInsideContent(touch.x, touch.y)) {
           continue;
-        }
-        if (this.relativeModeActive) {
-          this.discardRelativeMouseMove();
         }
         this.touchPrimaryId = touch.id;
         this.touchLastX = touch.x;
         this.touchLastY = touch.y;
-        this.touchTwoFingerDownAt = 0;
+        this.touchSequenceStartedAt = now;
+        this.touchPrimaryReleased = false;
+        this.touchSecondaryReleased = false;
         this.touchTwoFingerMoved = false;
-        this.touchTwoFingerTriggered = false;
-        this.applyTouchActions(this.touchGestureState.onDown(touch.x, touch.y, Date.now()));
-        this.startLongPressTimer();
+        this.touchTwoFingerTransformActive = false;
+        this.applyTouchActions(this.touchGestureState.onDown(touch.x, touch.y, now, this.interactionMode()));
+        this.cancelTouchTapTimeout();
+        this.startHoldTimer();
         continue;
       }
       if (this.touchSecondaryId === -1 && touch.id !== this.touchPrimaryId) {
+        if (!this.callbacks.gesturesEnabled()) {
+          this.cancelTouchTimers();
+          this.applyTouchActions(this.touchGestureState.reset());
+          this.clearTouchPointerState();
+          this.touchSuppressUntilAllReleased = true;
+          return;
+        }
         this.touchSecondaryId = touch.id;
+        this.touchSecondaryReleased = false;
         this.touchSecondaryLastX = touch.x;
         this.touchSecondaryLastY = touch.y;
-        this.touchTwoFingerDownAt = Date.now();
         this.touchTwoFingerMoved = false;
-        this.touchTwoFingerTriggered = false;
+        this.touchTwoFingerTransformActive = false;
         this.cancelTouchTimers();
         this.applyTouchActions(this.touchGestureState.reset());
+        this.initializeTwoFingerGesture();
+        continue;
+      }
+      if (this.touchThirdId === -1 && touch.id !== this.touchPrimaryId && touch.id !== this.touchSecondaryId) {
+        this.touchThirdId = touch.id;
+        this.touchThirdLastX = touch.x;
+        this.touchThirdLastY = touch.y;
+        this.touchTwoFingerMoved = true;
+        this.touchTwoFingerTransformActive = false;
+        this.touchThreeFingerScrollIntegral = 0;
+        this.cancelTouchTimers();
+        this.applyTouchActions(this.touchGestureState.reset());
+        this.initializeThreeFingerGesture(event);
       }
     }
   }
@@ -517,37 +588,55 @@ export class RustDeskInputController {
     if (this.touchPrimaryId === -1) {
       return;
     }
+    if (this.touchSecondaryId !== -1 && (this.touchPrimaryReleased || this.touchSecondaryReleased)) {
+      const remainingTouch = this.touchPrimaryReleased
+        ? this.findTouchById(event.touches, this.touchSecondaryId)
+        : this.findTouchById(event.touches, this.touchPrimaryId);
+      if (remainingTouch) {
+        const previousX = this.touchPrimaryReleased ? this.touchSecondaryLastX : this.touchLastX;
+        const previousY = this.touchPrimaryReleased ? this.touchSecondaryLastY : this.touchLastY;
+        if (this.touchDistance(previousX, previousY, remainingTouch.x, remainingTouch.y)
+          >= TOUCH_TRANSFORM_PAN_SLOP) {
+          this.touchTwoFingerMoved = true;
+        }
+      }
+      return;
+    }
     const primaryTouch = this.findTouchById(event.touches, this.touchPrimaryId);
     if (!primaryTouch) {
       return;
     }
-    if (this.relativeModeActive) {
-      this.touchGestureState.onMove(primaryTouch.x, primaryTouch.y);
-      if (!this.touchGestureState.isLongPressPending()) {
-        this.cancelLongPressTimer();
-      }
-      if (this.touchSecondaryId !== -1) {
-        this.cancelLongPressTimer();
-        this.handleTwoFingerScroll(event);
-        return;
-      }
+    if (this.touchThirdId !== -1) {
+      this.cancelHoldTimer();
+      this.handleThreeFingerScroll(event);
+      return;
+    }
+    if (this.touchSecondaryId !== -1) {
+      this.cancelHoldTimer();
+      this.handleTwoFingerTransform(event);
+      return;
+    }
+    this.applyTouchActions(
+      this.touchGestureState.onMove(primaryTouch.x, primaryTouch.y, !this.relativeModeActive),
+    );
+    if (!this.touchGestureState.isHoldPending()) {
+      this.cancelHoldTimer();
+    }
+    if (this.mouseModeActive || this.relativeModeActive) {
       const deltaX = primaryTouch.x - this.touchLastX;
       const deltaY = primaryTouch.y - this.touchLastY;
       this.touchLastX = primaryTouch.x;
       this.touchLastY = primaryTouch.y;
       if (deltaX !== 0 || deltaY !== 0) {
         const remoteDelta = this.mapLocalDeltaToRemoteDelta(deltaX, deltaY);
-        this.queueRelativeMouseMove(remoteDelta.x * TOUCHPAD_MOVE_SENSITIVITY, remoteDelta.y * TOUCHPAD_MOVE_SENSITIVITY);
+        const scaledDeltaX = remoteDelta.x * TOUCHPAD_MOVE_SENSITIVITY;
+        const scaledDeltaY = remoteDelta.y * TOUCHPAD_MOVE_SENSITIVITY;
+        if (this.relativeModeActive) {
+          this.queueRelativeMouseMove(scaledDeltaX, scaledDeltaY);
+        } else if (this.advanceVirtualCursorBy(scaledDeltaX, scaledDeltaY)) {
+          this.sendVirtualCursorAbsoluteMove();
+        }
       }
-      return;
-    }
-    const isAndroidPeer: boolean = this.callbacks.isPeerAndroid();
-    this.applyTouchActions(this.touchGestureState.onMove(primaryTouch.x, primaryTouch.y, isAndroidPeer));
-    if (!this.touchGestureState.isLongPressPending()) {
-      this.cancelLongPressTimer();
-    }
-    if (this.touchSecondaryId !== -1) {
-      this.handleTwoFingerScroll(event);
       return;
     }
     const deltaX = primaryTouch.x - this.touchLastX;
@@ -560,34 +649,157 @@ export class RustDeskInputController {
     this.moveRemoteCursorToLocalPoint(primaryTouch.x, primaryTouch.y);
   }
 
-  private handleTwoFingerScroll(event: TouchEvent): void {
+  private initializeTwoFingerGesture(): void {
+    const centerX = (this.touchLastX + this.touchSecondaryLastX) / 2;
+    const centerY = (this.touchLastY + this.touchSecondaryLastY) / 2;
+    const distance = this.touchDistance(
+      this.touchLastX,
+      this.touchLastY,
+      this.touchSecondaryLastX,
+      this.touchSecondaryLastY,
+    );
+    this.touchTwoFingerInitialCenterX = centerX;
+    this.touchTwoFingerInitialCenterY = centerY;
+    this.touchTwoFingerLastCenterX = centerX;
+    this.touchTwoFingerLastCenterY = centerY;
+    this.touchTwoFingerInitialDistance = Math.max(distance, 1);
+    this.touchTwoFingerLastDistance = Math.max(distance, 1);
+  }
+
+  private handleTwoFingerTransform(event: TouchEvent): void {
     const primaryTouch = this.findTouchById(event.touches, this.touchPrimaryId);
     const secondaryTouch = this.findTouchById(event.touches, this.touchSecondaryId);
     if (!primaryTouch || !secondaryTouch) {
       return;
     }
-    const deltaX = ((primaryTouch.x - this.touchLastX) + (secondaryTouch.x - this.touchSecondaryLastX)) / 2;
-    const deltaY = ((primaryTouch.y - this.touchLastY) + (secondaryTouch.y - this.touchSecondaryLastY)) / 2;
+    const centerX = (primaryTouch.x + secondaryTouch.x) / 2;
+    const centerY = (primaryTouch.y + secondaryTouch.y) / 2;
+    const distance = Math.max(
+      this.touchDistance(primaryTouch.x, primaryTouch.y, secondaryTouch.x, secondaryTouch.y),
+      1,
+    );
+    const initialPanX = centerX - this.touchTwoFingerInitialCenterX;
+    const initialPanY = centerY - this.touchTwoFingerInitialCenterY;
+    const initialScale = distance / Math.max(this.touchTwoFingerInitialDistance, 1);
+    const panDistanceSquared = initialPanX * initialPanX + initialPanY * initialPanY;
+    const scaleChanged = Math.abs(initialScale - 1) >= TOUCH_TRANSFORM_SCALE_SLOP;
+    if (!this.touchTwoFingerTransformActive) {
+      if (panDistanceSquared < TOUCH_TRANSFORM_PAN_SLOP * TOUCH_TRANSFORM_PAN_SLOP && !scaleChanged) {
+        return;
+      }
+      this.touchTwoFingerTransformActive = true;
+      this.touchTwoFingerMoved = true;
+      this.callbacks.onCanvasTransform(initialScale, initialPanX, initialPanY, centerX, centerY);
+    } else {
+      const panX = centerX - this.touchTwoFingerLastCenterX;
+      const panY = centerY - this.touchTwoFingerLastCenterY;
+      const scaleFactor = distance / Math.max(this.touchTwoFingerLastDistance, 1);
+      this.callbacks.onCanvasTransform(scaleFactor, panX, panY, centerX, centerY);
+    }
     this.touchLastX = primaryTouch.x;
     this.touchLastY = primaryTouch.y;
     this.touchSecondaryLastX = secondaryTouch.x;
     this.touchSecondaryLastY = secondaryTouch.y;
-    const x = Math.round(-deltaX * TOUCHPAD_SCROLL_SENSITIVITY);
-    const y = Math.round(-deltaY * TOUCHPAD_SCROLL_SENSITIVITY);
-    if (x === 0 && y === 0) {
+    this.touchTwoFingerLastCenterX = centerX;
+    this.touchTwoFingerLastCenterY = centerY;
+    this.touchTwoFingerLastDistance = distance;
+  }
+
+  private initializeThreeFingerGesture(event: TouchEvent): void {
+    const primaryTouch = this.findTouchById(event.touches, this.touchPrimaryId);
+    const secondaryTouch = this.findTouchById(event.touches, this.touchSecondaryId);
+    const thirdTouch = this.findTouchById(event.touches, this.touchThirdId);
+    if (primaryTouch) {
+      this.touchLastX = primaryTouch.x;
+      this.touchLastY = primaryTouch.y;
+    }
+    if (secondaryTouch) {
+      this.touchSecondaryLastX = secondaryTouch.x;
+      this.touchSecondaryLastY = secondaryTouch.y;
+    }
+    if (thirdTouch) {
+      this.touchThirdLastX = thirdTouch.x;
+      this.touchThirdLastY = thirdTouch.y;
+    }
+    this.touchThreeFingerLastCenterY = (
+      this.touchLastY + this.touchSecondaryLastY + this.touchThirdLastY
+    ) / 3;
+  }
+
+  private handleThreeFingerScroll(event: TouchEvent): void {
+    const center = this.threeFingerCenter(event.touches);
+    if (!center) {
       return;
     }
+    const deltaY = center.y - this.touchThreeFingerLastCenterY;
+    this.touchThreeFingerLastCenterY = center.y;
+    if (this.callbacks.isPeerAndroid()) {
+      return;
+    }
+    this.touchThreeFingerScrollIntegral += deltaY / TOUCH_THREE_FINGER_SCROLL_DIVISOR;
+    if (this.touchThreeFingerScrollIntegral > 1) {
+      this.sendTouchWheelStep(1);
+      this.touchThreeFingerScrollIntegral = 0;
+    } else if (this.touchThreeFingerScrollIntegral < -1) {
+      this.sendTouchWheelStep(-1);
+      this.touchThreeFingerScrollIntegral = 0;
+    }
+  }
+
+  private interactionMode(): RustDeskTouchInteractionMode {
+    return this.mouseModeActive ? 'mouse' : 'touch';
+  }
+
+  private touchDistance(firstX: number, firstY: number, secondX: number, secondY: number): number {
+    const deltaX = secondX - firstX;
+    const deltaY = secondY - firstY;
+    return Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+  }
+
+  private threeFingerCenter(touches: Array<TouchObject>): RemotePointerPosition | undefined {
+    const primaryTouch = this.findTouchById(touches, this.touchPrimaryId);
+    const secondaryTouch = this.findTouchById(touches, this.touchSecondaryId);
+    const thirdTouch = this.findTouchById(touches, this.touchThirdId);
+    if (!primaryTouch || !secondaryTouch || !thirdTouch) {
+      return undefined;
+    }
+    this.touchLastX = primaryTouch.x;
+    this.touchLastY = primaryTouch.y;
+    this.touchSecondaryLastX = secondaryTouch.x;
+    this.touchSecondaryLastY = secondaryTouch.y;
+    this.touchThirdLastX = thirdTouch.x;
+    this.touchThirdLastY = thirdTouch.y;
+    return {
+      x: (primaryTouch.x + secondaryTouch.x + thirdTouch.x) / 3,
+      y: (primaryTouch.y + secondaryTouch.y + thirdTouch.y) / 3,
+    };
+  }
+
+  private sendTouchWheelStep(step: number): void {
     const payload = new RustDeskMousePayload();
-    payload.type = 'trackpad';
-    payload.x = String(x);
-    payload.y = String(y);
+    payload.type = 'wheel';
+    payload.y = String(step);
     this.callbacks.sendMouse(payload);
   }
 
   private handleTouchRelease(event: TouchEvent): void {
+    if (this.touchSuppressUntilAllReleased) {
+      if (event.type === TouchType.Cancel || event.touches.length === 0) {
+        this.touchSuppressUntilAllReleased = false;
+        this.clearTouchPointerState();
+      }
+      return;
+    }
+    if (event.type === TouchType.Cancel) {
+      this.cancelTouchTimers();
+      this.applyTouchActions(this.touchGestureState.reset());
+      this.clearTouchPointerState();
+      return;
+    }
     const changedTouches = event.changedTouches;
     let primaryReleased = false;
     let secondaryReleased = false;
+    let thirdReleased = false;
     let primaryX = this.touchLastX;
     let primaryY = this.touchLastY;
     for (let index = 0; index < changedTouches.length; index++) {
@@ -600,69 +812,68 @@ export class RustDeskInputController {
       if (touch.id === this.touchSecondaryId) {
         secondaryReleased = true;
       }
-    }
-    const isTwoFinger = this.touchSecondaryId !== -1 || secondaryReleased;
-    if (isTwoFinger && this.callbacks.twoFingerRightClick() && !this.touchTwoFingerMoved
-      && this.touchTwoFingerDownAt > 0 && Date.now() - this.touchTwoFingerDownAt <= 350
-      && !this.touchTwoFingerTriggered) {
-      this.touchTwoFingerTriggered = true;
-      if (this.relativeModeActive) {
-        this.clickCurrentCursor('right');
-      } else {
-        this.applyTouchClick(primaryX, primaryY, 'right');
+      if (touch.id === this.touchThirdId) {
+        thirdReleased = true;
       }
+    }
+    const multiFingerSequence = this.touchSecondaryId !== -1 || this.touchThirdId !== -1
+      || secondaryReleased || thirdReleased;
+    if (multiFingerSequence) {
+      if (this.touchThirdId !== -1 || thirdReleased) {
+        this.cancelTouchTimers();
+        this.applyTouchActions(this.touchGestureState.reset());
+        this.touchSuppressUntilAllReleased = event.touches.length > 0;
+        this.clearTouchPointerState();
+        return;
+      }
+      if (primaryReleased) {
+        this.touchPrimaryReleased = true;
+      }
+      if (secondaryReleased) {
+        this.touchSecondaryReleased = true;
+      }
+      if (event.touches.length === 0) {
+        this.touchPrimaryReleased = true;
+        this.touchSecondaryReleased = true;
+      }
+      if (!this.touchPrimaryReleased || !this.touchSecondaryReleased) {
+        return;
+      }
+      const shouldRightClick = this.mouseModeActive
+        && !this.touchTwoFingerMoved
+        && Date.now() - this.touchSequenceStartedAt <= TOUCH_TWO_FINGER_TAP_MAX_MS;
       this.cancelTouchTimers();
       this.applyTouchActions(this.touchGestureState.reset());
+      if (shouldRightClick) {
+        this.applyTouchClick(primaryX, primaryY, 'right');
+      }
       this.clearTouchPointerState();
       return;
     }
     if (primaryReleased) {
-      const cancelled = event.type === TouchType.Cancel;
-      this.cancelLongPressTimer();
-      if (!this.touchTwoFingerTriggered) {
-        this.applyTouchActions(this.touchGestureState.onRelease(primaryX, primaryY, Date.now(), cancelled));
-      }
-      if (cancelled) {
-        this.cancelTouchTapTimeout();
-        this.applyTouchActions(this.touchGestureState.reset());
-      } else if (!this.callbacks.twoFingerRightClick()) {
-        this.syncTouchTapTimeout(Date.now());
-      }
+      this.cancelHoldTimer();
+      this.applyTouchActions(this.touchGestureState.onRelease(primaryX, primaryY, Date.now(), false));
+      this.syncTouchTapTimeout(Date.now());
       this.clearTouchPointerState();
       return;
     }
-    if (secondaryReleased) {
-      if (this.callbacks.twoFingerRightClick() && !this.touchTwoFingerMoved
-        && this.touchTwoFingerDownAt > 0 && Date.now() - this.touchTwoFingerDownAt <= 350
-        && !this.touchTwoFingerTriggered) {
-        this.touchTwoFingerTriggered = true;
-        if (this.relativeModeActive) {
-          this.clickCurrentCursor('right');
-        } else {
-          this.applyTouchClick(primaryX, primaryY, 'right');
-        }
-        this.cancelTouchTimers();
-        this.applyTouchActions(this.touchGestureState.reset());
-        this.clearTouchPointerState();
-        return;
-      }
-      this.touchSecondaryId = -1;
-      this.touchSecondaryLastX = 0;
-      this.touchSecondaryLastY = 0;
-    }
-    if (event.type === TouchType.Cancel || event.touches.length === 0) {
+    if (event.touches.length === 0) {
       this.cancelTouchTimers();
       this.applyTouchActions(this.touchGestureState.reset());
       this.clearTouchPointerState();
     }
   }
 
-  private startLongPressTimer(): void {
-    this.cancelLongPressTimer();
+  private startHoldTimer(): void {
+    this.cancelHoldTimer();
+    const delay = this.touchGestureState.getHoldTimeoutDelay(Date.now());
+    if (delay < 0) {
+      return;
+    }
     this.touchLongPressTimer = setTimeout(() => {
       this.touchLongPressTimer = -1;
-      this.applyTouchActions(this.touchGestureState.onLongPress(Date.now()));
-    }, TOUCH_LONG_PRESS_MS) as number;
+      this.applyTouchActions(this.touchGestureState.onHold(Date.now(), this.callbacks.isPeerMobile()));
+    }, delay === 0 ? 1 : delay) as number;
   }
 
   private syncTouchTapTimeout(at: number): void {
@@ -694,9 +905,16 @@ export class RustDeskInputController {
       case 'click_right':
         this.applyTouchClick(action.x, action.y, 'right');
         return;
+      case 'double_click_left':
+        this.applyTouchDoubleClick(action.x, action.y);
+        return;
       case 'drag_start':
-        if (this.relativeModeActive) {
-          this.discardRelativeMouseMove();
+        if (this.mouseModeActive) {
+          if (this.relativeModeActive) {
+            this.flushRelativeMouseMove();
+          } else {
+            this.sendVirtualCursorAbsoluteMove();
+          }
           this.transitionMouseButton('left', true, 'touch_drag', false);
           return;
         }
@@ -711,12 +929,26 @@ export class RustDeskInputController {
   }
 
   private applyTouchClick(localX: number, localY: number, button: string): void {
-    if (this.relativeModeActive) {
-      this.discardRelativeMouseMove();
+    if (this.mouseModeActive) {
+      if (!this.relativeModeActive) {
+        this.sendVirtualCursorAbsoluteMove();
+      }
       this.clickCurrentCursor(button);
       return;
     }
     this.moveRemoteCursorAndClick(localX, localY, button);
+  }
+
+  private applyTouchDoubleClick(localX: number, localY: number): void {
+    if (this.mouseModeActive) {
+      if (!this.relativeModeActive) {
+        this.sendVirtualCursorAbsoluteMove();
+      }
+    } else if (!this.moveRemoteCursorToLocalPoint(localX, localY)) {
+      return;
+    }
+    this.sendMouseClick('left');
+    this.sendMouseClick('left');
   }
 
   private moveRemoteCursorAndClick(localX: number, localY: number, button: string): void {
@@ -750,8 +982,9 @@ export class RustDeskInputController {
     isDown: boolean,
     owner: RustDeskPressedButtonOwner,
     flushPending: boolean = true,
+    modeOverride?: RustDeskPointerMode,
   ): void {
-    const mode = this.getPointerMode();
+    const mode = modeOverride ?? this.getPointerMode();
     const transition = isDown
       ? this.pressedButtons.acquire(button, owner, mode)
       : this.pressedButtons.release(button, owner);
@@ -769,6 +1002,9 @@ export class RustDeskInputController {
   }
 
   private clickCurrentCursor(button: string): void {
+    if (this.relativeModeActive) {
+      this.flushRelativeMouseMove();
+    }
     this.transitionMouseButton(button, true, 'touch_click', false);
     this.transitionMouseButton(button, false, 'touch_click', false);
   }
@@ -796,10 +1032,20 @@ export class RustDeskInputController {
     if (flushPending) {
       this.flushRelativeMouseMove();
     }
-    this.sendVirtualCursorAbsoluteMove();
     const payload = new RustDeskMousePayload();
     payload.type = isDown ? 'down' : 'up';
     payload.buttons = button;
+    this.callbacks.sendMouse(payload);
+  }
+
+  private sendRelativeModeMarker(active: boolean): void {
+    const payload = new RustDeskMousePayload();
+    payload.relative_mouse_mode = active ? '1' : '0';
+    if (active) {
+      payload.type = 'move_relative';
+      payload.x = '0';
+      payload.y = '0';
+    }
     this.callbacks.sendMouse(payload);
   }
 
@@ -834,9 +1080,12 @@ export class RustDeskInputController {
     }
     this.relativePendingX -= moveX;
     this.relativePendingY -= moveY;
-    if (this.advanceVirtualCursorBy(moveX, moveY)) {
-      this.sendVirtualCursorAbsoluteMove();
-    }
+    this.advanceVirtualCursorBy(moveX, moveY);
+    const payload = new RustDeskMousePayload();
+    payload.type = 'move_relative';
+    payload.x = String(moveX);
+    payload.y = String(moveY);
+    this.callbacks.sendMouse(payload);
     if (Math.abs(this.relativePendingX) >= 1 || Math.abs(this.relativePendingY) >= 1) {
       this.scheduleRelativeMouseFlush();
     }
@@ -874,18 +1123,34 @@ export class RustDeskInputController {
   private clearTouchPointerState(): void {
     this.touchPrimaryId = -1;
     this.touchSecondaryId = -1;
+    this.touchThirdId = -1;
     this.touchLastX = 0;
     this.touchLastY = 0;
     this.touchSecondaryLastX = 0;
     this.touchSecondaryLastY = 0;
+    this.touchThirdLastX = 0;
+    this.touchThirdLastY = 0;
+    this.touchPrimaryReleased = false;
+    this.touchSecondaryReleased = false;
+    this.touchSequenceStartedAt = 0;
+    this.touchTwoFingerInitialCenterX = 0;
+    this.touchTwoFingerInitialCenterY = 0;
+    this.touchTwoFingerLastCenterX = 0;
+    this.touchTwoFingerLastCenterY = 0;
+    this.touchTwoFingerInitialDistance = 0;
+    this.touchTwoFingerLastDistance = 0;
+    this.touchTwoFingerMoved = false;
+    this.touchTwoFingerTransformActive = false;
+    this.touchThreeFingerLastCenterY = 0;
+    this.touchThreeFingerScrollIntegral = 0;
   }
 
   private cancelTouchTimers(): void {
-    this.cancelLongPressTimer();
+    this.cancelHoldTimer();
     this.cancelTouchTapTimeout();
   }
 
-  private cancelLongPressTimer(): void {
+  private cancelHoldTimer(): void {
     if (this.touchLongPressTimer !== -1) {
       clearTimeout(this.touchLongPressTimer);
       this.touchLongPressTimer = -1;

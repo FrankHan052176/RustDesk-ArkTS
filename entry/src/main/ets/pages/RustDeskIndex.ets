@@ -343,10 +343,10 @@ struct RustDeskIndex {
   @Local showTransferWorkspace: boolean = false;
   @Local previewSurfaceVisible: boolean = false;
   @Local previewSurfaceGeneration: number = 0;
+  @Local touchMode: boolean = true;
   @Local relativeMouseMode: boolean = false;
   @Local previewViewWidth: number = 0;
   @Local previewViewHeight: number = 0;
-  @Local previewTransformMode: boolean = false;
   @Local previewUserScale: number = 1;
   @Local previewUserOffsetX: number = 0;
   @Local previewUserOffsetY: number = 0;
@@ -383,10 +383,6 @@ struct RustDeskIndex {
   private previewSurfaceSetupInFlight: boolean = false;
   private previewSurfaceSetupGeneration: number = -1;
   private pendingPreviewPeerInfo?: NativeEvent;
-  private previewGestureStartScale: number = 1;
-  private previewGestureStartOffsetX: number = 0;
-  private previewGestureStartOffsetY: number = 0;
-  private previewGestureStartRotation: number = 0;
   private androidNavigationPositionInitialized: boolean = false;
   private androidNavigationDragStartX: number = 0;
   private androidNavigationDragStartY: number = 0;
@@ -701,10 +697,11 @@ struct RustDeskIndex {
     if (!this.inputController) {
       this.inputController = new RustDeskInputController({
         isSessionActive: () => this.isRemoteControlSessionActive(),
-        isRelativeMode: () => this.relativeMouseMode,
+        isMouseMode: () => !this.touchMode,
         isPeerMacOS: () => this.isPeerMacOS(),
         isPeerAndroid: () => this.isPeerAndroid(),
-        twoFingerRightClick: () => this.sessionDefaults.twoFingerRightClick,
+        isPeerMobile: () => this.isPeerMobile(),
+        gesturesEnabled: () => this.activeSessionDefaults.gesturesEnabled,
         getCoordinateSpace: () => this.getCoordinateSpace(),
         sendMouse: (payload: RustDeskMousePayload) => this.sendMousePayload(payload),
         sendFlutterKey: (payload: RustDeskFlutterKeyPayload) => this.sendFlutterKeyPayloadObject(payload),
@@ -713,6 +710,13 @@ struct RustDeskIndex {
         remoteCursorDebugText: () => this.remoteCursorDebugText(),
         overlayCursorDebugText: (label: string) => this.overlayCursorDebugText(label),
         onVirtualCursorMoved: (remoteX: number, remoteY: number) => this.updateOverlayFromVirtualCursor(remoteX, remoteY),
+        onCanvasTransform: (
+          scaleFactor: number,
+          panX: number,
+          panY: number,
+          focalX: number,
+          focalY: number,
+        ) => this.applyPreviewTouchTransform(scaleFactor, panX, panY, focalX, focalY),
       });
     }
     return this.inputController;
@@ -725,6 +729,16 @@ struct RustDeskIndex {
 
   private isPeerAndroid(): boolean {
     return this.peerPlatform.toLowerCase().replace(/[\s_-]/g, '') === 'android';
+  }
+
+  private isPeerMobile(): boolean {
+    const normalized = this.peerPlatform.toLowerCase().replace(/[\s_-]/g, '');
+    return normalized === 'android'
+      || normalized === 'ios'
+      || normalized === 'iphone'
+      || normalized === 'ipad'
+      || normalized === 'harmonyos'
+      || normalized === 'ohos';
   }
 
   private isPeerVersionAtLeast(major: number, minor: number, patch: number): boolean {
@@ -745,6 +759,11 @@ struct RustDeskIndex {
       return normalizedMinor > minor;
     }
     return normalizedPatch >= patch;
+  }
+
+  private relativeMouseModeSupported(): boolean {
+    const platform = this.peerPlatform.toLowerCase().replace(/[\s_-]/g, '');
+    return platform !== 'linux' && this.isPeerVersionAtLeast(1, 4, 5);
   }
 
   private androidNavigationAvailable(): boolean {
@@ -966,8 +985,8 @@ struct RustDeskIndex {
 
   private copySessionDefaults(source: SessionDefaults): SessionDefaults {
     const defaults = new SessionDefaults();
+    defaults.touchMode = source.touchMode;
     defaults.relativeMouseMode = source.relativeMouseMode;
-    defaults.twoFingerRightClick = source.twoFingerRightClick;
     defaults.audioEnabled = source.audioEnabled;
     defaults.clipboardEnabled = source.clipboardEnabled;
     defaults.qualityPreset = source.qualityPreset;
@@ -1136,6 +1155,7 @@ struct RustDeskIndex {
   }
 
   private applySessionDefaultsToIdleState(capabilities: DecoderCapability[]): void {
+    this.touchMode = this.sessionDefaults.touchMode;
     this.relativeMouseMode = this.sessionDefaults.relativeMouseMode;
     this.clipboardSyncEnabled = this.sessionDefaults.clipboardEnabled;
     this.selectedQualityPreset = this.defaultQualityPreset();
@@ -2953,7 +2973,6 @@ struct RustDeskIndex {
     this.frameHeight = 0;
     this.previewViewWidth = 0;
     this.previewViewHeight = 0;
-    this.previewTransformMode = false;
     this.previewUserScale = 1;
     this.previewUserOffsetX = 0;
     this.previewUserOffsetY = 0;
@@ -2967,10 +2986,6 @@ struct RustDeskIndex {
     this.softKeyboardDragStartX = 0;
     this.softKeyboardDragStartY = 12;
     this.clearSoftKeyboardKeyState();
-    this.previewGestureStartScale = 1;
-    this.previewGestureStartOffsetX = 0;
-    this.previewGestureStartOffsetY = 0;
-    this.previewGestureStartRotation = 0;
     this.androidNavigationDragStartX = 0;
     this.androidNavigationDragStartY = 0;
     this.remoteKeyboardPermissionAllowed = true;
@@ -3015,6 +3030,7 @@ struct RustDeskIndex {
     this.renderStallFirstDetectedAt = 0;
     this.lastRenderRecoveryAt = 0;
     this.renderStallRecoveryAttempts = 0;
+    this.touchMode = this.activeSessionDefaults.touchMode;
     this.relativeMouseMode = this.activeSessionDefaults.relativeMouseMode;
     this.resetRemoteCursorVisualState();
     this.cursorModel.reset();
@@ -4738,15 +4754,21 @@ struct RustDeskIndex {
     this.refreshChatState();
   }
 
-  private syncRelativeMouseMode(active: boolean): void {
-    this.getInputController().setRelativeMode(active);
-    if (active) {
-      this.relativeModeActivatedAt = Date.now();
+  private syncTouchMode(active: boolean): void {
+    this.getInputController().setMouseMode(!active);
+    if (!active || this.relativeMouseMode) {
       this.ensureRelativeCursorOverlay();
       return;
     }
-    this.relativeModeActivatedAt = 0;
     this.remoteCursorVisible = false;
+  }
+
+  private syncRelativeMouseMode(active: boolean): void {
+    this.getInputController().setRelativeMode(active);
+    this.relativeModeActivatedAt = active ? Date.now() : 0;
+    if (active || !this.touchMode) {
+      this.ensureRelativeCursorOverlay();
+    }
   }
 
   private resolveSessionOrientationMode(active: boolean): RemoteSessionOrientationMode {
@@ -5236,18 +5258,32 @@ struct RustDeskIndex {
     }
   }
 
+  private async toggleTouchMode(): Promise<void> {
+    if (!this.isRemoteControlSessionActive()) {
+      return;
+    }
+    const nextMode = !this.touchMode;
+    this.touchMode = nextMode;
+    this.syncTouchMode(nextMode);
+    this.sessionMessage = `已切换到${this.getPointerModeName(nextMode)}`;
+  }
+
   private async toggleRelativeMouseMode(): Promise<void> {
     if (!this.isRemoteControlSessionActive()) {
+      return;
+    }
+    if (!this.relativeMouseMode && !this.relativeMouseModeSupported()) {
+      this.sessionMessage = '当前远端不支持相对指针模式';
       return;
     }
     const nextMode = !this.relativeMouseMode;
     this.relativeMouseMode = nextMode;
     this.syncRelativeMouseMode(nextMode);
-    this.sessionMessage = `已切换到${this.getPointerModeName(nextMode)}`;
+    this.sessionMessage = nextMode ? '已启用相对鼠标模式' : '已切换到普通鼠标模式';
   }
 
-  private getPointerModeName(relativeMode: boolean = this.relativeMouseMode): string {
-    return relativeMode ? '触摸板' : '模拟鼠标';
+  private getPointerModeName(touchMode: boolean = this.touchMode): string {
+    return touchMode ? '触控模式' : '鼠标模式';
   }
 
   private clampPreviewScale(value: number): number {
@@ -5265,6 +5301,35 @@ struct RustDeskIndex {
   private clampPreviewOffsetY(value: number): number {
     const limit = Math.max(this.previewViewHeight, 1);
     return Math.min(Math.max(value, -limit), limit);
+  }
+
+  private applyPreviewTouchTransform(
+    scaleFactor: number,
+    panX: number,
+    panY: number,
+    focalX: number,
+    focalY: number,
+  ): void {
+    if (!this.activeSessionDefaults.gesturesEnabled || !Number.isFinite(scaleFactor) || scaleFactor <= 0) {
+      return;
+    }
+    const previousScale = this.previewUserScale;
+    const nextScale = this.clampPreviewScale(previousScale * scaleFactor);
+    const appliedScaleFactor = nextScale / Math.max(previousScale, 0.001);
+    const centerX = this.previewViewWidth / 2;
+    const centerY = this.previewViewHeight / 2;
+    this.previewUserScale = nextScale;
+    this.previewUserOffsetX = this.clampPreviewOffsetX(
+      this.previewUserOffsetX * appliedScaleFactor
+        + (focalX - centerX) * (1 - appliedScaleFactor)
+        + panX,
+    );
+    this.previewUserOffsetY = this.clampPreviewOffsetY(
+      this.previewUserOffsetY * appliedScaleFactor
+        + (focalY - centerY) * (1 - appliedScaleFactor)
+        + panY,
+    );
+    this.syncPreviewViewTransform();
   }
 
   private normalizePreviewUserRotation(value: number): number {
@@ -5307,17 +5372,6 @@ struct RustDeskIndex {
   private sessionOverlayContentHeight(): number {
     const availableHeight = this.previewViewHeight - 160;
     return Math.max(160, Math.min(560, availableHeight));
-  }
-
-  private setPreviewTransformMode(active: boolean): void {
-    if (this.previewTransformMode === active) {
-      return;
-    }
-    this.inputController?.reset();
-    this.previewTransformMode = active;
-    if (!active) {
-      setTimeout(() => this.requestPreviewInputFocus(), 80);
-    }
   }
 
   private resetPreviewViewTransform(animated: boolean = true): void {
@@ -5403,7 +5457,9 @@ struct RustDeskIndex {
   }
 
   private shouldDrawRemoteCursorOverlay(): boolean {
-    return this.isRemoteControlSessionActive() && this.relativeMouseMode && this.remoteCursorVisible;
+    return this.isRemoteControlSessionActive()
+      && (!this.touchMode || this.relativeMouseMode)
+      && this.remoteCursorVisible;
   }
 
   private resetRemoteCursorVisualState(): void {
@@ -5586,7 +5642,7 @@ struct RustDeskIndex {
       || this.remoteCursorEventLogCounter % REMOTE_CURSOR_LOG_SAMPLE_EVERY === 0) {
       this.logRelativeDebug(
         'cursor_position',
-        `raw=(${remoteX},${remoteY}) seeded=${hadVirtualCursor ? 'no' : 'yes'} mode=${this.relativeMouseMode ? 'relative' : 'absolute'}`,
+        `raw=(${remoteX},${remoteY}) seeded=${hadVirtualCursor ? 'no' : 'yes'} mode=${this.touchMode ? 'touch' : 'mouse'} relative=${this.relativeMouseMode}`,
       );
     }
   }
@@ -6318,6 +6374,14 @@ struct RustDeskIndex {
       }
       return;
     }
+    if (event.name === 'exit_relative_mouse_mode') {
+      if (this.relativeMouseMode) {
+        this.relativeMouseMode = false;
+        this.syncRelativeMouseMode(false);
+        this.sessionMessage = '远端已退出相对指针模式';
+      }
+      return;
+    }
     if (event.name === 'connection_ready') {
       this.connectionSummary = `secure=${String(event.secure)}, direct=${String(event.direct)}, stream=${String(event.stream_type)}`;
       if (this.connectionUiPhase === 'connecting' || this.connectionUiPhase === 'authenticating') {
@@ -6351,6 +6415,11 @@ struct RustDeskIndex {
       this.applyPerformanceTuning();
       if (this.isRemoteControlSessionActive()) {
         this.remoteInteractionReady = true;
+        if (this.relativeMouseMode && !this.relativeMouseModeSupported()) {
+          this.relativeMouseMode = false;
+          this.sessionMessage = '当前远端不支持相对指针模式，已使用普通指针';
+        }
+        this.syncTouchMode(this.touchMode);
         this.syncRelativeMouseMode(this.relativeMouseMode);
         this.syncClipboardController();
         this.syncInputInterceptor();
@@ -6768,50 +6837,6 @@ struct RustDeskIndex {
   }
 
   @Builder
-  private previewTransformGestureLayer() {
-    Column() {
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor($r('app.color.transparent'))
-    .hitTestBehavior(HitTestMode.Block)
-    .gesture(
-      GestureGroup(
-        GestureMode.Parallel,
-        PanGesture({ fingers: 1, direction: PanDirection.All, distance: 1 })
-          .onActionStart((_event: GestureEvent) => {
-            this.previewGestureStartOffsetX = this.previewUserOffsetX;
-            this.previewGestureStartOffsetY = this.previewUserOffsetY;
-          })
-          .onActionUpdate((event: GestureEvent) => {
-            this.previewUserOffsetX = this.clampPreviewOffsetX(this.previewGestureStartOffsetX + event.offsetX);
-            this.previewUserOffsetY = this.clampPreviewOffsetY(this.previewGestureStartOffsetY + event.offsetY);
-            this.syncPreviewViewTransform();
-          }),
-        PinchGesture({ fingers: 2, distance: 1 })
-          .onActionStart((_event: GestureEvent) => {
-            this.previewGestureStartScale = this.previewUserScale;
-          })
-          .onActionUpdate((event: GestureEvent) => {
-            this.previewUserScale = this.clampPreviewScale(this.previewGestureStartScale * event.scale);
-            this.syncPreviewViewTransform();
-          }),
-        RotationGesture({ fingers: 2, angle: 1 })
-          .onActionStart((_event: GestureEvent) => {
-            this.previewGestureStartRotation = this.previewUserRotation;
-          })
-          .onActionUpdate((event: GestureEvent) => {
-            this.previewUserRotation = this.normalizePreviewUserRotation(
-              this.previewGestureStartRotation + event.angle,
-            );
-            this.syncPreviewViewTransform();
-          }),
-      ),
-    )
-    .zIndex(15);
-  }
-
-  @Builder
   private androidNavigationOverlay() {
     if (this.androidNavigationAvailable() && this.androidNavigationVisible) {
       Stack() {
@@ -6991,10 +7016,6 @@ struct RustDeskIndex {
             .zIndex(11);
         }
 
-        if (this.previewTransformMode) {
-          this.previewTransformGestureLayer();
-        }
-
         if (this.shouldDrawRemoteCursorOverlay() && this.remoteCursorPixelMap) {
           Image(this.remoteCursorPixelMap)
             .width(this.remoteCursorBitmapWidth * this.getRemoteCursorVisualScale())
@@ -7069,7 +7090,9 @@ struct RustDeskIndex {
       Row() {
         Column({ space: 10 }) {
           SessionToolbar({
+            touchMode: this.touchMode,
             relativeMouseMode: this.relativeMouseMode,
+            relativeMouseModeSupported: this.relativeMouseModeSupported(),
             metrics: this.sessionToolbarMetrics(),
             activeOverlayPanel: this.activeOverlayPanel,
             chatTransitionId: SESSION_OVERLAY_TRANSITION_CHAT,
@@ -7088,14 +7111,13 @@ struct RustDeskIndex {
             audioMuted: this.remoteAudioState.muted,
             wideLayout: this.activeSessionKind === 'remote_control' && this.previewViewWidth >= 700,
             transformSummary: this.previewTransformSummary(),
-            transformMode: this.previewTransformMode,
             canResetTransform: this.hasPreviewViewTransform(),
             panelContentHeight: this.sessionOverlayContentHeight(),
             windowControlsAvailable: this.sessionWindowControlsAvailable(),
             windowFullscreen: this.sessionWindowFullscreen,
             windowControlBusy: this.sessionWindowControlBusy,
-            onTogglePointerMode: () => this.toggleRelativeMouseMode(),
-            onToggleTransform: () => this.setPreviewTransformMode(!this.previewTransformMode),
+            onTogglePointerMode: () => this.toggleTouchMode(),
+            onToggleRelativeMouseMode: () => this.toggleRelativeMouseMode(),
             onResetTransform: () => this.resetPreviewViewTransform(),
             onOpenChat: () => this.openChatDrawer(),
             onAudioChange: (enabled: boolean) => this.setRemoteAudioEnabled(enabled),
@@ -7348,9 +7370,17 @@ struct RustDeskIndex {
         this.FoldControlButton(
           this.getPointerModeName(),
           'fold-pointer',
-          this.relativeMouseMode,
+          this.touchMode,
           false,
           true,
+          () => this.toggleTouchMode(),
+        )
+        this.FoldControlButton(
+          this.relativeMouseMode ? '相对指针' : '普通指针',
+          'fold-relative-pointer',
+          this.relativeMouseMode,
+          false,
+          this.relativeMouseModeSupported(),
           () => this.toggleRelativeMouseMode(),
         )
         this.FoldControlButton(

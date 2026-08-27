@@ -210,8 +210,8 @@ export struct SettingsTab {
 
   private copySessionDefaults(source: SessionDefaults): SessionDefaults {
     const defaults = new SessionDefaults();
+    defaults.touchMode = source.touchMode;
     defaults.relativeMouseMode = source.relativeMouseMode;
-    defaults.twoFingerRightClick = source.twoFingerRightClick;
     defaults.audioEnabled = source.audioEnabled;
     defaults.clipboardEnabled = source.clipboardEnabled;
     defaults.qualityPreset = source.qualityPreset;

@@ -322,11 +322,11 @@
     },
     {
       "name": "settings_pointer_mouse",
-      "value": "模拟鼠标"
+      "value": "鼠标模式"
     },
     {
       "name": "settings_pointer_touchpad",
-      "value": "触摸板"
+      "value": "触控模式"
     },
     {
       "name": "settings_remote_audio",

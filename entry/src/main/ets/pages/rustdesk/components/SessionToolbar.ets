@@ -7,12 +7,15 @@ const SYSTEM_IME_TRANSITION_ID = 'rustdesk-session-system-ime';
 interface ToolbarActionOptions {
   label: string;
   active: boolean;
+  enabled?: boolean;
   transitionId: string;
   onClick: () => void;
 }
 
 export interface SessionToolbarProps {
+  touchMode: boolean;
   relativeMouseMode: boolean;
+  relativeMouseModeSupported: boolean;
   metrics: SessionToolbarMetrics;
   activeOverlayPanel: SessionOverlayPanel;
   chatTransitionId: string;
@@ -31,14 +34,13 @@ export interface SessionToolbarProps {
   audioMuted: boolean;
   wideLayout: boolean;
   transformSummary: string;
-  transformMode: boolean;
   canResetTransform: boolean;
   panelContentHeight: number;
   windowControlsAvailable: boolean;
   windowFullscreen: boolean;
   windowControlBusy: boolean;
   onTogglePointerMode: () => void;
-  onToggleTransform: () => void;
+  onToggleRelativeMouseMode: () => void;
   onResetTransform: () => void;
   onOpenChat: () => void;
   onOpenDisplay: () => void;
@@ -56,8 +58,11 @@ export interface SessionToolbarProps {
 
 @ComponentV2
 export struct SessionToolbar {
+  @Param touchMode: boolean = true;
+  @Local displayedTouchMode: boolean = true;
   @Param relativeMouseMode: boolean = false;
   @Local displayedRelativeMouseMode: boolean = false;
+  @Param relativeMouseModeSupported: boolean = false;
   @Param metrics: SessionToolbarMetrics = {
     fps: '--',
     frames: '--',
@@ -83,15 +88,13 @@ export struct SessionToolbar {
   @Param audioMuted: boolean = false;
   @Param wideLayout: boolean = false;
   @Param transformSummary: string = '100%';
-  @Param transformMode: boolean = false;
-  @Local displayedTransformMode: boolean = false;
   @Param canResetTransform: boolean = false;
   @Param panelContentHeight: number = 360;
   @Param windowControlsAvailable: boolean = false;
   @Param windowFullscreen: boolean = false;
   @Param windowControlBusy: boolean = false;
   @Event onTogglePointerMode: () => void = () => {};
-  @Event onToggleTransform: () => void = () => {};
+  @Event onToggleRelativeMouseMode: () => void = () => {};
   @Event onResetTransform: () => void = () => {};
   @Event onOpenChat: () => void = () => {};
   @Event onOpenDisplay: () => void = () => {};
@@ -108,19 +111,19 @@ export struct SessionToolbar {
   @BuilderParam content: () => void = this.Empty;
 
   aboutToAppear(): void {
+    this.displayedTouchMode = this.touchMode;
     this.displayedRelativeMouseMode = this.relativeMouseMode;
-    this.displayedTransformMode = this.transformMode;
     this.displayedAndroidNavigationVisible = this.androidNavigationVisible;
+  }
+
+  @Monitor('touchMode')
+  private onTouchModeChanged(_monitor: IMonitor): void {
+    this.displayedTouchMode = this.touchMode;
   }
 
   @Monitor('relativeMouseMode')
   private onRelativeMouseModeChanged(_monitor: IMonitor): void {
     this.displayedRelativeMouseMode = this.relativeMouseMode;
-  }
-
-  @Monitor('transformMode')
-  private onTransformModeChanged(_monitor: IMonitor): void {
-    this.displayedTransformMode = this.transformMode;
   }
 
   @Monitor('androidNavigationVisible')
@@ -141,7 +144,9 @@ export struct SessionToolbar {
       Text(options.label)
         .fontSize($r('app.float.font_label'))
         .fontWeight(FontWeight.Medium)
-        .fontColor(options.active ? $r('app.color.white') : $r('app.color.neu_text_primary'))
+        .fontColor(options.enabled === false
+          ? $r('app.color.neu_text_disabled')
+          : options.active ? $r('app.color.white') : $r('app.color.neu_text_primary'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis });
     }
@@ -160,6 +165,7 @@ export struct SessionToolbar {
     .borderRadius($r('app.float.radius_14'))
     .shadow(ShadowStyle.OUTER_DEFAULT_SM)
     .hoverEffect(HoverEffect.None)
+    .enabled(options.enabled ?? true)
     .accessibilityText(options.label)
     .accessibilitySelected(options.active)
     .geometryTransition(options.transitionId)
@@ -172,10 +178,10 @@ export struct SessionToolbar {
   @Builder
   private PointerModeAction() {
     Button({ type: ButtonType.Normal, stateEffect: true }) {
-      Text(this.displayedRelativeMouseMode ? '触摸板' : '模拟鼠标')
+      Text(this.displayedTouchMode ? '触控模式' : '鼠标模式')
         .fontSize($r('app.float.font_label'))
         .fontWeight(FontWeight.Medium)
-        .fontColor(this.displayedRelativeMouseMode
+        .fontColor(this.displayedTouchMode
           ? $r('app.color.white')
           : $r('app.color.neu_text_primary'))
         .maxLines(1)
@@ -184,7 +190,7 @@ export struct SessionToolbar {
     .layoutWeight(1)
     .height(this.actionHeight())
     .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_8') })
-    .backgroundColor(this.displayedRelativeMouseMode
+    .backgroundColor(this.displayedTouchMode
       ? $r('app.color.brand_primary')
       : $r('app.color.mica_control'))
     .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
@@ -193,20 +199,36 @@ export struct SessionToolbar {
     })
     .border({
       width: 1,
-      color: this.displayedRelativeMouseMode
+      color: this.displayedTouchMode
         ? $r('app.color.brand_primary')
         : $r('app.color.mica_border'),
     })
     .borderRadius($r('app.float.radius_14'))
     .shadow(ShadowStyle.OUTER_DEFAULT_SM)
     .hoverEffect(HoverEffect.None)
-    .accessibilityText(this.displayedRelativeMouseMode ? '触摸板' : '模拟鼠标')
-    .accessibilitySelected(this.displayedRelativeMouseMode)
+    .accessibilityText(this.displayedTouchMode ? '触控模式' : '鼠标模式')
+    .accessibilitySelected(this.displayedTouchMode)
     .transition(TransitionEffect.OPACITY)
     .onClick((): void => {
-      this.displayedRelativeMouseMode = !this.displayedRelativeMouseMode;
+      this.displayedTouchMode = !this.displayedTouchMode;
       this.onTogglePointerMode();
     });
+  }
+
+  @Builder
+  private RelativeMouseModeAction() {
+    this.ToolbarAction({
+      label: this.relativeMouseModeSupported
+        ? (this.displayedRelativeMouseMode ? '相对指针' : '普通指针')
+        : '相对指针不可用',
+      active: this.displayedRelativeMouseMode,
+      enabled: this.relativeMouseModeSupported,
+      transitionId: 'rustdesk-session-relative-mouse',
+      onClick: () => {
+        this.displayedRelativeMouseMode = !this.displayedRelativeMouseMode;
+        this.onToggleRelativeMouseMode();
+      },
+    })
   }
 
   @Builder
@@ -404,58 +426,17 @@ export struct SessionToolbar {
   @Builder
   private TransformControls() {
     Row({ space: $r('app.float.space_6') }) {
-      if (this.wideLayout) {
-        Text(this.transformSummary)
-          .fontSize($r('app.float.font_caption'))
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.neu_text_secondary'))
-          .maxLines(1);
-      }
-
-      this.TransformModeAction()
+      Text(this.transformSummary)
+        .fontSize($r('app.float.font_caption'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.neu_text_secondary'))
+        .maxLines(1);
 
       if (this.canResetTransform) {
         this.CompactAction('reset-transform', '还原', false, false, true, () => this.onResetTransform())
       }
     }
     .alignItems(VerticalAlign.Center);
-  }
-
-  @Builder
-  private TransformModeAction() {
-    Button({ type: ButtonType.Normal, stateEffect: true }) {
-      Text(this.displayedTransformMode ? '完成' : '调整画面')
-        .fontSize($r('app.float.font_caption'))
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.displayedTransformMode
-          ? $r('app.color.white')
-          : $r('app.color.neu_text_primary'));
-    }
-    .width(92)
-    .height($r('app.float.control_compact'))
-    .padding({ left: $r('app.float.space_6'), right: $r('app.float.space_6') })
-    .backgroundColor(this.displayedTransformMode
-      ? $r('app.color.brand_primary')
-      : $r('app.color.mica_control'))
-    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.56,
-    })
-    .border({
-      width: 1,
-      color: this.displayedTransformMode
-        ? $r('app.color.brand_primary')
-        : $r('app.color.mica_border'),
-    })
-    .borderRadius($r('app.float.radius_10'))
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-    .hoverEffect(HoverEffect.None)
-    .accessibilityText(this.displayedTransformMode ? '完成画面调整' : '调整画面')
-    .accessibilitySelected(this.displayedTransformMode)
-    .onClick((): void => {
-      this.displayedTransformMode = !this.displayedTransformMode;
-      this.onToggleTransform();
-    });
   }
 
   @Builder
@@ -538,6 +519,7 @@ export struct SessionToolbar {
       Column({ space: $r('app.float.space_8') }) {
         Row({ space: $r('app.float.space_8') }) {
           this.PointerModeAction()
+          this.RelativeMouseModeAction()
           if (this.systemImeAvailable) {
             this.ToolbarAction({
               label: '输入法',
@@ -590,6 +572,7 @@ export struct SessionToolbar {
       Column({ space: $r('app.float.space_8') }) {
         Row({ space: $r('app.float.space_8') }) {
           this.PointerModeAction()
+          this.RelativeMouseModeAction()
           if (this.systemImeAvailable) {
             this.ToolbarAction({
               label: '输入法',

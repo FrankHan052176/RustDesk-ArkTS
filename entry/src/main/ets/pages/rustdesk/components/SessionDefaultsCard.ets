@@ -47,8 +47,8 @@ export struct SessionDefaultsCard {
 
   private copyDefaults(): SessionDefaults {
     const next = new SessionDefaults();
+    next.touchMode = this.defaults.touchMode;
     next.relativeMouseMode = this.defaults.relativeMouseMode;
-    next.twoFingerRightClick = this.defaults.twoFingerRightClick;
     next.audioEnabled = this.defaults.audioEnabled;
     next.clipboardEnabled = this.defaults.clipboardEnabled;
     next.qualityPreset = this.defaults.qualityPreset;
@@ -65,15 +65,15 @@ export struct SessionDefaultsCard {
     this.onDefaultsChange(next);
   }
 
-  private updatePointerMode(relativeMouseMode: boolean): void {
+  private updatePointerMode(touchMode: boolean): void {
     const next = this.copyDefaults();
-    next.relativeMouseMode = relativeMouseMode;
+    next.touchMode = touchMode;
     this.emit(next);
   }
 
-  private updateRightClickMode(twoFinger: boolean): void {
+  private updateRelativeMouseMode(relativeMouseMode: boolean): void {
     const next = this.copyDefaults();
-    next.twoFingerRightClick = twoFinger;
+    next.relativeMouseMode = relativeMouseMode;
     this.emit(next);
   }
 
@@ -262,15 +262,15 @@ export struct SessionDefaultsCard {
   @Builder
   private GesturesToggleRow() {
     LuminousSwitch({
-      label: '变换手势',
-      description: '',
+      label: '多指画面手势',
+      description: '双指移动与缩放画面，三指纵向滑动模拟滚轮',
       isOn: this.displayedGesturesEnabled,
       rowWidth: this.toggleRowWidth(),
       motionEnabled: true,
       onChange: (enabled: boolean): void => this.updateGestures(enabled),
     })
     .width(this.toggleRowWidth())
-    .height(52)
+    .height(64)
     .clip(false);
   }
 
@@ -316,38 +316,26 @@ export struct SessionDefaultsCard {
       LuminousSegmentedControl({
         items: [
           new LuminousSelectionItem('mouse', $r('app.string.settings_pointer_mouse')),
-          new LuminousSelectionItem('touchpad', $r('app.string.settings_pointer_touchpad')),
+          new LuminousSelectionItem('touch', $r('app.string.settings_pointer_touchpad')),
         ],
-        selectedIndex: this.defaults.relativeMouseMode ? 1 : 0,
+        selectedIndex: this.defaults.touchMode ? 1 : 0,
         controlWidth: this.selectorWidth(520),
         controlHeight: 50,
         motionEnabled: true,
         onChange: (index: number) => this.updatePointerMode(index === 1),
       })
         .margin({ top: -10 })
-    }
-    .width('100%');
-  }
-
-  @Builder
-  private TouchpadRightClickSelector() {
-    Column({ space: 2 }) {
-      Text('触摸板右键手势')
-        .width('100%')
-        .fontSize($r('app.float.font_label'))
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.neu_text_secondary'));
 
       LuminousSegmentedControl({
         items: [
-          new LuminousSelectionItem('double_tap', '双击右键'),
-          new LuminousSelectionItem('two_finger', '双指右键'),
+          new LuminousSelectionItem('absolute', '普通指针'),
+          new LuminousSelectionItem('relative', '相对指针'),
         ],
-        selectedIndex: this.defaults.twoFingerRightClick ? 1 : 0,
+        selectedIndex: this.defaults.relativeMouseMode ? 1 : 0,
         controlWidth: this.selectorWidth(520),
         controlHeight: 50,
         motionEnabled: true,
-        onChange: (index: number) => this.updateRightClickMode(index === 1),
+        onChange: (index: number) => this.updateRelativeMouseMode(index === 1),
       })
         .margin({ top: -10 })
     }
@@ -552,7 +540,6 @@ export struct SessionDefaultsCard {
         Row({ space: $r('app.float.space_20') }) {
           Column() {
             this.PointerModeSelector()
-            this.TouchpadRightClickSelector()
           }
           .layoutWeight(1);
 
@@ -566,7 +553,6 @@ export struct SessionDefaultsCard {
       } else {
         Column({ space: 2 }) {
           this.PointerModeSelector()
-          this.TouchpadRightClickSelector()
           this.QualitySelector()
         }
         .width('100%');

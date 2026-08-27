@@ -1,4 +1,11 @@
-export type RustDeskTouchActionType = 'click_left' | 'click_right' | 'drag_start' | 'drag_end';
+export type RustDeskTouchInteractionMode = 'touch' | 'mouse';
+
+export type RustDeskTouchActionType =
+  'click_left'
+  | 'double_click_left'
+  | 'click_right'
+  | 'drag_start'
+  | 'drag_end';
 
 export interface RustDeskTouchAction {
   type: RustDeskTouchActionType;
@@ -10,9 +17,20 @@ export const TOUCH_TAP_MAX_MS: number = 220;
 export const TOUCH_TAP_MAX_DISTANCE: number = 18;
 export const TOUCH_LONG_PRESS_MS: number = 500;
 export const TOUCH_LONG_PRESS_MAX_DISTANCE: number = 5;
-export const TOUCH_DOUBLE_TAP_MAX_MS: number = 260;
+export const TOUCH_DOUBLE_TAP_MAX_MS: number = 300;
+export const TOUCH_TWO_FINGER_TAP_MAX_MS: number = 350;
+export const TOUCH_TRANSFORM_PAN_SLOP: number = 8;
+export const TOUCH_TRANSFORM_SCALE_SLOP: number = 0.02;
+export const TOUCH_THREE_FINGER_SCROLL_DIVISOR: number = 4;
 
+/**
+ * Flutter-mobile compatible one-finger gesture state.
+ *
+ * Multi-finger canvas and wheel gestures are coordinated by RustDeskInputController,
+ * while this class owns tap/double-tap/long-press and drag disambiguation.
+ */
 export class RustDeskTouchGestureState {
+  private mode: RustDeskTouchInteractionMode = 'touch';
   private downActive: boolean = false;
   private downX: number = 0;
   private downY: number = 0;
@@ -20,19 +38,28 @@ export class RustDeskTouchGestureState {
   private lastY: number = 0;
   private downAt: number = 0;
   private movedBeyondTapDistance: boolean = false;
-  private longPressCancelledByMovement: boolean = false;
+  private holdCancelledByMovement: boolean = false;
   private dragActive: boolean = false;
+  private holdConsumed: boolean = false;
+  private secondTapDown: boolean = false;
+
   private pendingTap: boolean = false;
   private pendingTapX: number = 0;
   private pendingTapY: number = 0;
   private pendingTapAt: number = 0;
-  private twoFingerRightClickEnabled: boolean = false;
 
-  setTwoFingerRightClick(enabled: boolean): void {
-    this.twoFingerRightClickEnabled = enabled;
-  }
-
-  onDown(x: number, y: number, at: number): Array<RustDeskTouchAction> {
+  onDown(
+    x: number,
+    y: number,
+    at: number,
+    mode: RustDeskTouchInteractionMode,
+  ): Array<RustDeskTouchAction> {
+    const actions: Array<RustDeskTouchAction> = [];
+    if (this.pendingTap && at - this.pendingTapAt > TOUCH_DOUBLE_TAP_MAX_MS) {
+      actions.push({ type: 'click_left', x: this.pendingTapX, y: this.pendingTapY });
+      this.clearPendingTap();
+    }
+    this.mode = mode;
     this.downActive = true;
     this.downX = x;
     this.downY = y;
@@ -40,49 +67,77 @@ export class RustDeskTouchGestureState {
     this.lastY = y;
     this.downAt = at;
     this.movedBeyondTapDistance = false;
-    this.longPressCancelledByMovement = false;
+    this.holdCancelledByMovement = false;
     this.dragActive = false;
-    return [];
+    this.holdConsumed = false;
+    this.secondTapDown = this.pendingTap
+      && at - this.pendingTapAt <= TOUCH_DOUBLE_TAP_MAX_MS
+      && !this.distanceExceedsTapRange(x, y, this.pendingTapX, this.pendingTapY);
+    if (this.pendingTap && !this.secondTapDown) {
+      actions.push({ type: 'click_left', x: this.pendingTapX, y: this.pendingTapY });
+      this.clearPendingTap();
+    }
+    return actions;
   }
 
-  onMove(x: number, y: number, allowPanSwipe: boolean = false): Array<RustDeskTouchAction> {
+  onMove(x: number, y: number, allowDirectTouchDrag: boolean = true): Array<RustDeskTouchAction> {
     if (!this.downActive) {
       return [];
     }
     this.lastX = x;
     this.lastY = y;
     const actions: Array<RustDeskTouchAction> = [];
-    if (!this.dragActive) {
-      if (this.distanceReachesLongPressRange(x, y, this.downX, this.downY)) {
-        this.longPressCancelledByMovement = true;
-      }
-      if (this.distanceExceedsTapRange(x, y, this.downX, this.downY)) {
-        this.movedBeyondTapDistance = true;
-        if (allowPanSwipe) {
-          // Flutter touch scheme for Android in simulated mouse mode: one-finger swipe triggers drag_start at downX, downY
-          if (this.pendingTap) {
-            actions.push({ type: 'click_left', x: this.pendingTapX, y: this.pendingTapY });
-            this.clearPendingTap();
-          }
+    if (!this.dragActive && this.distanceReachesLongPressRange(x, y, this.downX, this.downY)) {
+      this.holdCancelledByMovement = true;
+    }
+    if (!this.movedBeyondTapDistance && this.distanceExceedsTapRange(x, y, this.downX, this.downY)) {
+      this.movedBeyondTapDistance = true;
+      if (this.mode === 'touch') {
+        if (this.pendingTap) {
+          actions.push({ type: 'click_left', x: this.pendingTapX, y: this.pendingTapY });
+          this.clearPendingTap();
+        }
+        if (allowDirectTouchDrag) {
           this.dragActive = true;
           actions.push({ type: 'drag_start', x: this.downX, y: this.downY });
         }
+      } else if (this.secondTapDown) {
+        this.clearPendingTap();
+        this.dragActive = true;
+        actions.push({ type: 'drag_start', x: this.downX, y: this.downY });
       }
     }
     return actions;
   }
 
-  onLongPress(at: number): Array<RustDeskTouchAction> {
-    if (!this.downActive || this.dragActive || this.longPressCancelledByMovement) {
+  /**
+   * Resolve either Flutter's double-tap-hold drag or its ordinary long press.
+   */
+  onHold(at: number, peerMobile: boolean): Array<RustDeskTouchAction> {
+    if (!this.downActive || this.dragActive || this.holdConsumed) {
       return [];
     }
-    if (at - this.downAt < TOUCH_LONG_PRESS_MS) {
+    if (this.mode === 'mouse' && this.secondTapDown) {
+      if (at - this.downAt < TOUCH_DOUBLE_TAP_MAX_MS) {
+        return [];
+      }
+      this.clearPendingTap();
+      this.dragActive = true;
+      return [{ type: 'drag_start', x: this.downX, y: this.downY }];
+    }
+    if (this.holdCancelledByMovement || at - this.downAt < TOUCH_LONG_PRESS_MS) {
       return [];
     }
-    this.dragActive = true;
-    const actions: Array<RustDeskTouchAction> = [];
-    actions.push({ type: 'drag_start', x: this.downX, y: this.downY });
-    return actions;
+    this.clearPendingTap();
+    this.holdConsumed = true;
+    if (peerMobile) {
+      if (this.mode === 'touch') {
+        this.dragActive = true;
+        return [{ type: 'drag_start', x: this.downX, y: this.downY }];
+      }
+      return [];
+    }
+    return [{ type: 'click_right', x: this.downX, y: this.downY }];
   }
 
   onRelease(x: number, y: number, at: number, cancelled: boolean): Array<RustDeskTouchAction> {
@@ -93,38 +148,32 @@ export class RustDeskTouchGestureState {
     this.lastY = y;
     const actions: Array<RustDeskTouchAction> = [];
     if (this.dragActive) {
-      actions.push({ type: 'drag_end', x: this.lastX, y: this.lastY });
+      actions.push({ type: 'drag_end', x: x, y: y });
       this.clearDownState();
       return actions;
     }
-    const tapCandidate = !cancelled
-      && !this.movedBeyondTapDistance
+    if (cancelled || this.holdConsumed) {
+      this.clearDownState();
+      return actions;
+    }
+    const tapCandidate = !this.movedBeyondTapDistance
       && at - this.downAt <= TOUCH_TAP_MAX_MS
       && !this.distanceExceedsTapRange(x, y, this.downX, this.downY);
-    this.clearDownState();
     if (!tapCandidate) {
+      this.clearDownState();
       return actions;
     }
-    if (this.twoFingerRightClickEnabled) {
+    if (this.secondTapDown) {
       this.clearPendingTap();
-      actions.push({ type: 'click_left', x, y });
+      actions.push({ type: 'double_click_left', x: x, y: y });
+      this.clearDownState();
       return actions;
-    }
-    if (this.pendingTap) {
-      const isDoubleTap = at - this.pendingTapAt <= TOUCH_DOUBLE_TAP_MAX_MS
-        && this.distanceExceedsTapRange(x, y, this.pendingTapX, this.pendingTapY) === false;
-      if (isDoubleTap) {
-        this.clearPendingTap();
-        actions.push({ type: 'click_right', x, y });
-        return actions;
-      }
-      actions.push({ type: 'click_left', x: this.pendingTapX, y: this.pendingTapY });
-      this.clearPendingTap();
     }
     this.pendingTap = true;
     this.pendingTapX = x;
     this.pendingTapY = y;
     this.pendingTapAt = at;
+    this.clearDownState();
     return actions;
   }
 
@@ -132,21 +181,33 @@ export class RustDeskTouchGestureState {
     if (!this.pendingTap || at - this.pendingTapAt < TOUCH_DOUBLE_TAP_MAX_MS) {
       return [];
     }
-    const actions: Array<RustDeskTouchAction> = [];
-    actions.push({ type: 'click_left', x: this.pendingTapX, y: this.pendingTapY });
+    const actions: Array<RustDeskTouchAction> = [
+      { type: 'click_left', x: this.pendingTapX, y: this.pendingTapY },
+    ];
     this.clearPendingTap();
     return actions;
   }
 
   getTapTimeoutDelay(at: number): number {
-    if (!this.pendingTap) {
+    if (!this.pendingTap || this.downActive) {
       return -1;
     }
     return Math.max(TOUCH_DOUBLE_TAP_MAX_MS - (at - this.pendingTapAt), 0);
   }
 
-  isLongPressPending(): boolean {
-    return this.downActive && !this.dragActive && !this.longPressCancelledByMovement;
+  getHoldTimeoutDelay(at: number): number {
+    if (!this.isHoldPending()) {
+      return -1;
+    }
+    const timeout = this.mode === 'mouse' && this.secondTapDown
+      ? TOUCH_DOUBLE_TAP_MAX_MS
+      : TOUCH_LONG_PRESS_MS;
+    return Math.max(timeout - (at - this.downAt), 0);
+  }
+
+  isHoldPending(): boolean {
+    return this.downActive && !this.dragActive && !this.holdConsumed
+      && (!this.holdCancelledByMovement || (this.mode === 'mouse' && this.secondTapDown));
   }
 
   reset(): Array<RustDeskTouchAction> {
@@ -180,8 +241,10 @@ export class RustDeskTouchGestureState {
     this.lastY = 0;
     this.downAt = 0;
     this.movedBeyondTapDistance = false;
-    this.longPressCancelledByMovement = false;
+    this.holdCancelledByMovement = false;
     this.dragActive = false;
+    this.holdConsumed = false;
+    this.secondTapDown = false;
   }
 
   private clearPendingTap(): void {
