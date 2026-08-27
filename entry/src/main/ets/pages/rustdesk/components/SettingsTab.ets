@@ -18,6 +18,13 @@ import { AccountSettingsCard } from './AccountSettingsCard';
 import { BeginnerGuidePage } from './BeginnerGuidePage';
 import { ServerSettingsCard } from './ServerSettingsCard';
 import { SessionDefaultsCard } from './SessionDefaultsCard';
+import { HostSecuritySettingsCard } from './HostSecuritySettingsCard';
+import {
+  ControlledHostState,
+  ControlledPasswordMode,
+  ControlledTrustedDevice,
+  ControlledTwoFactorState,
+} from '../../../services/controlled/ControlledHostTypes';
 
 type SettingsSection = 'tutorial' | 'server' | 'account'
   | 'session_input' | 'session_quality' | 'session_security' | 'session_other'
@@ -36,6 +43,8 @@ export interface SettingsTabProps {
   sessionDefaults: SessionDefaults;
   accountState: AccountState;
   accountLoginProviders: AccountLoginProvider[];
+  controlledHostState: ControlledHostState;
+  controlledTwoFactorState: ControlledTwoFactorState;
   notes: string;
   errorText: string;
   scroller: Scroller;
@@ -54,6 +63,17 @@ export interface SettingsTabProps {
   onAccountOidcCancel: () => void;
   onAddressBookSync: () => void;
   onAccountLogout: () => void;
+  onControlledRefresh: () => void;
+  onControlledPasswordModeChange: (mode: ControlledPasswordMode) => void;
+  onControlledSetPermanentPassword: (password: string, confirmation: string) => void;
+  onControlledRemovePermanentPassword: () => void;
+  onControlledBeginTwoFactor: () => void;
+  onControlledVerifyTwoFactor: (code: string) => void;
+  onControlledCancelTwoFactor: () => void;
+  onControlledDisableTwoFactor: () => void;
+  onControlledTrustedDevicesEnabledChange: (enabled: boolean) => void;
+  onControlledRemoveTrustedDevice: (device: ControlledTrustedDevice) => void;
+  onControlledClearTrustedDevices: () => void;
   onRefresh: () => void;
   onTutorialAutoOpened: () => void;
 }
@@ -72,6 +92,8 @@ export struct SettingsTab {
   @Param sessionDefaults: SessionDefaults = new SessionDefaults();
   @Param accountState: AccountState = new AccountState();
   @Param accountLoginProviders: AccountLoginProvider[] = [];
+  @Param controlledHostState: ControlledHostState = new ControlledHostState();
+  @Param controlledTwoFactorState: ControlledTwoFactorState = new ControlledTwoFactorState();
   @Param notes: string = '';
   @Param errorText: string = '';
   @Param wideLayout: boolean = false;
@@ -100,6 +122,20 @@ export struct SettingsTab {
   @Event onAccountOidcCancel: () => void = () => {};
   @Event onAddressBookSync: () => void = () => {};
   @Event onAccountLogout: () => void = () => {};
+  @Event onControlledRefresh: () => void = () => {};
+  @Event onControlledPasswordModeChange: (mode: ControlledPasswordMode) => void =
+    (_mode: ControlledPasswordMode) => {};
+  @Event onControlledSetPermanentPassword: (password: string, confirmation: string) => void =
+    (_password: string, _confirmation: string) => {};
+  @Event onControlledRemovePermanentPassword: () => void = () => {};
+  @Event onControlledBeginTwoFactor: () => void = () => {};
+  @Event onControlledVerifyTwoFactor: (code: string) => void = (_code: string) => {};
+  @Event onControlledCancelTwoFactor: () => void = () => {};
+  @Event onControlledDisableTwoFactor: () => void = () => {};
+  @Event onControlledTrustedDevicesEnabledChange: (enabled: boolean) => void = (_enabled: boolean) => {};
+  @Event onControlledRemoveTrustedDevice: (device: ControlledTrustedDevice) => void =
+    (_device: ControlledTrustedDevice) => {};
+  @Event onControlledClearTrustedDevices: () => void = () => {};
   @Event onRefresh: () => void = () => {};
   @Event onTutorialAutoOpened: () => void = () => {};
 
@@ -293,7 +329,7 @@ export struct SettingsTab {
       return '设置默认画质、帧率和编码器偏好';
     }
     if (this.selectedSection === 'session_security') {
-      return '预留给服务端安全策略与访问控制';
+      return '管理服务端密码、双重认证和信任设备';
     }
     if (this.selectedSection === 'session_other') {
       return '音频、剪贴板、手势和工具栏等默认行为';
@@ -344,6 +380,16 @@ export struct SettingsTab {
       return `自定义 · ${this.sessionDefaults.customQuality}% · ${this.sessionDefaults.customFps} FPS`;
     }
     return '平衡';
+  }
+
+  private securitySummary(): string {
+    if (this.controlledTwoFactorState.enabled) {
+      return '2FA 已启用 · 密码仍为第一认证因素';
+    }
+    if (this.controlledHostState.permanentPasswordSet) {
+      return '固定密码已设置 · 可启用 2FA';
+    }
+    return '密码、2FA 与信任设备';
   }
 
   private diagnosticSummary(): string {
@@ -507,7 +553,7 @@ export struct SettingsTab {
             'session_security',
             $r('sys.symbol.info_circle'),
             '安全',
-            '服务端安全设置（预留）',
+            this.securitySummary(),
             $r('app.color.warning'),
           )
         }
@@ -573,7 +619,7 @@ export struct SettingsTab {
           'session_security',
           $r('sys.symbol.info_circle'),
           '安全',
-          '服务端安全设置（预留）',
+          this.securitySummary(),
           $r('app.color.warning'),
         )
         this.SettingsTile(
@@ -951,30 +997,6 @@ export struct SettingsTab {
   }
 
   @Builder
-  private SessionSecurityPlaceholder() {
-    Column({ space: 12 }) {
-      SymbolGlyph($r('sys.symbol.info_circle'))
-        .fontSize(36)
-        .fontColor([$r('app.color.warning')]);
-      Text('服务端安全设置')
-        .fontSize($r('app.float.font_title'))
-        .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.neu_text_primary'));
-      Text('此页面为后续服务端访问控制、密码策略和授权规则预留。')
-        .fontSize($r('app.float.font_body'))
-        .fontColor($r('app.color.neu_text_secondary'))
-        .textAlign(TextAlign.Center);
-    }
-    .width('100%')
-    .constraintSize({ minHeight: 220 })
-    .padding($r('app.float.space_24'))
-    .justifyContent(FlexAlign.Center)
-    .backgroundColor($r('app.color.mica_control'))
-    .border({ width: 1, color: $r('app.color.mica_border') })
-    .borderRadius($r('app.float.radius_24'));
-  }
-
-  @Builder
   private SelectedSettingsContent() {
     if (this.selectedSection === 'tutorial') {
       BeginnerGuidePage()
@@ -1016,7 +1038,23 @@ export struct SettingsTab {
         onDefaultsChange: (defaults: SessionDefaults) => this.updateSessionDefaultsDraft(defaults),
       })
     } else if (this.selectedSection === 'session_security') {
-      this.SessionSecurityPlaceholder()
+      HostSecuritySettingsCard({
+        hostState: this.controlledHostState,
+        twoFactor: this.controlledTwoFactorState,
+        onRefresh: () => this.onControlledRefresh(),
+        onPasswordModeChange: (mode: ControlledPasswordMode) => this.onControlledPasswordModeChange(mode),
+        onSetPermanentPassword: (password: string, confirmation: string) =>
+          this.onControlledSetPermanentPassword(password, confirmation),
+        onRemovePermanentPassword: () => this.onControlledRemovePermanentPassword(),
+        onBeginTwoFactor: () => this.onControlledBeginTwoFactor(),
+        onVerifyTwoFactor: (code: string) => this.onControlledVerifyTwoFactor(code),
+        onCancelTwoFactor: () => this.onControlledCancelTwoFactor(),
+        onDisableTwoFactor: () => this.onControlledDisableTwoFactor(),
+        onTrustedDevicesEnabledChange: (enabled: boolean) =>
+          this.onControlledTrustedDevicesEnabledChange(enabled),
+        onRemoveTrustedDevice: (device: ControlledTrustedDevice) => this.onControlledRemoveTrustedDevice(device),
+        onClearTrustedDevices: () => this.onControlledClearTrustedDevices(),
+      })
     } else if (this.selectedSection === 'session_other') {
       SessionDefaultsCard({
         showHeader: false,

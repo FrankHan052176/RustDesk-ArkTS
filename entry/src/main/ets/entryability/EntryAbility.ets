@@ -22,6 +22,7 @@ import {
   shouldUseStatusBarKeepAlive,
   StatusBarKeepAliveService,
 } from '../services/desktop/StatusBarKeepAliveService';
+import { controlledHostCoordinator } from '../services/controlled/ControlledHostCoordinator';
 
 const DOMAIN = 0xFF00;
 const TAG = 'RustDeskHMOS';
@@ -73,6 +74,7 @@ export default class EntryAbility extends UIAbility {
     this.statusBarKeepAliveService = new StatusBarKeepAliveService(this.context, () => this.restoreMainWindow());
     this.easyTierApiService = new EasyTierApiService(this.context);
     void this.easyTierApiService.startSnapshotObserver();
+    controlledHostCoordinator.initialize(this.context);
     this.context.eventHub.on(DATA_TRANSFER_BACKGROUND_BIND_EVENT, this.onDataTransferBind);
     this.context.eventHub.on(DATA_TRANSFER_BACKGROUND_CHANGE_EVENT, this.onDataTransferChanged);
     this.context.eventHub.on(DATA_TRANSFER_BACKGROUND_UNBIND_EVENT, this.onDataTransferUnbind);
@@ -156,6 +158,7 @@ export default class EntryAbility extends UIAbility {
     this.desktopKeepAliveActive = false;
     this.easyTierApiService?.stopSnapshotObserver();
     this.easyTierApiService = undefined;
+    controlledHostCoordinator.onAbilityDestroy();
   }
 
   onForeground(): void {
@@ -164,6 +167,7 @@ export default class EntryAbility extends UIAbility {
     this.refreshPrivacyConsentFromSystem();
     this.dataTransferBackgroundService?.onForeground();
     void this.easyTierApiService?.startSnapshotObserver();
+    controlledHostCoordinator.onAbilityForeground();
     this.context.eventHub.emit(REMOTE_SESSION_APP_STATE_EVENT, true);
   }
 
@@ -172,6 +176,7 @@ export default class EntryAbility extends UIAbility {
     this.appForeground = false;
     this.syncLuminousMotionLight();
     this.dataTransferBackgroundService?.onBackground();
+    controlledHostCoordinator.onAbilityBackground();
     this.context.eventHub.emit(REMOTE_SESSION_APP_STATE_EVENT, false);
   }
 

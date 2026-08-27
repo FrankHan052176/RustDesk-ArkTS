@@ -25,6 +25,7 @@ import { AuthDialogMode, PasswordDialog } from './rustdesk/components/PasswordDi
 import { ConnectionAttemptOverlay } from './rustdesk/components/ConnectionAttemptOverlay';
 import { InsecureConnectionDialog } from './rustdesk/components/InsecureConnectionDialog';
 import { SettingsTab } from './rustdesk/components/SettingsTab';
+import { ViewedHostPage } from './rustdesk/components/ViewedHostPage';
 import { SessionToolbar } from './rustdesk/components/SessionToolbar';
 import {
   ANDROID_NAVIGATION_BAR_HEIGHT,
@@ -117,6 +118,11 @@ import {
   RemoteSessionShareController,
   RemoteSessionShareSnapshot,
 } from '../services/RemoteSessionHandoffService';
+import {
+  ControlledPasswordMode,
+  ControlledTrustedDevice,
+} from '../services/controlled/ControlledHostTypes';
+import { controlledHostCoordinator } from '../services/controlled/ControlledHostCoordinator';
 import {
   EASYTIER_API_RESULT_EVENT,
   EASYTIER_OPERATION_START_INSTANCE,
@@ -239,6 +245,7 @@ struct RustDeskIndex {
   private deviceAddressBookScroller: Scroller = new Scroller();
   private deviceLanScroller: Scroller = new Scroller();
   private settingsScroller: Scroller = new Scroller();
+  private viewedHostScroller: Scroller = new Scroller();
   private transferScroller: Scroller = new Scroller();
   private keyboardEnteredSessionId: string = '';
   private lastKeyboardFocusLogAt: number = 0;
@@ -7822,7 +7829,7 @@ struct RustDeskIndex {
   }
 
   private captureSessionReturnTab(): void {
-    if (this.currentTabIndex >= 0 && this.currentTabIndex <= 2) {
+    if (this.currentTabIndex >= 0 && this.currentTabIndex <= 3) {
       this.sessionReturnTabIndex = this.currentTabIndex;
       return;
     }
@@ -7899,7 +7906,10 @@ struct RustDeskIndex {
     if (this.currentTabIndex === 1) {
       return '设备';
     }
-    return '设置';
+    if (this.currentTabIndex === 2) {
+      return '设置';
+    }
+    return '服务端';
   }
 
   private mainNavigationSubtitle(): ResourceStr {
@@ -7909,7 +7919,10 @@ struct RustDeskIndex {
     if (this.currentTabIndex === 1) {
       return '最近、通讯簿与局域网';
     }
-    return '连接、安全与体验';
+    if (this.currentTabIndex === 2) {
+      return '连接、安全与体验';
+    }
+    return '仅分享本机屏幕和系统声音';
   }
 
   private activeMainScrollers(): Scroller[] {
@@ -7919,7 +7932,10 @@ struct RustDeskIndex {
     if (this.currentTabIndex === 1) {
       return [this.deviceRecentScroller, this.deviceAddressBookScroller, this.deviceLanScroller];
     }
-    return [this.settingsScroller];
+    if (this.currentTabIndex === 2) {
+      return [this.settingsScroller];
+    }
+    return [this.viewedHostScroller];
   }
 
   private mainTitleSpacerHeight(): number {
@@ -8023,6 +8039,8 @@ struct RustDeskIndex {
       sessionDefaults: this.sessionDefaults,
       accountState: this.accountState,
       accountLoginProviders: this.accountLoginProviders,
+      controlledHostState: controlledHostCoordinator.state,
+      controlledTwoFactorState: controlledHostCoordinator.twoFactorState,
       notes: this.notes,
       errorText: this.errorText,
       wideLayout: this.isWideMainLayout(),
@@ -8041,8 +8059,42 @@ struct RustDeskIndex {
       onAccountOidcCancel: () => this.cancelAccountOidc(),
       onAddressBookSync: () => this.startAddressBookSync(),
       onAccountLogout: () => this.logoutAccount(),
+      onControlledRefresh: () => {
+        controlledHostCoordinator.refreshPasswordState();
+        controlledHostCoordinator.refreshTwoFactorState();
+        controlledHostCoordinator.refreshPermissionState();
+      },
+      onControlledPasswordModeChange: (mode: ControlledPasswordMode) =>
+        controlledHostCoordinator.setVerificationMethod(mode),
+      onControlledSetPermanentPassword: (password: string, confirmation: string) =>
+        controlledHostCoordinator.setPermanentPassword(password, confirmation),
+      onControlledRemovePermanentPassword: () => controlledHostCoordinator.clearPermanentPassword(),
+      onControlledBeginTwoFactor: () => controlledHostCoordinator.beginTwoFactorSetup(),
+      onControlledVerifyTwoFactor: (code: string) => controlledHostCoordinator.verifyTwoFactorSetup(code),
+      onControlledCancelTwoFactor: () => controlledHostCoordinator.cancelTwoFactorSetup(),
+      onControlledDisableTwoFactor: () => controlledHostCoordinator.disableTwoFactor(),
+      onControlledTrustedDevicesEnabledChange: (enabled: boolean) =>
+        controlledHostCoordinator.setTrustedDevicesEnabled(enabled),
+      onControlledRemoveTrustedDevice: (device: ControlledTrustedDevice) =>
+        controlledHostCoordinator.removeTrustedDevice(device),
+      onControlledClearTrustedDevices: () => controlledHostCoordinator.clearTrustedDevices(),
       onRefresh: () => this.refreshNativeState(),
       onTutorialAutoOpened: () => this.markFirstLaunchTutorialShown(),
+    })
+  }
+
+  @Builder
+  private ViewedHostPageContent() {
+    ViewedHostPage({
+      state: controlledHostCoordinator.state,
+      scroller: this.viewedHostScroller,
+      titleSpacerHeight: this.mainTitleSpacerHeight(),
+      bottomAvoidInset: this.windowBottomAvoidInset,
+      onStart: () => void controlledHostCoordinator.start(),
+      onStop: () => controlledHostCoordinator.stop('已由用户停止被看服务'),
+      onReject: () => controlledHostCoordinator.rejectIncoming(),
+      onRefreshPassword: () => controlledHostCoordinator.refreshTemporaryPassword(),
+      onOpenRecordingPermission: () => void controlledHostCoordinator.openRecordingPermissionSettings(),
     })
   }
 
@@ -8134,6 +8186,7 @@ struct RustDeskIndex {
           this.WideNavigationItem(0, '首页', $r('sys.symbol.house'))
           this.WideNavigationItem(1, '设备', $r('sys.symbol.person_crop_circle_fill'))
           this.WideNavigationItem(2, '设置', $r('sys.symbol.gearshape'))
+          this.WideNavigationItem(3, '服务端', $r('sys.symbol.display'))
           Blank()
           Text('安全连接')
             .fontSize(10)
@@ -8328,9 +8381,23 @@ struct RustDeskIndex {
             x: -this.mainTabTransitionDirection * MAIN_PAGE_TRANSITION_DISTANCE_VP,
           })),
         ));
-      } else {
+      } else if (this.currentTabIndex === 2) {
         Stack() {
           this.SettingsPageContent();
+        }
+        .width('100%')
+        .height('100%')
+        .transition(TransitionEffect.asymmetric(
+          TransitionEffect.OPACITY.combine(TransitionEffect.translate({
+            x: this.mainTabTransitionDirection * MAIN_PAGE_TRANSITION_DISTANCE_VP,
+          })),
+          TransitionEffect.OPACITY.combine(TransitionEffect.translate({
+            x: -this.mainTabTransitionDirection * MAIN_PAGE_TRANSITION_DISTANCE_VP,
+          })),
+        ));
+      } else {
+        Stack() {
+          this.ViewedHostPageContent();
         }
         .width('100%')
         .height('100%')
@@ -8365,6 +8432,11 @@ struct RustDeskIndex {
         this.SettingsPageContent();
       }
       .tabBar(this.TabBuilder(2, '设置', $r('sys.symbol.gearshape')))
+
+      TabContent() {
+        this.ViewedHostPageContent();
+      }
+      .tabBar(this.TabBuilder(3, '服务端', $r('sys.symbol.display')))
     }
     .barOverlap(true)
     .barPosition(BarPosition.End)
@@ -8375,7 +8447,7 @@ struct RustDeskIndex {
       this.currentTabIndex = index;
     })
     .barFloatingStyle({
-      barWidth: { smallWidth: 264, mediumWidth: 300, largeWidth: 328 },
+      barWidth: { smallWidth: 320, mediumWidth: 344, largeWidth: 376 },
       barBottomMargin: this.mainTabBottomMargin(),
       gradientMask: {
         maskColor: $r('app.color.tabs_gradient_mask'),

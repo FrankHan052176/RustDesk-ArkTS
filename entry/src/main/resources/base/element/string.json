@@ -711,6 +711,10 @@
     {
       "name": "guide_defaults_body",
       "value": "在“远控默认”中设置你习惯的控制模式、手势、画质和其他新会话默认行为。"
+    },
+    {
+      "name": "custom_screen_recording_permission_reason",
+      "value": "用于在您启用服务端“被看”后共享本机屏幕和系统声音。"
     }
   ]
 }
