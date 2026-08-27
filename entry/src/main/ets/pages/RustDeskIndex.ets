@@ -944,6 +944,7 @@ struct RustDeskIndex {
 
   private initializeRuntime(): void {
     if (this.runtimeInitialized) {
+      controlledHostCoordinator.onRuntimeReady();
       this.refreshNativeState();
       this.refreshDirectorySnapshot();
       if (!this.accountState.loggedIn) {
@@ -988,6 +989,7 @@ struct RustDeskIndex {
 
       const response = JSON.parse(native.runtimeInit(hostContext.filesDir, 'RustDesk HMOS')) as Record<string, string>;
       this.runtimeInitialized = true;
+      controlledHostCoordinator.onRuntimeReady();
       this.apiServer = native.runtimeGetApiServer();
       this.nativeBuildMarker = native.buildMarker();
       let decoderCapabilityResponse: ESObject = JSON.parse(native.runtimeGetDecoderCapabilities());

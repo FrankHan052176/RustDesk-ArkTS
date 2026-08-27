@@ -50,6 +50,7 @@ export class ControlledHostCoordinator {
   private pollInFlight: boolean = false;
   private generation: number = 0;
   private initialized: boolean = false;
+  private runtimeReady: boolean = false;
 
   initialize(context: common.UIAbilityContext): void {
     if (this.initialized) {
@@ -61,12 +62,24 @@ export class ControlledHostCoordinator {
       this.failClosed('系统已终止被看服务后台任务');
     });
     this.initialized = true;
+    this.runtimeReady = false;
     this.state.phase = 'disabled';
     this.state.statusText = '可启用屏幕与设备内音频共享';
     this.refreshPermissionState();
+  }
+
+  onRuntimeReady(): void {
+    if (!this.initialized) {
+      return;
+    }
+    if (this.runtimeReady) {
+      this.refreshIdentityState();
+      return;
+    }
+    this.runtimeReady = true;
+    this.refreshIdentityState();
     this.refreshPasswordState();
     this.refreshTwoFactorState();
-    this.emitState();
   }
 
   addStateListener(listener: ControlledHostStateListener): void {
@@ -91,6 +104,12 @@ export class ControlledHostCoordinator {
 
   async start(): Promise<void> {
     if (!this.initialized || this.state.phase === 'starting' || this.running()) {
+      return;
+    }
+    if (!this.runtimeReady) {
+      this.state.lastError = 'RustDesk Core 尚未初始化，请稍后重试。';
+      this.state.statusText = this.state.lastError;
+      this.emitState();
       return;
     }
     this.refreshPermissionState();
@@ -410,6 +429,9 @@ export class ControlledHostCoordinator {
     if (!this.initialized) {
       return;
     }
+    if (this.runtimeReady) {
+      this.refreshIdentityState();
+    }
     this.refreshPermissionState();
     if (this.running() && this.state.recordingPermission !== abilityAccessCtrl.PermissionStatus.GRANTED) {
       this.failClosed('屏幕录制权限已撤销，被看服务已停止');
@@ -440,6 +462,7 @@ export class ControlledHostCoordinator {
     this.backgroundService = undefined;
     this.context = undefined;
     this.initialized = false;
+    this.runtimeReady = false;
   }
 
   private running(): boolean {
@@ -451,6 +474,18 @@ export class ControlledHostCoordinator {
       return value;
     }
     return PASSWORD_MODE_BOTH;
+  }
+
+  private refreshIdentityState(): void {
+    try {
+      const payload = JSON.parse(this.bridge.status()) as ControlledServerStatusPayload;
+      const myId: string = (payload.myId ?? '').trim();
+      if (myId.length > 0) {
+        this.state.myId = myId;
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'Device ID is unavailable: %{public}s', String(error));
+    }
   }
 
   private refreshNativeStatus(): void {
