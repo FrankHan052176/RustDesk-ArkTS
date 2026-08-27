@@ -72,7 +72,7 @@ export struct PasswordDialog {
             .width('100%');
 
             Text(this.mode === '2fa'
-              ? '请输入 Authenticator 或受控端生成的 6 位验证码。'
+              ? '请输入 Authenticator 或服务端生成的 6 位验证码。'
               : '验证完成后自动进入远端会话。')
               .width('100%')
               .fontSize($r('app.float.font_body'))
@@ -111,18 +111,18 @@ export struct PasswordDialog {
             .justifyContent(FlexAlign.Center)
             .clip(false);
 
-            LuminousSwitch({
-              label: '信任设备',
-              description: this.canTrustDevice
-                ? '开启后，下次连接该设备无需重复 2FA 验证'
-                : '远端支持时，将本机加入受信任设备列表',
-              isOn: this.trustThisDevice,
-              rowWidth: this.panelWidth() - 48,
-              motionEnabled: true,
-              onChange: (value: boolean): void => {
-                this.onTrustThisDeviceChange(value);
-              },
-            })
+            if (this.canTrustDevice) {
+              LuminousSwitch({
+                label: '信任设备',
+                description: '开启后，下次连接该设备无需重复 2FA 验证',
+                isOn: this.trustThisDevice,
+                rowWidth: this.panelWidth() - 48,
+                motionEnabled: true,
+                onChange: (value: boolean): void => {
+                  this.onTrustThisDeviceChange(value);
+                },
+              })
+            }
           } else {
             Row() {
               LuminousTextField({
