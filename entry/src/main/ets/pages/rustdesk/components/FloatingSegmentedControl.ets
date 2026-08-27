@@ -7,6 +7,7 @@ import {
 export interface FloatingSegmentedControlProps {
   labels: ResourceStr[];
   badges: string[];
+  enabledItems?: boolean[];
   selectedIndex: number;
   progress: number;
   controlId: string;
@@ -25,6 +26,7 @@ export interface FloatingSegmentedControlProps {
 export struct FloatingSegmentedControl {
   @Param labels: ResourceStr[] = [];
   @Param badges: string[] = [];
+  @Param enabledItems: boolean[] = [];
   @Param selectedIndex: number = 0;
   @Param progress: number = -1;
   @Param controlId: string = 'floating-segmented-control';
@@ -72,7 +74,7 @@ export struct FloatingSegmentedControl {
         `${this.controlId}-${index}`,
         this.labels[index],
         description,
-        true,
+        index >= this.enabledItems.length || this.enabledItems[index],
       ));
     }
     return items;
