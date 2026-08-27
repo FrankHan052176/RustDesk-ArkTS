@@ -1156,7 +1156,7 @@ struct RustDeskIndex {
 
   private applySessionDefaultsToIdleState(capabilities: DecoderCapability[]): void {
     this.touchMode = this.sessionDefaults.touchMode;
-    this.relativeMouseMode = this.sessionDefaults.relativeMouseMode;
+    this.relativeMouseMode = !this.touchMode && this.sessionDefaults.relativeMouseMode;
     this.clipboardSyncEnabled = this.sessionDefaults.clipboardEnabled;
     this.selectedQualityPreset = this.defaultQualityPreset();
     this.preferredCodec = this.resolvePreferredCodec(this.sessionDefaults.preferredCodec, capabilities);
@@ -3031,7 +3031,7 @@ struct RustDeskIndex {
     this.lastRenderRecoveryAt = 0;
     this.renderStallRecoveryAttempts = 0;
     this.touchMode = this.activeSessionDefaults.touchMode;
-    this.relativeMouseMode = this.activeSessionDefaults.relativeMouseMode;
+    this.relativeMouseMode = !this.touchMode && this.activeSessionDefaults.relativeMouseMode;
     this.resetRemoteCursorVisualState();
     this.cursorModel.reset();
     this.remoteCursorOptionApplied = false;
@@ -5258,32 +5258,33 @@ struct RustDeskIndex {
     }
   }
 
-  private async toggleTouchMode(): Promise<void> {
+  private async cyclePointerMode(): Promise<void> {
     if (!this.isRemoteControlSessionActive()) {
       return;
     }
-    const nextMode = !this.touchMode;
-    this.touchMode = nextMode;
-    this.syncTouchMode(nextMode);
-    this.sessionMessage = `已切换到${this.getPointerModeName(nextMode)}`;
+    if (this.touchMode) {
+      this.touchMode = false;
+      this.relativeMouseMode = false;
+      this.syncTouchMode(false);
+    } else if (!this.relativeMouseMode && this.relativeMouseModeSupported()) {
+      this.relativeMouseMode = true;
+      this.syncRelativeMouseMode(true);
+    } else {
+      if (this.relativeMouseMode) {
+        this.relativeMouseMode = false;
+        this.syncRelativeMouseMode(false);
+      }
+      this.touchMode = true;
+      this.syncTouchMode(true);
+    }
+    this.sessionMessage = `已切换到${this.getPointerModeName()}`;
   }
 
-  private async toggleRelativeMouseMode(): Promise<void> {
-    if (!this.isRemoteControlSessionActive()) {
-      return;
+  private getPointerModeName(): string {
+    if (this.touchMode) {
+      return '触控模式';
     }
-    if (!this.relativeMouseMode && !this.relativeMouseModeSupported()) {
-      this.sessionMessage = '当前远端不支持相对指针模式';
-      return;
-    }
-    const nextMode = !this.relativeMouseMode;
-    this.relativeMouseMode = nextMode;
-    this.syncRelativeMouseMode(nextMode);
-    this.sessionMessage = nextMode ? '已启用相对鼠标模式' : '已切换到普通鼠标模式';
-  }
-
-  private getPointerModeName(touchMode: boolean = this.touchMode): string {
-    return touchMode ? '触控模式' : '鼠标模式';
+    return this.relativeMouseMode ? '相对鼠标模式' : '鼠标模式';
   }
 
   private clampPreviewScale(value: number): number {
@@ -7116,8 +7117,7 @@ struct RustDeskIndex {
             windowControlsAvailable: this.sessionWindowControlsAvailable(),
             windowFullscreen: this.sessionWindowFullscreen,
             windowControlBusy: this.sessionWindowControlBusy,
-            onTogglePointerMode: () => this.toggleTouchMode(),
-            onToggleRelativeMouseMode: () => this.toggleRelativeMouseMode(),
+            onTogglePointerMode: () => this.cyclePointerMode(),
             onResetTransform: () => this.resetPreviewViewTransform(),
             onOpenChat: () => this.openChatDrawer(),
             onAudioChange: (enabled: boolean) => this.setRemoteAudioEnabled(enabled),
@@ -7370,18 +7370,10 @@ struct RustDeskIndex {
         this.FoldControlButton(
           this.getPointerModeName(),
           'fold-pointer',
-          this.touchMode,
+          false,
           false,
           true,
-          () => this.toggleTouchMode(),
-        )
-        this.FoldControlButton(
-          this.relativeMouseMode ? '相对指针' : '普通指针',
-          'fold-relative-pointer',
-          this.relativeMouseMode,
-          false,
-          this.relativeMouseModeSupported(),
-          () => this.toggleRelativeMouseMode(),
+          () => this.cyclePointerMode(),
         )
         this.FoldControlButton(
           '断开连接',

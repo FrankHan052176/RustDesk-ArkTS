@@ -301,8 +301,11 @@ export struct SettingsTab {
   }
 
   private sessionSummary(): ResourceStr {
+    if (this.sessionDefaults.touchMode) {
+      return $r('app.string.settings_pointer_touchpad');
+    }
     return this.sessionDefaults.relativeMouseMode
-      ? $r('app.string.settings_pointer_touchpad')
+      ? $r('app.string.settings_pointer_relative')
       : $r('app.string.settings_pointer_mouse');
   }
 

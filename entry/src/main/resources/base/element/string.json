@@ -329,6 +329,10 @@
       "value": "触控模式"
     },
     {
+      "name": "settings_pointer_relative",
+      "value": "相对鼠标"
+    },
+    {
       "name": "settings_remote_audio",
       "value": "默认播放远端音频"
     },

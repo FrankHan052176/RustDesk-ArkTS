@@ -211,6 +211,9 @@ export class RustDeskPreferences {
       const legacyMouseMode = store.getSync(LEGACY_DEFAULT_RELATIVE_MOUSE_KEY, false) as boolean;
       defaults.touchMode = store.getSync(DEFAULT_TOUCH_MODE_KEY, !legacyMouseMode) as boolean;
       defaults.relativeMouseMode = store.getSync(DEFAULT_RELATIVE_MOUSE_KEY, defaults.relativeMouseMode) as boolean;
+      if (defaults.touchMode) {
+        defaults.relativeMouseMode = false;
+      }
       defaults.audioEnabled = store.getSync(DEFAULT_AUDIO_ENABLED_KEY, defaults.audioEnabled) as boolean;
       defaults.clipboardEnabled = store.getSync(
         DEFAULT_CLIPBOARD_ENABLED_KEY,
@@ -259,7 +262,7 @@ export class RustDeskPreferences {
     }
     try {
       store.putSync(DEFAULT_TOUCH_MODE_KEY, defaults.touchMode);
-      store.putSync(DEFAULT_RELATIVE_MOUSE_KEY, defaults.relativeMouseMode);
+      store.putSync(DEFAULT_RELATIVE_MOUSE_KEY, !defaults.touchMode && defaults.relativeMouseMode);
       store.putSync(DEFAULT_AUDIO_ENABLED_KEY, defaults.audioEnabled);
       store.putSync(DEFAULT_CLIPBOARD_ENABLED_KEY, defaults.clipboardEnabled);
       store.putSync(DEFAULT_QUALITY_PRESET_KEY, defaults.qualityPreset.trim());

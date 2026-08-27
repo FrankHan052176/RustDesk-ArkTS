@@ -7,7 +7,6 @@ const SYSTEM_IME_TRANSITION_ID = 'rustdesk-session-system-ime';
 interface ToolbarActionOptions {
   label: string;
   active: boolean;
-  enabled?: boolean;
   transitionId: string;
   onClick: () => void;
 }
@@ -40,7 +39,6 @@ export interface SessionToolbarProps {
   windowFullscreen: boolean;
   windowControlBusy: boolean;
   onTogglePointerMode: () => void;
-  onToggleRelativeMouseMode: () => void;
   onResetTransform: () => void;
   onOpenChat: () => void;
   onOpenDisplay: () => void;
@@ -94,7 +92,6 @@ export struct SessionToolbar {
   @Param windowFullscreen: boolean = false;
   @Param windowControlBusy: boolean = false;
   @Event onTogglePointerMode: () => void = () => {};
-  @Event onToggleRelativeMouseMode: () => void = () => {};
   @Event onResetTransform: () => void = () => {};
   @Event onOpenChat: () => void = () => {};
   @Event onOpenDisplay: () => void = () => {};
@@ -138,15 +135,20 @@ export struct SessionToolbar {
     return this.wideLayout ? 46 : 42;
   }
 
+  private pointerModeLabel(): string {
+    if (this.displayedTouchMode) {
+      return '触控模式';
+    }
+    return this.displayedRelativeMouseMode ? '相对鼠标' : '鼠标模式';
+  }
+
   @Builder
   private ToolbarAction(options: ToolbarActionOptions) {
     Button({ type: ButtonType.Normal, stateEffect: true }) {
       Text(options.label)
         .fontSize($r('app.float.font_label'))
         .fontWeight(FontWeight.Medium)
-        .fontColor(options.enabled === false
-          ? $r('app.color.neu_text_disabled')
-          : options.active ? $r('app.color.white') : $r('app.color.neu_text_primary'))
+        .fontColor(options.active ? $r('app.color.white') : $r('app.color.neu_text_primary'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis });
     }
@@ -165,7 +167,6 @@ export struct SessionToolbar {
     .borderRadius($r('app.float.radius_14'))
     .shadow(ShadowStyle.OUTER_DEFAULT_SM)
     .hoverEffect(HoverEffect.None)
-    .enabled(options.enabled ?? true)
     .accessibilityText(options.label)
     .accessibilitySelected(options.active)
     .geometryTransition(options.transitionId)
@@ -178,57 +179,42 @@ export struct SessionToolbar {
   @Builder
   private PointerModeAction() {
     Button({ type: ButtonType.Normal, stateEffect: true }) {
-      Text(this.displayedTouchMode ? '触控模式' : '鼠标模式')
+      Text(this.pointerModeLabel())
         .fontSize($r('app.float.font_label'))
         .fontWeight(FontWeight.Medium)
-        .fontColor(this.displayedTouchMode
-          ? $r('app.color.white')
-          : $r('app.color.neu_text_primary'))
+        .fontColor($r('app.color.neu_text_primary'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis });
     }
     .layoutWeight(1)
     .height(this.actionHeight())
     .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_8') })
-    .backgroundColor(this.displayedTouchMode
-      ? $r('app.color.brand_primary')
-      : $r('app.color.mica_control'))
+    .backgroundColor($r('app.color.mica_control'))
     .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
       adaptiveColor: AdaptiveColor.DEFAULT,
       scale: 0.56,
     })
     .border({
       width: 1,
-      color: this.displayedTouchMode
-        ? $r('app.color.brand_primary')
-        : $r('app.color.mica_border'),
+      color: $r('app.color.mica_border'),
     })
     .borderRadius($r('app.float.radius_14'))
     .shadow(ShadowStyle.OUTER_DEFAULT_SM)
     .hoverEffect(HoverEffect.None)
-    .accessibilityText(this.displayedTouchMode ? '触控模式' : '鼠标模式')
-    .accessibilitySelected(this.displayedTouchMode)
+    .accessibilityText(`控制模式：${this.pointerModeLabel()}`)
     .transition(TransitionEffect.OPACITY)
     .onClick((): void => {
-      this.displayedTouchMode = !this.displayedTouchMode;
+      if (this.displayedTouchMode) {
+        this.displayedTouchMode = false;
+        this.displayedRelativeMouseMode = false;
+      } else if (!this.displayedRelativeMouseMode && this.relativeMouseModeSupported) {
+        this.displayedRelativeMouseMode = true;
+      } else {
+        this.displayedTouchMode = true;
+        this.displayedRelativeMouseMode = false;
+      }
       this.onTogglePointerMode();
     });
-  }
-
-  @Builder
-  private RelativeMouseModeAction() {
-    this.ToolbarAction({
-      label: this.relativeMouseModeSupported
-        ? (this.displayedRelativeMouseMode ? '相对指针' : '普通指针')
-        : '相对指针不可用',
-      active: this.displayedRelativeMouseMode,
-      enabled: this.relativeMouseModeSupported,
-      transitionId: 'rustdesk-session-relative-mouse',
-      onClick: () => {
-        this.displayedRelativeMouseMode = !this.displayedRelativeMouseMode;
-        this.onToggleRelativeMouseMode();
-      },
-    })
   }
 
   @Builder
@@ -519,7 +505,6 @@ export struct SessionToolbar {
       Column({ space: $r('app.float.space_8') }) {
         Row({ space: $r('app.float.space_8') }) {
           this.PointerModeAction()
-          this.RelativeMouseModeAction()
           if (this.systemImeAvailable) {
             this.ToolbarAction({
               label: '输入法',
@@ -572,7 +557,6 @@ export struct SessionToolbar {
       Column({ space: $r('app.float.space_8') }) {
         Row({ space: $r('app.float.space_8') }) {
           this.PointerModeAction()
-          this.RelativeMouseModeAction()
           if (this.systemImeAvailable) {
             this.ToolbarAction({
               label: '输入法',

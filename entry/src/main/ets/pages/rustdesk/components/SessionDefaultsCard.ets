@@ -65,16 +65,18 @@ export struct SessionDefaultsCard {
     this.onDefaultsChange(next);
   }
 
-  private updatePointerMode(touchMode: boolean): void {
+  private updatePointerMode(index: number): void {
     const next = this.copyDefaults();
-    next.touchMode = touchMode;
+    next.touchMode = index === 0;
+    next.relativeMouseMode = index === 2;
     this.emit(next);
   }
 
-  private updateRelativeMouseMode(relativeMouseMode: boolean): void {
-    const next = this.copyDefaults();
-    next.relativeMouseMode = relativeMouseMode;
-    this.emit(next);
+  private pointerModeIndex(): number {
+    if (this.defaults.touchMode) {
+      return 0;
+    }
+    return this.defaults.relativeMouseMode ? 2 : 1;
   }
 
   private updateAudio(enabled: boolean): void {
@@ -315,27 +317,15 @@ export struct SessionDefaultsCard {
 
       LuminousSegmentedControl({
         items: [
-          new LuminousSelectionItem('mouse', $r('app.string.settings_pointer_mouse')),
           new LuminousSelectionItem('touch', $r('app.string.settings_pointer_touchpad')),
+          new LuminousSelectionItem('mouse', $r('app.string.settings_pointer_mouse')),
+          new LuminousSelectionItem('relative', $r('app.string.settings_pointer_relative')),
         ],
-        selectedIndex: this.defaults.touchMode ? 1 : 0,
+        selectedIndex: this.pointerModeIndex(),
         controlWidth: this.selectorWidth(520),
         controlHeight: 50,
         motionEnabled: true,
-        onChange: (index: number) => this.updatePointerMode(index === 1),
-      })
-        .margin({ top: -10 })
-
-      LuminousSegmentedControl({
-        items: [
-          new LuminousSelectionItem('absolute', '普通指针'),
-          new LuminousSelectionItem('relative', '相对指针'),
-        ],
-        selectedIndex: this.defaults.relativeMouseMode ? 1 : 0,
-        controlWidth: this.selectorWidth(520),
-        controlHeight: 50,
-        motionEnabled: true,
-        onChange: (index: number) => this.updateRelativeMouseMode(index === 1),
+        onChange: (index: number) => this.updatePointerMode(index),
       })
         .margin({ top: -10 })
     }
