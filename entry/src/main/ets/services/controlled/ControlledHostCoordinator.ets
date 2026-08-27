@@ -24,7 +24,7 @@ const DOMAIN = 0xFF00;
 const TAG = 'RustDeskViewedHost';
 const POLL_INTERVAL_MS = 250;
 class ControlledStartOptions {
-  requireLocalApproval: boolean = false;
+  requireLocalApproval: boolean = true;
   enableInput: boolean = false;
   enableClipboard: boolean = false;
   enableAudio: boolean = true;
@@ -49,6 +49,8 @@ export class ControlledHostCoordinator {
   private generation: number = 0;
   private initialized: boolean = false;
   private runtimeReady: boolean = false;
+  private resolvingRequestId: string = '';
+  private resolvingAccepted: boolean = false;
 
   initialize(context: common.UIAbilityContext): void {
     if (this.initialized) {
@@ -157,6 +159,8 @@ export class ControlledHostCoordinator {
     this.state.captureActive = false;
     this.state.runningInBackground = false;
     this.state.incoming = undefined;
+    this.state.incomingResolving = false;
+    this.resolvingRequestId = '';
     this.state.activePeerName = '';
     if (stopError.length > 0) {
       this.state.phase = 'failed';
@@ -168,19 +172,57 @@ export class ControlledHostCoordinator {
     this.emitState();
   }
 
-  rejectIncoming(): void {
+  rejectIncoming(requestId: string, peerId: string): void {
     const incoming = this.state.incoming;
-    if (incoming === undefined) {
+    if (incoming === undefined || incoming.requestId !== requestId || incoming.peerId !== peerId) {
+      this.state.lastError = '连接请求已变化，请确认当前请求后重试。';
+      this.emitState();
+      this.schedulePoll(0);
+      return;
+    }
+    if (this.resolvingRequestId.length > 0) {
       return;
     }
     try {
       this.requireSuccess(this.bridge.rejectIncoming(incoming.requestId), '无法拒绝远端观看请求');
-      this.state.incoming = undefined;
-      this.state.phase = 'ready';
-      this.state.statusText = '已拒绝连接，继续等待';
+      this.resolvingRequestId = incoming.requestId;
+      this.resolvingAccepted = false;
+      this.state.incomingResolving = true;
+      this.state.statusText = '正在拒绝并断开该请求';
       this.emitState();
+      this.schedulePoll(0);
     } catch (error) {
-      this.failClosed(`拒绝连接失败：${String(error)}`);
+      this.state.lastError = `拒绝连接失败：${String(error)}`;
+      this.state.statusText = this.state.lastError;
+      this.emitState();
+      this.schedulePoll(0);
+    }
+  }
+
+  acceptIncoming(requestId: string, peerId: string): void {
+    const incoming = this.state.incoming;
+    if (incoming === undefined || incoming.requestId !== requestId || incoming.peerId !== peerId) {
+      this.state.lastError = '连接请求已变化，请确认当前请求后重试。';
+      this.emitState();
+      this.schedulePoll(0);
+      return;
+    }
+    if (this.resolvingRequestId.length > 0) {
+      return;
+    }
+    try {
+      this.requireSuccess(this.bridge.acceptIncoming(incoming.requestId), '无法同意远端观看请求');
+      this.resolvingRequestId = incoming.requestId;
+      this.resolvingAccepted = true;
+      this.state.incomingResolving = true;
+      this.state.statusText = '已同意免密观看，正在建立仅观看会话';
+      this.emitState();
+      this.schedulePoll(0);
+    } catch (error) {
+      this.state.lastError = `同意连接失败：${String(error)}`;
+      this.state.statusText = this.state.lastError;
+      this.emitState();
+      this.schedulePoll(0);
     }
   }
 
@@ -485,7 +527,7 @@ export class ControlledHostCoordinator {
         throw new Error(capture.message ?? capture.lastError ?? '系统屏幕共享已停止');
       }
       this.state.captureActive = true;
-      const incomingPayload = JSON.parse(this.bridge.pollIncoming(16)) as ControlledIncomingPayload;
+      const incomingPayload = JSON.parse(this.bridge.pollIncoming(256)) as ControlledIncomingPayload;
       const requests = incomingPayload.requests ?? incomingPayload.clients ?? [];
       const clients = incomingPayload.clients ?? [];
       let activePeer: ControlledIncomingPeer | undefined = undefined;
@@ -495,15 +537,56 @@ export class ControlledHostCoordinator {
           break;
         }
       }
+      let nextRequest: ControlledIncomingPeer | undefined = undefined;
+      let resolvingRequest: ControlledIncomingPeer | undefined = undefined;
+      let displayedRequest: ControlledIncomingPeer | undefined = undefined;
+      for (let index = 0; index < requests.length; index += 1) {
+        if (!requests[index].authorized) {
+          if (nextRequest === undefined) {
+            nextRequest = requests[index];
+          }
+          if (requests[index].requestId === this.resolvingRequestId) {
+            resolvingRequest = requests[index];
+          }
+          if (this.state.incoming !== undefined &&
+            requests[index].requestId === this.state.incoming.requestId &&
+            requests[index].peerId === this.state.incoming.peerId) {
+            displayedRequest = requests[index];
+          }
+        }
+      }
+      const resolutionStillPending: boolean = resolvingRequest !== undefined;
+      if (resolvingRequest !== undefined) {
+        nextRequest = resolvingRequest;
+      } else if (displayedRequest !== undefined) {
+        nextRequest = displayedRequest;
+      }
+      if (!resolutionStillPending) {
+        this.resolvingRequestId = '';
+        this.state.incomingResolving = false;
+      }
       if (activePeer !== undefined) {
-        this.state.incoming = undefined;
         this.state.activePeerName = activePeer.peerName.length > 0 ? activePeer.peerName : activePeer.peerId;
+      } else {
+        this.state.activePeerName = '';
+      }
+      if (nextRequest !== undefined) {
+        this.state.incoming = nextRequest;
+        this.state.incomingResolving = resolutionStillPending && nextRequest.requestId === this.resolvingRequestId;
+        const peerLabel: string = nextRequest.peerName.length > 0 ? nextRequest.peerName : nextRequest.peerId;
+        this.state.phase = 'incoming';
+        if (this.state.incomingResolving) {
+          this.state.statusText = this.resolvingAccepted ? '已同意免密观看，正在建立仅观看会话' :
+            '正在拒绝并断开该请求';
+        } else if (activePeer !== undefined) {
+          this.state.statusText = `正在向 ${this.state.activePeerName} 分享；${peerLabel} 请求连接，等待本机同意`;
+        } else {
+          this.state.statusText = `${peerLabel} 请求连接；可同意免密观看，或由远端输入密码`;
+        }
+      } else if (activePeer !== undefined) {
+        this.state.incoming = undefined;
         this.state.phase = 'active';
         this.state.statusText = `正在向 ${this.state.activePeerName} 分享屏幕和设备内音频`;
-      } else if (requests.length > 0 && !requests[0].authorized) {
-        this.state.incoming = requests[0];
-        this.state.phase = 'incoming';
-        this.state.statusText = '远端正在验证密码';
       } else if (this.state.phase === 'incoming' || this.state.phase === 'active') {
         this.state.incoming = undefined;
         this.state.activePeerName = '';
@@ -566,6 +649,8 @@ export class ControlledHostCoordinator {
     this.state.captureActive = false;
     this.state.runningInBackground = false;
     this.state.incoming = undefined;
+    this.state.incomingResolving = false;
+    this.resolvingRequestId = '';
     this.state.activePeerName = '';
     this.state.phase = 'failed';
     this.state.lastError = stopError.length > 0 ? `${message}；${stopError}` : message;

@@ -8094,7 +8094,8 @@ struct RustDeskIndex {
       wideLayout: this.isWideMainLayout(),
       onStart: () => void controlledHostCoordinator.start(),
       onStop: () => controlledHostCoordinator.stop('已由用户停止被看服务'),
-      onReject: () => controlledHostCoordinator.rejectIncoming(),
+      onAccept: (requestId: string, peerId: string) => controlledHostCoordinator.acceptIncoming(requestId, peerId),
+      onReject: (requestId: string, peerId: string) => controlledHostCoordinator.rejectIncoming(requestId, peerId),
       onRefreshPassword: () => controlledHostCoordinator.refreshTemporaryPassword(),
     })
   }

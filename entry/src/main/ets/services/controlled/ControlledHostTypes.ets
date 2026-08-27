@@ -48,6 +48,7 @@ export class ControlledHostState {
   @Trace statusText: string = '被看服务未启用';
   @Trace lastError: string = '';
   @Trace incoming: ControlledIncomingPeer | undefined = undefined;
+  @Trace incomingResolving: boolean = false;
   @Trace activePeerName: string = '';
   @Trace captureActive: boolean = false;
   @Trace runningInBackground: boolean = false;

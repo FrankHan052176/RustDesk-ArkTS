@@ -41,6 +41,10 @@ export class NativeHostBridge {
     return controlledIncomingResolve(requestId, false);
   }
 
+  acceptIncoming(requestId: string): string {
+    return controlledIncomingResolve(requestId, true);
+  }
+
   password(): string {
     return controlledPasswordGet();
   }

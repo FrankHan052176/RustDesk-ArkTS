@@ -12,7 +12,8 @@ export interface ViewedHostCardProps {
   surfaceWidth: number;
   onStart: () => void;
   onStop: () => void;
-  onReject: () => void;
+  onAccept: (requestId: string, peerId: string) => void;
+  onReject: (requestId: string, peerId: string) => void;
   onRefreshPassword: () => void;
 }
 
@@ -25,7 +26,8 @@ export struct ViewedHostCard {
   @Local passwordRevealGeneration: number = 0;
   @Event onStart: () => void = () => {};
   @Event onStop: () => void = () => {};
-  @Event onReject: () => void = () => {};
+  @Event onAccept: (requestId: string, peerId: string) => void = (_requestId: string, _peerId: string) => {};
+  @Event onReject: (requestId: string, peerId: string) => void = (_requestId: string, _peerId: string) => {};
   @Event onRefreshPassword: () => void = () => {};
 
   aboutToAppear(): void {
@@ -82,14 +84,6 @@ export struct ViewedHostCard {
         this.hideTemporaryPassword();
       }
     }, 15000);
-  }
-
-  private incomingPeerLabel(): string {
-    if (this.state.incoming === undefined) {
-      return '';
-    }
-    const peerName: string = this.state.incoming.peerName.trim();
-    return peerName.length > 0 ? peerName : this.state.incoming.peerId;
   }
 
   @Builder
@@ -245,19 +239,24 @@ export struct ViewedHostCard {
     Column({ space: 14 }) {
       this.SectionHeading($r('sys.symbol.display'), '观看服务',
         '启动时由系统确认屏幕和设备内音频共享。');
-      Text(this.state.incoming !== undefined ? `${this.incomingPeerLabel()} 正在验证` : this.state.statusText)
+      Text(this.state.statusText)
         .width('100%')
         .fontSize(14)
         .fontWeight(FontWeight.Bold)
-        .fontColor(this.running() ? $r('app.color.success') : $r('app.color.neu_text_secondary'));
+        .fontColor(this.state.phase === 'incoming' ? $r('app.color.warning') :
+          (this.running() ? $r('app.color.success') : $r('app.color.neu_text_secondary')));
       if (this.state.incoming !== undefined) {
-        LuminousButton({
-          label: '拒绝并断开',
-          controlWidth: this.fullActionWidth(),
-          controlSizeMode: LuminousControlSize.Regular,
-          tone: LuminousTone.Danger,
-          onAction: () => this.onReject(),
-        });
+        if (this.state.incomingResolving) {
+          LuminousButton({
+            label: '正在处理…',
+            controlWidth: this.fullActionWidth(),
+            controlSizeMode: LuminousControlSize.Regular,
+            tone: LuminousTone.Accent,
+            onAction: () => {},
+          });
+        } else {
+          this.IncomingConsentActions(this.state.incoming.requestId, this.state.incoming.peerId);
+        }
       } else {
         LuminousButton({
           label: this.running() ? '停止观看服务' : '启动观看服务',
@@ -278,6 +277,27 @@ export struct ViewedHostCard {
     .width('100%')
     .padding({ left: this.compact() ? 4 : 8, right: this.compact() ? 4 : 8 })
     .alignItems(HorizontalAlign.Start);
+  }
+
+  @Builder
+  private IncomingConsentActions(requestId: string, peerId: string) {
+          Row({ space: 12 }) {
+            LuminousButton({
+              label: '同意观看',
+              controlWidth: this.actionWidth(),
+              controlSizeMode: LuminousControlSize.Regular,
+              tone: LuminousTone.Accent,
+              onAction: () => this.onAccept(requestId, peerId),
+            });
+            LuminousButton({
+              label: '拒绝',
+              controlWidth: this.actionWidth(),
+              controlSizeMode: LuminousControlSize.Regular,
+              tone: LuminousTone.Danger,
+              onAction: () => this.onReject(requestId, peerId),
+            });
+          }
+          .width('100%');
   }
 
   build(): void {

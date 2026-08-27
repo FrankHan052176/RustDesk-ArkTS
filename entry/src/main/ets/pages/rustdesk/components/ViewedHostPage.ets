@@ -9,7 +9,8 @@ export interface ViewedHostPageProps {
   wideLayout: boolean;
   onStart: () => void;
   onStop: () => void;
-  onReject: () => void;
+  onAccept: (requestId: string, peerId: string) => void;
+  onReject: (requestId: string, peerId: string) => void;
   onRefreshPassword: () => void;
 }
 
@@ -23,7 +24,8 @@ export struct ViewedHostPage {
   @Local viewportWidth: number = 760;
   @Event onStart: () => void = () => {};
   @Event onStop: () => void = () => {};
-  @Event onReject: () => void = () => {};
+  @Event onAccept: (requestId: string, peerId: string) => void = (_requestId: string, _peerId: string) => {};
+  @Event onReject: (requestId: string, peerId: string) => void = (_requestId: string, _peerId: string) => {};
   @Event onRefreshPassword: () => void = () => {};
 
   private horizontalPadding(): number {
@@ -66,7 +68,8 @@ export struct ViewedHostPage {
           surfaceWidth: this.contentWidth(),
           onStart: () => this.onStart(),
           onStop: () => this.onStop(),
-          onReject: () => this.onReject(),
+          onAccept: (requestId: string, peerId: string) => this.onAccept(requestId, peerId),
+          onReject: (requestId: string, peerId: string) => this.onReject(requestId, peerId),
           onRefreshPassword: () => this.onRefreshPassword(),
         });
         Blank()
