@@ -12,7 +12,6 @@ import {
 import { EasyTierInstanceSummary } from '../../../services/EasyTierApiService';
 import { DirectorySnapshot, PeerRecord } from '../RustDeskDirectoryTypes';
 import { RustDeskLayoutTokens } from '../RustDeskLayoutTokens';
-import { PeerCard } from './PeerCard';
 
 export interface ConnectTabProps {
   target: string;
@@ -26,7 +25,6 @@ export interface ConnectTabProps {
   onDisconnect: () => void;
   canDisconnect: boolean;
   transferActive: boolean;
-  activeTransferPeerId: string;
   easyTierAvailable: boolean;
   easyTierEnabled: boolean;
   easyTierInstances: EasyTierInstanceSummary[];
@@ -36,12 +34,6 @@ export interface ConnectTabProps {
   titleSpacerHeight: number;
   bottomAvoidInset: number;
   directorySnapshot: DirectorySnapshot;
-  onSetPeerFavorite: (peerId: string, favorite: boolean) => void;
-  onRemoveRecentPeer: (peerId: string) => void;
-  onConnectPeerRemote: (peerId: string) => void;
-  onViewPeerOnly: (peerId: string) => void;
-  onViewPeerCamera: (peerId: string) => void;
-  onOpenPeerTransfer: (peerId: string) => void;
   onEasyTierModeChange: (instanceId: string) => void;
 }
 
@@ -51,7 +43,6 @@ export struct ConnectTab {
   @Param rememberPassword: boolean = false;
   @Param canDisconnect: boolean = false;
   @Param transferActive: boolean = false;
-  @Param activeTransferPeerId: string = '';
   @Param easyTierAvailable: boolean = false;
   @Param easyTierEnabled: boolean = false;
   @Param easyTierInstances: EasyTierInstanceSummary[] = [];
@@ -64,18 +55,14 @@ export struct ConnectTab {
   @Param scroller: Scroller = new Scroller();
   @Local viewportWidth: number = 390;
   @Local connectionMode: number = 0;
+  @Local recentPressedTarget: string = '';
+  @Local recentHoveredTarget: string = '';
   @Event onTargetChange: (value: string) => void = (_value: string) => {};
   @Event onConnectRemote: () => void = () => {};
   @Event onViewOnly: () => void = () => {};
   @Event onViewCamera: () => void = () => {};
   @Event onOpenTransfer: () => void = () => {};
   @Event onDisconnect: () => void = () => {};
-  @Event onSetPeerFavorite: (peerId: string, favorite: boolean) => void = (_peerId: string, _favorite: boolean) => {};
-  @Event onRemoveRecentPeer: (peerId: string) => void = (_peerId: string) => {};
-  @Event onConnectPeerRemote: (peerId: string) => void = (_peerId: string) => {};
-  @Event onViewPeerOnly: (peerId: string) => void = (_peerId: string) => {};
-  @Event onViewPeerCamera: (peerId: string) => void = (_peerId: string) => {};
-  @Event onOpenPeerTransfer: (peerId: string) => void = (_peerId: string) => {};
   @Event onEasyTierModeChange: (instanceId: string) => void = (_instanceId: string) => {};
 
   private useTwoColumnWorkspace(): boolean {
@@ -109,14 +96,6 @@ export struct ConnectTab {
     const mainPadding = LuminousNeoTokens.shadowPaddingFor(this.easyTierMenuHeight());
     const handlePadding = LuminousNeoTokens.shadowPaddingFor(40);
     return mainPadding + handlePadding + 50;
-  }
-
-  private recentTitleBarHeight(): number {
-    return 56;
-  }
-
-  private recentContentInset(): number {
-    return 14;
   }
 
   private recentFrameWidth(): number {
@@ -278,12 +257,56 @@ export struct ConnectTab {
   }
 
   private recentPreview(): PeerRecord[] {
-    const limit = 2;
+    const limit = this.isCompact() ? 4 : 6;
     const result: PeerRecord[] = [];
     for (let index = 0; index < this.directorySnapshot.recent.length && index < limit; index += 1) {
       result.push(this.directorySnapshot.recent[index]);
     }
     return result;
+  }
+
+  private recentPeerName(peer: PeerRecord): string {
+    if (peer.alias.trim().length > 0) {
+      return peer.alias.trim();
+    }
+    if (peer.hostname.trim().length > 0) {
+      return peer.hostname.trim();
+    }
+    if (peer.username.trim().length > 0) {
+      return peer.username.trim();
+    }
+    return peer.id;
+  }
+
+  private recentPeerTarget(peer: PeerRecord): string {
+    const lanIp = peer.lanIp.trim();
+    return lanIp.length > 0 ? lanIp : peer.id.trim();
+  }
+
+  private recentPeerStatus(peer: PeerRecord): ResourceStr {
+    if (!peer.onlineKnown) {
+      return $r('app.string.device_status_checking');
+    }
+    return peer.online
+      ? $r('app.string.device_status_online')
+      : $r('app.string.device_status_offline');
+  }
+
+  private recentPeerStatusColor(peer: PeerRecord): ResourceColor {
+    return peer.onlineKnown && peer.online
+      ? $r('app.color.success')
+      : $r('app.color.neu_text_secondary');
+  }
+
+  private recentCardOpacity(peer: PeerRecord): number {
+    const target = this.recentPeerTarget(peer);
+    if (this.recentPressedTarget === target) {
+      return 0.76;
+    }
+    if (this.recentHoveredTarget === target) {
+      return 0.9;
+    }
+    return 1;
   }
 
   @Builder
@@ -413,49 +436,13 @@ export struct ConnectTab {
   }
 
   @Builder
-  private RecentHeader() {
-    Row() {
-      Column({ space: 3 }) {
-        Text('最近设备')
-          .fontSize(18)
-          .fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.neu_text_primary'));
-        Text('继续上一次远程工作')
-          .fontSize(12)
-          .fontColor($r('app.color.neu_text_secondary'));
-      }
-      .alignItems(HorizontalAlign.Start);
-      Blank();
-      Text(`${this.directorySnapshot.recent.length}`)
-        .fontSize(14)
-        .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.neu_accent'));
-    }
-    .width(this.recentContentWidth())
-    .alignItems(VerticalAlign.Center);
-  }
-
-  @Builder
-  private RecentTitleBar() {
-    Row() {
-      this.RecentHeader();
-    }
-    .width('100%')
-    .height(this.recentTitleBarHeight())
-    .justifyContent(FlexAlign.Center)
-    .alignItems(VerticalAlign.Center)
-    .backgroundColor($r('app.color.neu_base'))
-    .zIndex(2);
-  }
-
-  @Builder
   private EmptyRecent() {
     Stack({ alignContent: Alignment.Center }) {
       LuminousSurface({
         depth: 1,
         surfaceWidth: this.recentContentWidth(),
-        surfaceHeight: 96,
-        cornerRadius: 24,
+        surfaceHeight: 72,
+        cornerRadius: 20,
         motionEnabled: true,
       }) {
         Row({ space: 14 }) {
@@ -479,46 +466,108 @@ export struct ConnectTab {
           .alignItems(HorizontalAlign.Start);
         }
         .width(this.recentContentWidth())
-        .height(96)
+        .height(72)
         .padding({ left: 20, right: 20 })
         .alignItems(VerticalAlign.Center);
       }
     }
     .width(this.recentFrameWidth())
-    .height(128)
+    .height(88)
+    .clip(false);
+  }
+
+  @Builder
+  private CompactRecentCard(peer: PeerRecord) {
+    Stack({ alignContent: Alignment.Center }) {
+      Stack({ alignContent: Alignment.Center }) {
+        LuminousSurface({
+          depth: 1,
+          surfaceWidth: this.recentContentWidth(),
+          surfaceHeight: 72,
+          cornerRadius: 20,
+          motionEnabled: true,
+        }) {
+          Row({ space: 12 }) {
+            Column({ space: 3 }) {
+              Text(this.recentPeerName(peer))
+                .width('100%')
+                .fontSize(15)
+                .fontWeight(FontWeight.Medium)
+                .fontColor($r('app.color.neu_text_primary'))
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis });
+              Text(this.recentPeerTarget(peer))
+                .width('100%')
+                .fontSize(12)
+                .fontColor($r('app.color.neu_text_secondary'))
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis });
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start);
+
+            Row({ space: 6 }) {
+              Row()
+                .width(8)
+                .height(8)
+                .borderRadius(4)
+                .backgroundColor(this.recentPeerStatusColor(peer));
+              Text(this.recentPeerStatus(peer))
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(this.recentPeerStatusColor(peer));
+            }
+            .flexShrink(0)
+            .alignItems(VerticalAlign.Center);
+          }
+          .width(this.recentContentWidth())
+          .height(72)
+          .padding({ left: 18, right: 18 })
+          .alignItems(VerticalAlign.Center);
+        }
+      }
+      .width(this.recentContentWidth())
+      .height(72)
+      .opacity(this.recentCardOpacity(peer));
+
+      Button({ type: ButtonType.Normal, stateEffect: false }) {
+        Row()
+      }
+      .width(this.recentContentWidth())
+      .height(72)
+      .padding(0)
+      .backgroundColor(Color.Transparent)
+      .borderRadius(20)
+      .hoverEffect(HoverEffect.None)
+      .accessibilityText(`选择设备 ${this.recentPeerName(peer)}，填入 ${this.recentPeerTarget(peer)}`)
+      .onHover((isHover: boolean): void => {
+        this.recentHoveredTarget = isHover ? this.recentPeerTarget(peer) : '';
+      })
+      .onTouch((event: TouchEvent): void => {
+        if (event.type === TouchType.Down) {
+          this.recentPressedTarget = this.recentPeerTarget(peer);
+        } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+          this.recentPressedTarget = '';
+        }
+      })
+      .onClick((): void => this.onTargetChange(this.recentPeerTarget(peer)));
+    }
+    .width(this.recentFrameWidth())
+    .height(88)
     .clip(false);
   }
 
   @Builder
   private RecentWorkspace() {
     Column() {
-      this.RecentTitleBar();
-
       List({ scroller: this.scroller }) {
         ListItem() {
-          Column({ space: 16 }) {
-            Blank()
-              .width('100%')
-              .height(this.recentContentInset())
-              .flexShrink(0);
-
+          Column({ space: 10 }) {
             if (this.recentPreview().length === 0) {
               this.EmptyRecent();
             } else {
               ForEach(this.recentPreview(), (peer: PeerRecord) => {
-                PeerCard({
-                  peer: peer,
-                  compact: true,
-                  cardWidth: this.recentContentWidth(),
-                  transferActive: this.activeTransferPeerId === peer.id,
-                  onSetFavorite: (peerId: string, favorite: boolean) => this.onSetPeerFavorite(peerId, favorite),
-                  onRemoveRecent: (peerId: string) => this.onRemoveRecentPeer(peerId),
-                  onConnectRemote: (peerId: string) => this.onConnectPeerRemote(peerId),
-                  onViewOnly: (peerId: string) => this.onViewPeerOnly(peerId),
-                  onViewCamera: (peerId: string) => this.onViewPeerCamera(peerId),
-                  onOpenTransfer: (peerId: string) => this.onOpenPeerTransfer(peerId),
-                })
-                  .width(this.recentContentWidth());
+                this.CompactRecentCard(peer);
               }, (peer: PeerRecord) => `recent-${peer.id}`);
             }
           }

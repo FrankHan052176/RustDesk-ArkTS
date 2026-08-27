@@ -2043,7 +2043,6 @@ struct RustDeskIndex {
   private scanLanPeers(): void {
     this.clearLanScanTimer();
     const scanGeneration = ++this.lanScanGeneration;
-    this.lanScanStartedAt = Date.now();
     const scanningSnapshot = this.directoryScanSnapshot(true, '正在扫描局域网设备');
     scanningSnapshot.lan = [];
     this.directorySnapshot = scanningSnapshot;
@@ -2052,6 +2051,7 @@ struct RustDeskIndex {
       this.directorySnapshot = this.directoryScanSnapshot(false, '无法启动局域网扫描');
       return;
     }
+    this.lanScanStartedAt = Date.now();
     this.scheduleLanScanPoll(250, scanGeneration);
   }
 
@@ -2063,7 +2063,9 @@ struct RustDeskIndex {
       }
       this.refreshDirectorySnapshot();
       const elapsed = Date.now() - this.lanScanStartedAt;
-      if (elapsed < 4300) {
+      const allDiscoveredAddressesResolved = this.directorySnapshot.lan.length > 0 &&
+        this.directorySnapshot.lan.every((peer: PeerRecord) => peer.lanIp.trim().length > 0);
+      if (!allDiscoveredAddressesResolved && elapsed < 10000) {
         this.directorySnapshot = this.directoryScanSnapshot(true, '正在扫描局域网设备');
         this.scheduleLanScanPoll(400, scanGeneration);
       } else {
@@ -7977,7 +7979,6 @@ struct RustDeskIndex {
       rememberPassword: this.rememberPassword,
       canDisconnect: this.activeSessionId.length > 0,
       transferActive: this.transferSessionReady,
-      activeTransferPeerId: this.transferManager.isReady() ? this.transferSessionTarget : '',
       easyTierAvailable: this.easyTierDataAvailable,
       easyTierEnabled: this.easyTierPreconnectEnabled,
       easyTierInstances: this.easyTierInstances,
@@ -7994,12 +7995,6 @@ struct RustDeskIndex {
       onViewCamera: () => this.connectCameraSession(),
       onOpenTransfer: () => this.openTransferWorkspace(),
       onDisconnect: () => this.closeSession('已手动断开连接'),
-      onSetPeerFavorite: (peerId: string, favorite: boolean) => this.setPeerFavorite(peerId, favorite),
-      onRemoveRecentPeer: (peerId: string) => this.removeRecentPeer(peerId),
-      onConnectPeerRemote: (peerId: string) => this.launchPeer(peerId, 'remote_control'),
-      onViewPeerOnly: (peerId: string) => this.launchPeer(peerId, 'view_only'),
-      onViewPeerCamera: (peerId: string) => this.launchPeer(peerId, 'view_camera'),
-      onOpenPeerTransfer: (peerId: string) => this.launchPeer(peerId, 'file_transfer'),
       onEasyTierModeChange: (instanceId: string) => this.setEasyTierMode(instanceId),
     })
   }
