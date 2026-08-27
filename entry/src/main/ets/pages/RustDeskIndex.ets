@@ -29,6 +29,8 @@ import { SessionToolbar } from './rustdesk/components/SessionToolbar';
 import {
   ANDROID_NAVIGATION_BAR_HEIGHT,
   ANDROID_NAVIGATION_BAR_WIDTH,
+  ANDROID_NAVIGATION_COLLAPSED_HEIGHT,
+  ANDROID_NAVIGATION_COLLAPSED_WIDTH,
   AndroidNavigationBar,
 } from './rustdesk/components/AndroidNavigationBar';
 import {
@@ -473,6 +475,10 @@ struct RustDeskIndex {
   @Local androidNavigationVisible: boolean = true;
   @Local androidNavigationX: number = 0;
   @Local androidNavigationY: number = 0;
+  private androidNavigationExpandedX: number = -1;
+  private androidNavigationExpandedY: number = -1;
+  private androidNavigationCollapsedX: number = -1;
+  private androidNavigationCollapsedY: number = -1;
   @Local remoteKeyboardPermissionAllowed: boolean = true;
   private overlayState: SessionOverlayState = new SessionOverlayState();
   @Local activeOverlayPanel: SessionOverlayPanel = 'home';
@@ -779,10 +785,22 @@ struct RustDeskIndex {
       && this.remoteKeyboardPermissionAllowed;
   }
 
+  private androidNavigationOverlayWidth(): number {
+    return this.androidNavigationVisible
+      ? ANDROID_NAVIGATION_BAR_WIDTH
+      : ANDROID_NAVIGATION_COLLAPSED_WIDTH;
+  }
+
+  private androidNavigationOverlayHeight(): number {
+    return this.androidNavigationVisible
+      ? ANDROID_NAVIGATION_BAR_HEIGHT
+      : ANDROID_NAVIGATION_COLLAPSED_HEIGHT;
+  }
+
   private clampAndroidNavigationX(value: number, viewportWidth: number = this.previewViewWidth): number {
     const maxX = Math.max(
       ANDROID_NAVIGATION_EDGE_MARGIN,
-      viewportWidth - ANDROID_NAVIGATION_BAR_WIDTH - ANDROID_NAVIGATION_EDGE_MARGIN,
+      viewportWidth - this.androidNavigationOverlayWidth() - ANDROID_NAVIGATION_EDGE_MARGIN,
     );
     return Math.min(Math.max(value, ANDROID_NAVIGATION_EDGE_MARGIN), maxX);
   }
@@ -790,7 +808,7 @@ struct RustDeskIndex {
   private clampAndroidNavigationY(value: number, viewportHeight: number = this.previewViewHeight): number {
     const maxY = Math.max(
       ANDROID_NAVIGATION_EDGE_MARGIN,
-      viewportHeight - ANDROID_NAVIGATION_BAR_HEIGHT - ANDROID_NAVIGATION_EDGE_MARGIN,
+      viewportHeight - this.androidNavigationOverlayHeight() - ANDROID_NAVIGATION_EDGE_MARGIN,
     );
     return Math.min(Math.max(value, ANDROID_NAVIGATION_EDGE_MARGIN), maxY);
   }
@@ -800,10 +818,10 @@ struct RustDeskIndex {
       return;
     }
     if (!this.androidNavigationPositionInitialized) {
-      this.androidNavigationX = this.clampAndroidNavigationX(
-        (width - ANDROID_NAVIGATION_BAR_WIDTH) / 2,
-        width,
-      );
+      const initialX = this.androidNavigationVisible
+        ? (width - ANDROID_NAVIGATION_BAR_WIDTH) / 2
+        : width - ANDROID_NAVIGATION_COLLAPSED_WIDTH - ANDROID_NAVIGATION_EDGE_MARGIN;
+      this.androidNavigationX = this.clampAndroidNavigationX(initialX, width);
       this.androidNavigationY = this.clampAndroidNavigationY(
         height - ANDROID_NAVIGATION_BAR_HEIGHT - ANDROID_NAVIGATION_BOTTOM_OFFSET,
         height,
@@ -822,10 +840,55 @@ struct RustDeskIndex {
   }
 
   private saveAndroidNavigationPosition(): void {
+    if (this.androidNavigationVisible) {
+      this.androidNavigationExpandedX = this.androidNavigationX;
+      this.androidNavigationExpandedY = this.androidNavigationY;
+    } else {
+      this.androidNavigationCollapsedX = this.androidNavigationX;
+      this.androidNavigationCollapsedY = this.androidNavigationY;
+    }
     this.preferences?.saveAndroidNavigationPosition(
       this.androidNavigationX,
       this.androidNavigationY,
     );
+  }
+
+  private setAndroidNavigationExpanded(expanded: boolean): void {
+    if (this.androidNavigationVisible === expanded) {
+      return;
+    }
+    if (this.androidNavigationVisible) {
+      this.androidNavigationExpandedX = this.androidNavigationX;
+      this.androidNavigationExpandedY = this.androidNavigationY;
+    } else {
+      this.androidNavigationCollapsedX = this.androidNavigationX;
+      this.androidNavigationCollapsedY = this.androidNavigationY;
+    }
+    this.androidNavigationVisible = expanded;
+    if (this.previewViewWidth > 0 && this.previewViewHeight > 0) {
+      if (expanded) {
+        const expandedX = this.androidNavigationExpandedX >= 0
+          ? this.androidNavigationExpandedX
+          : (this.previewViewWidth - ANDROID_NAVIGATION_BAR_WIDTH) / 2;
+        const expandedY = this.androidNavigationExpandedY >= 0
+          ? this.androidNavigationExpandedY
+          : this.previewViewHeight - ANDROID_NAVIGATION_BAR_HEIGHT - ANDROID_NAVIGATION_BOTTOM_OFFSET;
+        this.androidNavigationX = this.clampAndroidNavigationX(expandedX);
+        this.androidNavigationY = this.clampAndroidNavigationY(expandedY);
+      } else {
+        const collapsedX = this.androidNavigationCollapsedX >= 0
+          ? this.androidNavigationCollapsedX
+          : this.previewViewWidth - ANDROID_NAVIGATION_COLLAPSED_WIDTH - ANDROID_NAVIGATION_EDGE_MARGIN;
+        const collapsedY = this.androidNavigationCollapsedY >= 0
+          ? this.androidNavigationCollapsedY
+          : this.previewViewHeight - ANDROID_NAVIGATION_COLLAPSED_HEIGHT - ANDROID_NAVIGATION_BOTTOM_OFFSET;
+        this.androidNavigationX = this.clampAndroidNavigationX(collapsedX);
+        this.androidNavigationY = this.clampAndroidNavigationY(collapsedY);
+      }
+      this.androidNavigationPositionInitialized = true;
+      this.saveAndroidNavigationPosition();
+    }
+    this.preferences?.saveAndroidNavigationVisible(expanded);
   }
 
   private sendAndroidNavigationButton(button: string, down: boolean): void {
@@ -906,6 +969,13 @@ struct RustDeskIndex {
       this.androidNavigationPositionInitialized = androidNavigationState.positionInitialized;
       this.androidNavigationX = androidNavigationState.x;
       this.androidNavigationY = androidNavigationState.y;
+      if (this.androidNavigationVisible) {
+        this.androidNavigationExpandedX = androidNavigationState.x;
+        this.androidNavigationExpandedY = androidNavigationState.y;
+      } else {
+        this.androidNavigationCollapsedX = androidNavigationState.x;
+        this.androidNavigationCollapsedY = androidNavigationState.y;
+      }
       this.activeSessionDefaults = this.copySessionDefaults(this.sessionDefaults);
       this.clipboardSyncEnabled = this.sessionDefaults.clipboardEnabled;
 
@@ -6888,20 +6958,18 @@ struct RustDeskIndex {
 
   @Builder
   private androidNavigationOverlay() {
-    if (this.androidNavigationAvailable() && this.androidNavigationVisible) {
+    if (this.androidNavigationAvailable()) {
       Stack() {
         AndroidNavigationBar({
+          collapsed: !this.androidNavigationVisible,
           onBack: () => this.sendAndroidBack(),
           onHome: () => this.sendAndroidHome(),
           onRecent: () => this.sendAndroidRecentApps(),
-          onHide: () => {
-            this.androidNavigationVisible = false;
-            this.preferences?.saveAndroidNavigationVisible(false);
-          },
+          onHide: () => this.setAndroidNavigationExpanded(!this.androidNavigationVisible),
         });
       }
-      .width(ANDROID_NAVIGATION_BAR_WIDTH)
-      .height(ANDROID_NAVIGATION_BAR_HEIGHT)
+      .width(this.androidNavigationOverlayWidth())
+      .height(this.androidNavigationOverlayHeight())
       .position({ x: this.androidNavigationX, y: this.androidNavigationY })
       .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY)
       .gesture(
@@ -7175,8 +7243,8 @@ struct RustDeskIndex {
             onToggleSoftKeyboard: () => this.toggleSoftKeyboard(),
             onToggleSystemIme: () => this.toggleSystemIme(),
             onToggleAndroidNavigation: () => {
-              this.androidNavigationVisible = !this.androidNavigationVisible;
-              if (this.androidNavigationVisible && this.previewViewWidth > 0 && this.previewViewHeight > 0) {
+              const expanded = !this.androidNavigationVisible;
+              if (expanded && this.previewViewWidth > 0 && this.previewViewHeight > 0) {
                 if (this.androidNavigationX <= 0 && this.androidNavigationY <= 0) {
                   this.androidNavigationX = this.clampAndroidNavigationX(
                     (this.previewViewWidth - ANDROID_NAVIGATION_BAR_WIDTH) / 2,
@@ -7186,7 +7254,7 @@ struct RustDeskIndex {
                   );
                 }
               }
-              this.preferences?.saveAndroidNavigationVisible(this.androidNavigationVisible);
+              this.setAndroidNavigationExpanded(expanded);
             },
             onDisconnect: () => this.closeSession('已手动断开连接'),
             onCollapse: () => {

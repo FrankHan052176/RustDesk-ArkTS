@@ -257,7 +257,7 @@ export struct SessionToolbar {
   @Builder
   private AndroidNavigationAction() {
     Button({ type: ButtonType.Normal, stateEffect: true }) {
-      Text(this.displayedAndroidNavigationVisible ? '隐藏导航' : '显示导航')
+      Text(this.displayedAndroidNavigationVisible ? '收起导航' : '展开导航')
         .fontSize($r('app.float.font_caption'))
         .fontWeight(FontWeight.Medium)
         .fontColor(this.displayedAndroidNavigationVisible
@@ -285,7 +285,7 @@ export struct SessionToolbar {
     .borderRadius($r('app.float.radius_10'))
     .shadow(ShadowStyle.OUTER_DEFAULT_SM)
     .hoverEffect(HoverEffect.None)
-    .accessibilityText(this.displayedAndroidNavigationVisible ? '隐藏导航' : '显示导航')
+    .accessibilityText(this.displayedAndroidNavigationVisible ? '收起安卓导航键' : '展开安卓导航键')
     .accessibilitySelected(this.displayedAndroidNavigationVisible)
     .transition(TransitionEffect.OPACITY)
     .onClick((): void => {
