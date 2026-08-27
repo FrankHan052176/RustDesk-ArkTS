@@ -17,7 +17,6 @@ import {
   PASSWORD_MODE_PERMANENT,
   PASSWORD_MODE_TEMPORARY,
 } from '../../../services/controlled/ControlledHostTypes';
-import { FloatingGlassSurface } from './FloatingSurface';
 
 export interface HostSecuritySettingsCardProps {
   hostState: ControlledHostState;
@@ -171,17 +170,6 @@ export struct HostSecuritySettingsCard {
     return id.length > 0 ? id : '未命名设备';
   }
 
-  private passwordMeasurementKey(): string {
-    return `${this.hostState.verificationMethod}:${String(this.hostState.permanentPasswordSet)}:` +
-      `${String(this.confirmRemovePassword)}:${this.passwordValidationText()}`;
-  }
-
-  private twoFactorMeasurementKey(): string {
-    return `${String(this.twoFactor.setupUri.length > 0)}:${String(this.twoFactor.enabled)}:` +
-      `${String(this.confirmDisableTwoFactor)}:${String(this.setupSecretVisible)}:` +
-      `${this.twoFactor.trustedDevices.length}`;
-  }
-
   @Builder
   private SectionHeading(icon: Resource, title: ResourceStr, subtitle: ResourceStr) {
     Row({ space: 12 }) {
@@ -208,12 +196,7 @@ export struct HostSecuritySettingsCard {
 
   @Builder
   private PasswordSection() {
-    FloatingGlassSurface({
-      surfaceWidth: this.surfaceWidth(),
-      radius: $r('app.float.radius_24'),
-      measurementKey: this.passwordMeasurementKey(),
-    }) {
-      Column({ space: 16 }) {
+    Column({ space: 16 }) {
         this.SectionHeading($r('sys.symbol.lock_shield'), '访问密码',
           '密码只通过回调交给安全服务处理；输入草稿不会持久化，也不会写入日志。');
         LuminousSegmentedControl({
@@ -334,21 +317,15 @@ export struct HostSecuritySettingsCard {
             .lineHeight(18)
             .fontColor($r('app.color.error'));
         }
-      }
-      .width('100%')
-      .padding(this.compact() ? 16 : 22)
-      .alignItems(HorizontalAlign.Start);
     }
+    .width('100%')
+    .padding(this.compact() ? 16 : 22)
+    .alignItems(HorizontalAlign.Start);
   }
 
   @Builder
   private TwoFactorSection() {
-    FloatingGlassSurface({
-      surfaceWidth: this.surfaceWidth(),
-      radius: $r('app.float.radius_24'),
-      measurementKey: this.twoFactorMeasurementKey(),
-    }) {
-      Column({ space: 16 }) {
+    Column({ space: 16 }) {
         this.SectionHeading($r('sys.symbol.checkmark_shield'), '双重认证',
           '2FA 在密码验证成功后执行，不能替代密码。');
         if (this.twoFactor.setupUri.length > 0 && !this.twoFactor.enabled) {
@@ -485,21 +462,15 @@ export struct HostSecuritySettingsCard {
             .lineHeight(18)
             .fontColor($r('app.color.error'));
         }
-      }
-      .width('100%')
-      .padding(this.compact() ? 16 : 22)
-      .alignItems(HorizontalAlign.Start);
     }
+    .width('100%')
+    .padding(this.compact() ? 16 : 22)
+    .alignItems(HorizontalAlign.Start);
   }
 
   @Builder
   private TrustedDevicesSection() {
-    FloatingGlassSurface({
-      surfaceWidth: this.surfaceWidth(),
-      radius: $r('app.float.radius_24'),
-      measurementKey: `${this.twoFactor.trustedDevices.length}:${String(this.confirmClearTrustedDevices)}`,
-    }) {
-      Column({ space: 14 }) {
+    Column({ space: 14 }) {
         this.SectionHeading($r('sys.symbol.person_crop_circle_fill'), '受信任设备',
           '列表仅显示设备标识信息；受信任状态只跳过 2FA，不会绕过密码。');
         Text(this.twoFactor.trustedDevicesEnabled ? '功能已启用' : '功能已关闭')
@@ -578,11 +549,10 @@ export struct HostSecuritySettingsCard {
             });
           }
         }
-      }
-      .width('100%')
-      .padding(this.compact() ? 16 : 22)
-      .alignItems(HorizontalAlign.Start);
     }
+    .width('100%')
+    .padding(this.compact() ? 16 : 22)
+    .alignItems(HorizontalAlign.Start);
   }
 
   build(): void {
