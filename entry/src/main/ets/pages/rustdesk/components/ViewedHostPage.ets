@@ -6,11 +6,11 @@ export interface ViewedHostPageProps {
   scroller: Scroller;
   titleSpacerHeight: number;
   bottomAvoidInset: number;
+  wideLayout: boolean;
   onStart: () => void;
   onStop: () => void;
   onReject: () => void;
   onRefreshPassword: () => void;
-  onOpenRecordingPermission: () => void;
 }
 
 @ComponentV2
@@ -19,12 +19,12 @@ export struct ViewedHostPage {
   @Param scroller: Scroller = new Scroller();
   @Param titleSpacerHeight: number = 56;
   @Param bottomAvoidInset: number = 0;
+  @Param wideLayout: boolean = false;
   @Local viewportWidth: number = 760;
   @Event onStart: () => void = () => {};
   @Event onStop: () => void = () => {};
   @Event onReject: () => void = () => {};
   @Event onRefreshPassword: () => void = () => {};
-  @Event onOpenRecordingPermission: () => void = () => {};
 
   private horizontalPadding(): number {
     if (this.viewportWidth >= 1100) {
@@ -53,7 +53,7 @@ export struct ViewedHostPage {
             .fontSize(24)
             .fontWeight(FontWeight.Bold)
             .fontColor($r('app.color.neu_text_primary'));
-          Text('仅共享屏幕画面和系统音频。远端无法使用键盘、鼠标、触摸、剪贴板或文件控制。')
+          Text('仅共享本机屏幕和系统音频，远端不能控制此设备。')
             .width('100%')
             .fontSize(13)
             .lineHeight(20)
@@ -68,11 +68,10 @@ export struct ViewedHostPage {
           onStop: () => this.onStop(),
           onReject: () => this.onReject(),
           onRefreshPassword: () => this.onRefreshPassword(),
-          onOpenRecordingPermission: () => this.onOpenRecordingPermission(),
         });
         Blank()
           .width('100%')
-          .height(48 + this.bottomAvoidInset)
+          .height((this.wideLayout ? 48 : 120) + this.bottomAvoidInset)
           .flexShrink(0);
       }
       .width('100%')

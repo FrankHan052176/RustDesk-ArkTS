@@ -8064,7 +8064,6 @@ struct RustDeskIndex {
       onControlledRefresh: () => {
         controlledHostCoordinator.refreshPasswordState();
         controlledHostCoordinator.refreshTwoFactorState();
-        controlledHostCoordinator.refreshPermissionState();
       },
       onControlledPasswordModeChange: (mode: ControlledPasswordMode) =>
         controlledHostCoordinator.setVerificationMethod(mode),
@@ -8092,11 +8091,11 @@ struct RustDeskIndex {
       scroller: this.viewedHostScroller,
       titleSpacerHeight: this.mainTitleSpacerHeight(),
       bottomAvoidInset: this.windowBottomAvoidInset,
+      wideLayout: this.isWideMainLayout(),
       onStart: () => void controlledHostCoordinator.start(),
       onStop: () => controlledHostCoordinator.stop('已由用户停止被看服务'),
       onReject: () => controlledHostCoordinator.rejectIncoming(),
       onRefreshPassword: () => controlledHostCoordinator.refreshTemporaryPassword(),
-      onOpenRecordingPermission: () => void controlledHostCoordinator.openRecordingPermissionSettings(),
     })
   }
 

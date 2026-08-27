@@ -1,5 +1,3 @@
-import { abilityAccessCtrl } from '@kit.AbilityKit';
-
 export type ControlledHostPhase = 'disabled' | 'starting' | 'ready' | 'incoming' | 'active' | 'stopping' |
   'failed';
 export type ControlledPasswordMode = 'use-temporary-password' | 'use-permanent-password' | 'use-both-passwords';
@@ -52,7 +50,6 @@ export class ControlledHostState {
   @Trace incoming: ControlledIncomingPeer | undefined = undefined;
   @Trace activePeerName: string = '';
   @Trace captureActive: boolean = false;
-  @Trace recordingPermission: abilityAccessCtrl.PermissionStatus = abilityAccessCtrl.PermissionStatus.DENIED;
   @Trace runningInBackground: boolean = false;
 }
 

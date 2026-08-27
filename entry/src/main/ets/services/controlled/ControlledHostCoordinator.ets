@@ -1,4 +1,4 @@
-import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
+import { common } from '@kit.AbilityKit';
 import { display } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ControlledHostBackgroundService } from './ControlledHostBackgroundService';
@@ -23,8 +23,6 @@ import { NativeHostBridge } from './NativeHostBridge';
 const DOMAIN = 0xFF00;
 const TAG = 'RustDeskViewedHost';
 const POLL_INTERVAL_MS = 250;
-const CUSTOM_SCREEN_RECORDING_PERMISSION: Permissions = 'ohos.permission.CUSTOM_SCREEN_RECORDING';
-
 class ControlledStartOptions {
   requireLocalApproval: boolean = false;
   enableInput: boolean = false;
@@ -65,7 +63,7 @@ export class ControlledHostCoordinator {
     this.runtimeReady = false;
     this.state.phase = 'disabled';
     this.state.statusText = '可启用屏幕与设备内音频共享';
-    this.refreshPermissionState();
+    this.emitState();
   }
 
   onRuntimeReady(): void {
@@ -112,17 +110,10 @@ export class ControlledHostCoordinator {
       this.emitState();
       return;
     }
-    this.refreshPermissionState();
-    if (this.state.recordingPermission !== abilityAccessCtrl.PermissionStatus.GRANTED) {
-      this.state.lastError = '当前签名 Profile 未授予或系统已撤销“自定义屏幕录制”受限权限。';
-      this.state.statusText = this.state.lastError;
-      this.emitState();
-      return;
-    }
     const currentGeneration = this.generation + 1;
     this.generation = currentGeneration;
     this.state.phase = 'starting';
-    this.state.statusText = '正在启动被看服务';
+    this.state.statusText = '正在等待系统录屏确认';
     this.state.lastError = '';
     this.emitState();
     try {
@@ -278,31 +269,6 @@ export class ControlledHostCoordinator {
     }
   }
 
-  refreshPermissionState(): void {
-    const manager = abilityAccessCtrl.createAtManager();
-    try {
-      this.state.recordingPermission = manager.getSelfPermissionStatus(CUSTOM_SCREEN_RECORDING_PERMISSION);
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'Recording permission status unavailable: %{public}s', String(error));
-    }
-    this.emitState();
-  }
-
-  async openRecordingPermissionSettings(): Promise<void> {
-    if (this.context === undefined) {
-      return;
-    }
-    const manager = abilityAccessCtrl.createAtManager();
-    try {
-      await manager.openPermissionOnSetting(this.context, CUSTOM_SCREEN_RECORDING_PERMISSION);
-      this.state.lastError = '';
-    } catch (error) {
-      this.state.lastError = `无法查看屏幕录制权限设置；请确认签名 Profile 已包含受限授权：${String(error)}`;
-    } finally {
-      this.refreshPermissionState();
-    }
-  }
-
   refreshTwoFactorState(): void {
     try {
       const payload = JSON.parse(this.bridge.twoFactor()) as ControlledTwoFactorPayload;
@@ -431,11 +397,6 @@ export class ControlledHostCoordinator {
     }
     if (this.runtimeReady) {
       this.refreshIdentityState();
-    }
-    this.refreshPermissionState();
-    if (this.running() && this.state.recordingPermission !== abilityAccessCtrl.PermissionStatus.GRANTED) {
-      this.failClosed('屏幕录制权限已撤销，被看服务已停止');
-      return;
     }
     if (this.running()) {
       this.state.statusText = this.state.phase === 'active' ? this.state.statusText :

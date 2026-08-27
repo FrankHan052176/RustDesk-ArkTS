@@ -78,16 +78,6 @@
         "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
       },
       {
-        "name": "ohos.permission.CUSTOM_SCREEN_RECORDING",
-        "reason": "$string:custom_screen_recording_permission_reason",
-        "usedScene": {
-          "abilities": [
-            "EntryAbility"
-          ],
-          "when": "inuse"
-        }
-      },
-      {
         "name": "ohos.permission.INTERNET",
         "usedScene": {
           "abilities": [
