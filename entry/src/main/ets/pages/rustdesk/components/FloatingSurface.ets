@@ -17,6 +17,7 @@ export struct FloatingGlassSurface {
   /** 已知实体尺寸时直接渲染，避免首帧依赖 onAreaChange 的透明测量分支。 */
   @Param surfaceWidth: number = 0;
   @Param surfaceHeight: number = 0;
+  @Param measurementKey: string = '';
   @Local measuredSurfaceWidth: number = 0;
   @Local measuredSurfaceHeight: number = 0;
 
@@ -55,6 +56,16 @@ export struct FloatingGlassSurface {
 
   private hasSurfaceSize(): boolean {
     return this.resolvedSurfaceWidth() > 0 && this.resolvedSurfaceHeight() > 0;
+  }
+
+  @Monitor('measurementKey')
+  private onMeasurementKeyChanged(_monitor: IMonitor): void {
+    if (this.surfaceWidth <= 0) {
+      this.measuredSurfaceWidth = 0;
+    }
+    if (this.surfaceHeight <= 0) {
+      this.measuredSurfaceHeight = 0;
+    }
   }
 
   private updateSurfaceSize(newArea: Area): void {
