@@ -21,11 +21,16 @@ export struct ViewedHostCard {
   @Param state: ControlledHostState = new ControlledHostState();
   @Param surfaceWidth: number = 520;
   @Local passwordVisible: boolean = false;
+  @Local passwordDisplayText: string = '等待生成';
   @Local passwordRevealGeneration: number = 0;
   @Event onStart: () => void = () => {};
   @Event onStop: () => void = () => {};
   @Event onReject: () => void = () => {};
   @Event onRefreshPassword: () => void = () => {};
+
+  aboutToAppear(): void {
+    this.hideTemporaryPassword();
+  }
 
   aboutToDisappear(): void {
     this.hideTemporaryPassword();
@@ -61,6 +66,7 @@ export struct ViewedHostCard {
   private hideTemporaryPassword(): void {
     this.passwordRevealGeneration += 1;
     this.passwordVisible = false;
+    this.passwordDisplayText = this.state.temporaryPassword.length > 0 ? '••••••' : '等待生成';
   }
 
   private revealTemporaryPassword(): void {
@@ -70,9 +76,10 @@ export struct ViewedHostCard {
     this.passwordRevealGeneration += 1;
     const generation: number = this.passwordRevealGeneration;
     this.passwordVisible = true;
+    this.passwordDisplayText = this.state.temporaryPassword;
     setTimeout((): void => {
       if (generation === this.passwordRevealGeneration) {
-        this.passwordVisible = false;
+        this.hideTemporaryPassword();
       }
     }, 15000);
   }
@@ -83,29 +90,6 @@ export struct ViewedHostCard {
     }
     const peerName: string = this.state.incoming.peerName.trim();
     return peerName.length > 0 ? peerName : this.state.incoming.peerId;
-  }
-
-  @Builder
-  private PasswordActionButton(label: ResourceStr, enabled: boolean, onClick: () => void) {
-    Button({ type: ButtonType.Normal, stateEffect: true }) {
-      Text(label)
-        .fontSize(15)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(enabled ? $r('app.color.neu_text_primary') : $r('app.color.neu_text_secondary'))
-        .maxLines(1);
-    }
-    .width(this.actionWidth())
-    .height(48)
-    .backgroundColor($r('app.color.mica_control'))
-    .border({ width: 1, color: $r('app.color.mica_border') })
-    .borderRadius($r('app.float.radius_14'))
-    .hoverEffect(HoverEffect.None)
-    .enabled(enabled)
-    .onClick((): void => {
-      if (enabled) {
-        onClick();
-      }
-    });
   }
 
   @Builder
@@ -167,22 +151,84 @@ export struct ViewedHostCard {
   }
 
   @Builder
+  private PasswordInsetValue() {
+    Stack({ alignContent: Alignment.Center }) {
+      LuminousSurface({
+        depth: -1,
+        surfaceWidth: this.innerWidth(),
+        surfaceHeight: 60,
+        cornerRadius: 18,
+        motionEnabled: true,
+      }) {
+        Column({ space: 3 }) {
+          Text('临时密码')
+            .width('100%')
+            .fontSize(11)
+            .fontColor($r('app.color.neu_text_secondary'));
+          Text(this.passwordDisplayText)
+            .width('100%')
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontFamily('monospace')
+            .fontColor($r('app.color.neu_text_primary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
+        }
+        .width('100%')
+        .padding({ left: 18, right: 18, top: 9, bottom: 9 })
+        .alignItems(HorizontalAlign.Start);
+      }
+    }
+    .width(this.innerWidth())
+    .height(60)
+    .clip(false);
+  }
+
+  @Builder
   private IdentitySection() {
     Column({ space: 14 }) {
       this.SectionHeading($r('sys.symbol.display'), '设备身份', '临时密码显示 15 秒后自动隐藏。');
       this.InsetValue('设备 ID', this.state.myId.length > 0 ? this.state.myId : '正在加载', true);
-      this.InsetValue('临时密码', this.state.temporaryPassword.length === 0 ? '等待生成' :
-        (this.passwordVisible ? this.state.temporaryPassword : '••••••'), true);
+      this.PasswordInsetValue();
       Row({ space: 12 }) {
-        this.PasswordActionButton(this.passwordVisible ? '隐藏密码' : '显示密码',
-          this.state.temporaryPassword.length > 0, (): void => {
+        Button({ type: ButtonType.Normal, stateEffect: true }) {
+          Text(this.passwordVisible ? '隐藏密码' : '显示密码')
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.state.temporaryPassword.length > 0
+              ? $r('app.color.neu_text_primary') : $r('app.color.neu_text_secondary'))
+            .maxLines(1);
+        }
+        .width(this.actionWidth())
+        .height(48)
+        .backgroundColor($r('app.color.mica_control'))
+        .border({ width: 1, color: $r('app.color.mica_border') })
+        .borderRadius($r('app.float.radius_14'))
+        .hoverEffect(HoverEffect.None)
+        .enabled(this.state.temporaryPassword.length > 0)
+        .onClick((): void => {
+          if (this.state.temporaryPassword.length > 0) {
             if (this.passwordVisible) {
               this.hideTemporaryPassword();
             } else {
               this.revealTemporaryPassword();
             }
-          });
-        this.PasswordActionButton('刷新密码', true, (): void => {
+          }
+        });
+        Button({ type: ButtonType.Normal, stateEffect: true }) {
+          Text('刷新密码')
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.neu_text_primary'))
+            .maxLines(1);
+        }
+        .width(this.actionWidth())
+        .height(48)
+        .backgroundColor($r('app.color.mica_control'))
+        .border({ width: 1, color: $r('app.color.mica_border') })
+        .borderRadius($r('app.float.radius_14'))
+        .hoverEffect(HoverEffect.None)
+        .onClick((): void => {
           this.hideTemporaryPassword();
           this.onRefreshPassword();
         });
