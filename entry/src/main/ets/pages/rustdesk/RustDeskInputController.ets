@@ -95,7 +95,7 @@ export class RustDeskInputController {
   private touchTwoFingerTransformActive: boolean = false;
   private touchThreeFingerLastCenterY: number = 0;
   private touchThreeFingerScrollIntegral: number = 0;
-  private touchSuppressUntilAllReleased: boolean = false;
+  private touchSuppressedIds: Set<number> = new Set();
   private touchLongPressTimer: number = -1;
   private touchTapTimeoutTimer: number = -1;
   private relativeLastX: number = 0;
@@ -126,7 +126,7 @@ export class RustDeskInputController {
     this.flushRelativeMouseMove();
     this.clearRelativeMouseState(false);
     this.clearTouchPointerState();
-    this.touchSuppressUntilAllReleased = false;
+    this.touchSuppressedIds.clear();
     this.releasePressedButtons();
     this.releaseInterceptedKeys();
     this.activeModifiers.clear();
@@ -140,7 +140,7 @@ export class RustDeskInputController {
     this.cancelTouchTimers();
     this.applyTouchActions(this.touchGestureState.reset());
     this.clearTouchPointerState();
-    this.touchSuppressUntilAllReleased = false;
+    this.touchSuppressedIds.clear();
     this.releasePressedButtons();
     if (this.relativeModeActive) {
       this.flushRelativeMouseMove();
@@ -160,7 +160,7 @@ export class RustDeskInputController {
     this.cancelTouchTimers();
     this.applyTouchActions(this.touchGestureState.reset());
     this.clearTouchPointerState();
-    this.touchSuppressUntilAllReleased = false;
+    this.touchSuppressedIds.clear();
     this.releasePressedButtons();
     if (this.relativeModeActive) {
       this.flushRelativeMouseMove();
@@ -544,7 +544,7 @@ export class RustDeskInputController {
   }
 
   private handleTouchDown(event: TouchEvent): void {
-    if (this.touchSuppressUntilAllReleased) {
+    if (this.touchSuppressedIds.size > 0) {
       return;
     }
     const now = Date.now();
@@ -572,8 +572,8 @@ export class RustDeskInputController {
         if (!this.callbacks.gesturesEnabled()) {
           this.cancelTouchTimers();
           this.applyTouchActions(this.touchGestureState.reset());
+          this.beginTouchSuppression();
           this.clearTouchPointerState();
-          this.touchSuppressUntilAllReleased = true;
           return;
         }
         this.touchSecondaryId = touch.id;
@@ -799,10 +799,33 @@ export class RustDeskInputController {
     this.callbacks.sendMouse(payload);
   }
 
+  private beginTouchSuppression(): void {
+    this.touchSuppressedIds.clear();
+    if (this.touchPrimaryId !== -1) {
+      this.touchSuppressedIds.add(this.touchPrimaryId);
+    }
+    if (this.touchSecondaryId !== -1) {
+      this.touchSuppressedIds.add(this.touchSecondaryId);
+    }
+    if (this.touchThirdId !== -1) {
+      this.touchSuppressedIds.add(this.touchThirdId);
+    }
+  }
+
+  private releaseSuppressedTouches(touches: Array<TouchObject>): void {
+    for (let index = 0; index < touches.length; index++) {
+      this.touchSuppressedIds.delete(touches[index].id);
+    }
+  }
+
   private handleTouchRelease(event: TouchEvent): void {
-    if (this.touchSuppressUntilAllReleased) {
-      if (event.type === TouchType.Cancel || event.touches.length === 0) {
-        this.touchSuppressUntilAllReleased = false;
+    if (this.touchSuppressedIds.size > 0) {
+      if (event.type === TouchType.Cancel) {
+        this.touchSuppressedIds.clear();
+      } else {
+        this.releaseSuppressedTouches(event.changedTouches);
+      }
+      if (this.touchSuppressedIds.size === 0) {
         this.clearTouchPointerState();
       }
       return;
@@ -839,7 +862,8 @@ export class RustDeskInputController {
       if (this.touchThirdId !== -1 || thirdReleased) {
         this.cancelTouchTimers();
         this.applyTouchActions(this.touchGestureState.reset());
-        this.touchSuppressUntilAllReleased = event.touches.length > 0;
+        this.beginTouchSuppression();
+        this.releaseSuppressedTouches(changedTouches);
         this.clearTouchPointerState();
         return;
       }
