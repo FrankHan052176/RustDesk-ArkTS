@@ -12,6 +12,7 @@ import {
 import { EasyTierInstanceSummary } from '../../../services/EasyTierApiService';
 import { DirectorySnapshot, PeerRecord } from '../RustDeskDirectoryTypes';
 import { RustDeskLayoutTokens } from '../RustDeskLayoutTokens';
+import { FloatingActionSurface } from './FloatingSurface';
 
 export interface ConnectTabProps {
   target: string;
@@ -55,8 +56,6 @@ export struct ConnectTab {
   @Param scroller: Scroller = new Scroller();
   @Local viewportWidth: number = 390;
   @Local connectionMode: number = 0;
-  @Local recentPressedTarget: string = '';
-  @Local recentHoveredTarget: string = '';
   @Event onTargetChange: (value: string) => void = (_value: string) => {};
   @Event onConnectRemote: () => void = () => {};
   @Event onViewOnly: () => void = () => {};
@@ -92,6 +91,10 @@ export struct ConnectTab {
     return this.controlWidth() + 40;
   }
 
+  private compactControlVisualOffsetX(): number {
+    return this.isCompact() ? -6 : 0;
+  }
+
   private secondaryMenuFrameOverhead(): number {
     const mainPadding = LuminousNeoTokens.shadowPaddingFor(this.easyTierMenuHeight());
     const handlePadding = LuminousNeoTokens.shadowPaddingFor(40);
@@ -107,11 +110,11 @@ export struct ConnectTab {
   }
 
   private recentCardFrameWidth(): number {
-    return (this.recentFrameWidth() - 8) / 2;
+    return (this.recentContentWidth() - 8) / 2;
   }
 
   private recentCardContentWidth(): number {
-    return Math.max(120, this.recentCardFrameWidth() - 20);
+    return Math.max(120, this.recentCardFrameWidth() - 4);
   }
 
   private targetReady(): boolean {
@@ -302,7 +305,12 @@ export struct ConnectTab {
   }
 
   private recentPeerTarget(peer: PeerRecord): string {
-    return peer.targetId.trim();
+    const targetId = peer.targetId.trim();
+    if (targetId.length > 0) {
+      return targetId;
+    }
+    const lanIp = peer.lanIp.trim();
+    return lanIp.length > 0 ? lanIp : peer.id.trim();
   }
 
   private recentPeerSubtitle(peer: PeerRecord): string {
@@ -327,21 +335,6 @@ export struct ConnectTab {
     return peer.onlineKnown && peer.online
       ? $r('app.color.success')
       : $r('app.color.neu_text_secondary');
-  }
-
-  private recentCardOpacity(peer: PeerRecord): number {
-    const target = this.recentPeerTarget(peer);
-    if (target.length > 0 && this.recentPressedTarget === target) {
-      return 0.76;
-    }
-    if (target.length > 0 && this.recentHoveredTarget === target) {
-      return 0.9;
-    }
-    return 1;
-  }
-
-  private recentCardShadowPadding(): number {
-    return LuminousNeoTokens.shadowPaddingFor(72);
   }
 
   @Builder
@@ -388,6 +381,7 @@ export struct ConnectTab {
         },
       })
         .margin({ top: -6 })
+        .translate({ x: this.compactControlVisualOffsetX() })
 
       LuminousTextField({
         value: this.target,
@@ -398,6 +392,7 @@ export struct ConnectTab {
         onChange: (value: string): void => this.onTargetChange(value),
       })
         .margin({ top: -26 })
+        .translate({ x: this.compactControlVisualOffsetX() })
 
       LuminousButton({
         label: this.primaryActionLabel(),
@@ -410,6 +405,7 @@ export struct ConnectTab {
         onAction: (): void => this.activatePrimaryAction(),
       })
         .margin({ top: -28 })
+        .translate({ x: this.compactControlVisualOffsetX() })
 
       if (this.easyTierAvailable) {
         Row({ space: 6 }) {
@@ -450,6 +446,7 @@ export struct ConnectTab {
         .clip(false)
         .zIndex(200)
         .margin({ top: -22 })
+        .translate({ x: this.compactControlVisualOffsetX() })
       }
 
       if (this.canDisconnect) {
@@ -462,6 +459,7 @@ export struct ConnectTab {
           onAction: (): void => this.onDisconnect(),
         })
           .margin({ top: -22 })
+          .translate({ x: this.compactControlVisualOffsetX() })
       }
     }
     .width(this.stageFrameWidth())
@@ -514,89 +512,55 @@ export struct ConnectTab {
   @Builder
   private CompactRecentCard(peer: PeerRecord) {
     Stack({ alignContent: Alignment.Center }) {
-      Stack({ alignContent: Alignment.TopStart }) {
-        Stack({ alignContent: Alignment.TopStart }) {
-          LuminousSurface({
-            depth: 0.3,
-            surfaceWidth: this.recentCardContentWidth(),
-            surfaceHeight: 72,
-            cornerRadius: 20,
-            motionEnabled: false,
-          }) {
-            Row({ space: 12 }) {
-              Column({ space: 3 }) {
-                Text(this.recentPeerName(peer))
-                  .width('100%')
-                  .fontSize(15)
-                  .fontWeight(FontWeight.Medium)
-                  .fontColor($r('app.color.neu_text_primary'))
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis });
-                Text(this.recentPeerSubtitle(peer))
-                  .width('100%')
-                  .fontSize(12)
-                  .fontColor($r('app.color.neu_text_secondary'))
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis });
-              }
-              .layoutWeight(1)
-              .alignItems(HorizontalAlign.Start);
+      Stack() {
+        FloatingActionSurface({
+          subtleDepth: true,
+          actionEnabled: this.recentPeerTarget(peer).length > 0,
+          accessibilityLabel: `选择设备 ${this.recentPeerName(peer)}，填入 ${this.recentPeerTarget(peer)}`,
+          onActivate: (): void => {
+            this.onTargetChange(this.recentPeerTarget(peer));
+          },
+        }) {
+          Stack({ alignContent: Alignment.TopStart }) {
+            Text(this.recentPeerStatus(peer))
+              .width('100%')
+              .fontSize(30)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.recentPeerStatusColor(peer))
+              .opacity(0.16)
+              .textAlign(TextAlign.End)
+              .maxLines(1)
+              .translate({ x: 10, y: -10 })
+              .zIndex(0);
 
-              Row({ space: 6 }) {
-                Row()
-                  .width(8)
-                  .height(8)
-                  .borderRadius(4)
-                  .backgroundColor(this.recentPeerStatusColor(peer));
-                Text(this.recentPeerStatus(peer))
-                  .fontSize(12)
-                  .fontWeight(FontWeight.Medium)
-                  .fontColor(this.recentPeerStatusColor(peer));
-              }
-              .flexShrink(0)
-              .alignItems(VerticalAlign.Center);
+            Column({ space: 3 }) {
+              Text(this.recentPeerName(peer))
+                .width('100%')
+                .fontSize(15)
+                .fontWeight(FontWeight.Medium)
+                .fontColor($r('app.color.neu_text_primary'))
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis });
+              Text(this.recentPeerSubtitle(peer))
+                .width('100%')
+                .fontSize(12)
+                .fontColor($r('app.color.neu_text_secondary'))
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis });
             }
-            .width(this.recentCardContentWidth())
-            .height(72)
-            .padding({ left: 18, right: 18 })
-            .alignItems(VerticalAlign.Center);
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+            .zIndex(1);
           }
+          .width('100%')
+          .height('100%')
+          .padding({ left: 16, right: 16, top: 16, bottom: 14 })
+          .clip(true);
         }
-        .width(this.recentCardContentWidth() + this.recentCardShadowPadding() * 2)
-        .height(72 + this.recentCardShadowPadding() * 2)
-        .position({
-          x: -this.recentCardShadowPadding(),
-          y: -this.recentCardShadowPadding(),
-        })
-        .clip(false);
       }
       .width(this.recentCardContentWidth())
       .height(72)
-      .clip(false)
-      .opacity(this.recentCardOpacity(peer));
-
-      Button({ type: ButtonType.Normal, stateEffect: false }) {
-        Row()
-      }
-      .width(this.recentCardContentWidth())
-      .height(72)
-      .padding(0)
-      .backgroundColor(Color.Transparent)
-      .borderRadius(20)
-      .enabled(this.recentPeerTarget(peer).length > 0)
-      .hoverEffect(HoverEffect.None)
-      .accessibilityText(`选择设备 ${this.recentPeerName(peer)}，填入 ${this.recentPeerTarget(peer)}`)
-      .onHover((isHover: boolean): void => {
-        this.recentHoveredTarget = isHover ? this.recentPeerTarget(peer) : '';
-      })
-      .onTouch((event: TouchEvent): void => {
-        if (event.type === TouchType.Down) {
-          this.recentPressedTarget = this.recentPeerTarget(peer);
-        } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-          this.recentPressedTarget = '';
-        }
-      })
-      .onClick((): void => this.onTargetChange(this.recentPeerTarget(peer)));
+      .clip(false);
     }
     .width(this.recentCardFrameWidth())
     .height(80)
@@ -625,6 +589,7 @@ export struct ConnectTab {
                 }
                 .width(this.recentFrameWidth())
                 .height(80)
+                .justifyContent(FlexAlign.Center)
                 .clip(false);
               }, (start: number) => this.recentRowRenderKey(start));
             }

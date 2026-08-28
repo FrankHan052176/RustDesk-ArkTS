@@ -1,3 +1,8 @@
+import {
+  LuminousNeoTokens,
+  LuminousSegmentedControl,
+  LuminousSelectionItem,
+} from 'luminous_neo';
 import { ControlledHostState } from '../../../services/controlled/ControlledHostTypes';
 import { ViewedHostCard } from './ViewedHostCard';
 
@@ -42,27 +47,38 @@ export struct ViewedHostPage {
     return Math.max(280, Math.min(this.viewportWidth - this.horizontalPadding() * 2, 760));
   }
 
+  private modeControlWidth(): number {
+    return Math.max(220, this.contentWidth() - LuminousNeoTokens.shadowPaddingFor(44) * 2);
+  }
+
+  private modeItems(): LuminousSelectionItem[] {
+    return [new LuminousSelectionItem('viewed', '被观看', '仅共享本机屏幕和系统音频')];
+  }
+
+  private contentTitleSpacerHeight(): number {
+    return this.wideLayout ? this.titleSpacerHeight : Math.min(this.titleSpacerHeight, 24);
+  }
+
   build(): void {
     Scroll(this.scroller) {
-      Column({ space: 20 }) {
+      Column({ space: 8 }) {
         Blank()
           .width('100%')
-          .height(this.titleSpacerHeight)
+          .height(this.contentTitleSpacerHeight())
           .flexShrink(0);
-        Column({ space: 6 }) {
-          Text('观看此设备')
-            .width('100%')
-            .fontSize(24)
-            .fontWeight(FontWeight.Bold)
-            .fontColor($r('app.color.neu_text_primary'));
-          Text('仅共享本机屏幕和系统音频，远端不能控制此设备。')
-            .width('100%')
-            .fontSize(13)
-            .lineHeight(20)
-            .fontColor($r('app.color.neu_text_secondary'));
+        Row() {
+          LuminousSegmentedControl({
+            items: this.modeItems(),
+            selectedIndex: 0,
+            controlWidth: this.modeControlWidth(),
+            controlHeight: 44,
+            motionEnabled: true,
+            onChange: (_index: number): void => {},
+          })
         }
         .width(this.contentWidth())
-        .alignItems(HorizontalAlign.Start);
+        .justifyContent(FlexAlign.Center)
+        .clip(false);
         ViewedHostCard({
           state: this.state,
           surfaceWidth: this.contentWidth(),
@@ -78,6 +94,7 @@ export struct ViewedHostPage {
           .flexShrink(0);
       }
       .width('100%')
+      .constraintSize({ minHeight: '100%' })
       .alignItems(HorizontalAlign.Center)
       .onAreaChange((_oldArea: Area, newArea: Area): void => {
         const width: number = Number(newArea.width);

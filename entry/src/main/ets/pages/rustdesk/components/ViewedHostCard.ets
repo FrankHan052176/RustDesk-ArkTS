@@ -6,6 +6,7 @@ import {
   LuminousTone,
 } from 'luminous_neo';
 import { ControlledHostState } from '../../../services/controlled/ControlledHostTypes';
+import { FloatingActionSurface } from './FloatingSurface';
 
 export interface ViewedHostCardProps {
   state: ControlledHostState;
@@ -62,7 +63,8 @@ export struct ViewedHostCard {
   }
 
   private fullActionWidth(): number {
-    return Math.max(180, this.innerWidth() - LuminousNeoTokens.shadowPaddingFor(52) * 2);
+    return Math.max(180,
+      this.innerWidth() - LuminousNeoTokens.shadowPaddingFor(LuminousNeoTokens.COMPACT_HEIGHT) * 2);
   }
 
   private hideTemporaryPassword(): void {
@@ -116,14 +118,14 @@ export struct ViewedHostCard {
       LuminousSurface({
         depth: -1,
         surfaceWidth: this.innerWidth(),
-        surfaceHeight: 60,
-        cornerRadius: 18,
+        surfaceHeight: 54,
+        cornerRadius: 16,
         motionEnabled: true,
       }) {
-        Column({ space: 3 }) {
+        Column({ space: 1 }) {
           Text(label)
             .width('100%')
-            .fontSize(11)
+            .fontSize(10)
             .fontColor($r('app.color.neu_text_secondary'));
           Text(value)
             .width('100%')
@@ -135,12 +137,12 @@ export struct ViewedHostCard {
             .textOverflow({ overflow: TextOverflow.Ellipsis });
         }
         .width('100%')
-        .padding({ left: 18, right: 18, top: 9, bottom: 9 })
+        .padding({ left: 14, right: 14, top: 7, bottom: 7 })
         .alignItems(HorizontalAlign.Start);
       }
     }
     .width(this.innerWidth())
-    .height(60)
+    .height(54)
     .clip(false);
   }
 
@@ -150,101 +152,107 @@ export struct ViewedHostCard {
       LuminousSurface({
         depth: -1,
         surfaceWidth: this.innerWidth(),
-        surfaceHeight: 60,
-        cornerRadius: 18,
+        surfaceHeight: 54,
+        cornerRadius: 16,
         motionEnabled: true,
       }) {
-        Column({ space: 3 }) {
-          Text('临时密码')
-            .width('100%')
-            .fontSize(11)
-            .fontColor($r('app.color.neu_text_secondary'));
-          Text(this.passwordDisplayText)
-            .width('100%')
-            .fontSize(15)
-            .fontWeight(FontWeight.Medium)
-            .fontFamily('monospace')
-            .fontColor($r('app.color.neu_text_primary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis });
+        Row({ space: 6 }) {
+          Column({ space: 1 }) {
+            Text('临时密码')
+              .width('100%')
+              .fontSize(10)
+              .fontColor($r('app.color.neu_text_secondary'));
+            Text(this.passwordDisplayText)
+              .width('100%')
+              .fontSize(15)
+              .fontWeight(FontWeight.Medium)
+              .fontFamily('monospace')
+              .fontColor($r('app.color.neu_text_primary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis });
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start);
+
+          Stack() {
+            FloatingActionSurface({
+              selected: this.passwordVisible,
+              compact: true,
+              subtleDepth: true,
+              actionEnabled: this.state.temporaryPassword.length > 0,
+              accessibilityLabel: this.passwordVisible ? '隐藏密码' : '显示密码',
+              stopTouchPropagation: true,
+              onActivate: (): void => {
+                if (this.passwordVisible) {
+                  this.hideTemporaryPassword();
+                } else {
+                  this.revealTemporaryPassword();
+                }
+              },
+            }) {
+              Stack({ alignContent: Alignment.Center }) {
+                SymbolGlyph(this.passwordVisible ? $r('sys.symbol.eye_slash') : $r('sys.symbol.eye'))
+                  .fontSize(18)
+                  .fontColor([this.passwordVisible
+                    ? $r('app.color.neu_accent')
+                    : $r('app.color.neu_text_primary')]);
+              }
+              .width('100%')
+              .height('100%');
+            }
+          }
+          .width(34)
+          .height(34);
+
+          Stack() {
+            FloatingActionSurface({
+              compact: true,
+              subtleDepth: true,
+              accessibilityLabel: '刷新密码',
+              stopTouchPropagation: true,
+              onActivate: (): void => {
+                this.hideTemporaryPassword();
+                this.onRefreshPassword();
+              },
+            }) {
+              Stack({ alignContent: Alignment.Center }) {
+                SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+                  .fontSize(18)
+                  .fontColor([$r('app.color.neu_text_primary')]);
+              }
+              .width('100%')
+              .height('100%');
+            }
+          }
+          .width(34)
+          .height(34);
         }
         .width('100%')
-        .padding({ left: 18, right: 18, top: 9, bottom: 9 })
-        .alignItems(HorizontalAlign.Start);
+        .height('100%')
+        .padding({ left: 14, right: 12 })
+        .alignItems(VerticalAlign.Center);
       }
     }
     .width(this.innerWidth())
-    .height(60)
+    .height(54)
     .clip(false);
   }
 
   @Builder
   private IdentitySection() {
-    Column({ space: 14 }) {
+    Column({ space: 8 }) {
       this.SectionHeading($r('sys.symbol.display'), '设备身份', '临时密码显示 15 秒后自动隐藏。');
       this.InsetValue('设备 ID', this.state.myId.length > 0 ? this.state.myId : '正在加载', true);
       this.PasswordInsetValue();
-      Row({ space: 12 }) {
-        Button({ type: ButtonType.Normal, stateEffect: true }) {
-          Text(this.passwordVisible ? '隐藏密码' : '显示密码')
-            .fontSize(15)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.state.temporaryPassword.length > 0
-              ? $r('app.color.neu_text_primary') : $r('app.color.neu_text_secondary'))
-            .maxLines(1);
-        }
-        .width(this.actionWidth())
-        .height(48)
-        .backgroundColor($r('app.color.mica_control'))
-        .border({ width: 1, color: $r('app.color.mica_border') })
-        .borderRadius($r('app.float.radius_14'))
-        .hoverEffect(HoverEffect.None)
-        .enabled(this.state.temporaryPassword.length > 0)
-        .onClick((): void => {
-          if (this.state.temporaryPassword.length > 0) {
-            if (this.passwordVisible) {
-              this.hideTemporaryPassword();
-            } else {
-              this.revealTemporaryPassword();
-            }
-          }
-        });
-        Button({ type: ButtonType.Normal, stateEffect: true }) {
-          Text('刷新密码')
-            .fontSize(15)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.neu_text_primary'))
-            .maxLines(1);
-        }
-        .width(this.actionWidth())
-        .height(48)
-        .backgroundColor($r('app.color.mica_control'))
-        .border({ width: 1, color: $r('app.color.mica_border') })
-        .borderRadius($r('app.float.radius_14'))
-        .hoverEffect(HoverEffect.None)
-        .onClick((): void => {
-          this.hideTemporaryPassword();
-          this.onRefreshPassword();
-        });
-      }
-      .width('100%');
     }
     .width('100%')
     .padding({ left: this.compact() ? 4 : 8, right: this.compact() ? 4 : 8 })
-    .alignItems(HorizontalAlign.Start);
+    .alignItems(HorizontalAlign.Center);
   }
 
   @Builder
   private ServiceSection() {
-    Column({ space: 14 }) {
-      this.SectionHeading($r('sys.symbol.display'), '观看服务',
-        '启动时由系统确认屏幕和设备内音频共享。');
-      Text(this.state.statusText)
-        .width('100%')
-        .fontSize(14)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(this.state.phase === 'incoming' ? $r('app.color.warning') :
-          (this.running() ? $r('app.color.success') : $r('app.color.neu_text_secondary')));
+    Column({ space: 8 }) {
       if (this.state.incoming !== undefined) {
         if (this.state.incomingResolving) {
           LuminousButton({
@@ -259,9 +267,9 @@ export struct ViewedHostCard {
         }
       } else {
         LuminousButton({
-          label: this.running() ? '停止观看服务' : '启动观看服务',
+          label: this.running() ? '停止服务端' : '启动服务端',
           controlWidth: this.fullActionWidth(),
-          controlSizeMode: LuminousControlSize.Regular,
+          controlSizeMode: LuminousControlSize.Compact,
           tone: this.running() ? LuminousTone.Danger : LuminousTone.Accent,
           onAction: () => this.running() ? this.onStop() : this.onStart(),
         });
@@ -276,7 +284,7 @@ export struct ViewedHostCard {
     }
     .width('100%')
     .padding({ left: this.compact() ? 4 : 8, right: this.compact() ? 4 : 8 })
-    .alignItems(HorizontalAlign.Start);
+    .alignItems(HorizontalAlign.Center);
   }
 
   @Builder
@@ -297,11 +305,12 @@ export struct ViewedHostCard {
               onAction: () => this.onReject(requestId, peerId),
             });
           }
-          .width('100%');
+          .width('100%')
+          .justifyContent(FlexAlign.Center);
   }
 
   build(): void {
-    Column({ space: 16 }) {
+    Column({ space: 8 }) {
       this.IdentitySection();
       Divider()
         .width(this.innerWidth())
