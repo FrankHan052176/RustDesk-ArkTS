@@ -193,15 +193,30 @@ export class RustDeskInputController {
     if (!this.callbacks.isSessionActive()) {
       return;
     }
-    const scrollStepValue = event.scrollStep ?? 1;
-    const scrollStep = scrollStepValue > 0 ? scrollStepValue : 1;
-    const deltaY = Math.round(-event.getVerticalAxisValue() / scrollStep * 8);
-    const deltaX = Math.round(-event.getHorizontalAxisValue() / scrollStep * 8);
+    const isTrackpad = event.sourceTool === SourceTool.TOUCHPAD;
+    let deltaX: number;
+    let deltaY: number;
+    if (isTrackpad) {
+      const scrollStepValue = event.scrollStep ?? 1;
+      const scrollStep = scrollStepValue > 0 ? scrollStepValue : 1;
+      deltaY = Math.round(-event.getVerticalAxisValue() / scrollStep * 8);
+      deltaX = Math.round(-event.getHorizontalAxisValue() / scrollStep * 8);
+    } else {
+      const rawY = -event.getVerticalAxisValue();
+      const rawX = -event.getHorizontalAxisValue();
+      // RustDesk's mouse-wheel protocol uses a discrete -1/+1 step per event.
+      // Forwarding HarmonyOS axis magnitude (and multiplying it) makes editors
+      // interpret one wheel notch as dozens of lines. Match the upstream client
+      // by keeping only the dominant axis and normalizing it to one step.
+      const horizontalDominant = Math.abs(rawX) > Math.abs(rawY);
+      deltaX = horizontalDominant ? Math.sign(rawX) : 0;
+      deltaY = horizontalDominant ? 0 : Math.sign(rawY);
+    }
     if (deltaX === 0 && deltaY === 0) {
       return;
     }
     const payload = new RustDeskMousePayload();
-    payload.type = event.sourceTool === SourceTool.TOUCHPAD ? 'trackpad' : 'wheel';
+    payload.type = isTrackpad ? 'trackpad' : 'wheel';
     payload.x = String(deltaX);
     payload.y = String(deltaY);
     this.callbacks.sendMouse(payload);
