@@ -172,6 +172,8 @@ export struct DeviceDirectoryPanel {
 
   private matchesQuery(peer: PeerRecord, query: string): boolean {
     if (peer.id.toLowerCase().includes(query)
+      || peer.targetId.toLowerCase().includes(query)
+      || peer.lanIp.toLowerCase().includes(query)
       || peer.alias.toLowerCase().includes(query)
       || peer.hostname.toLowerCase().includes(query)
       || peer.username.toLowerCase().includes(query)
@@ -445,7 +447,7 @@ export struct DeviceDirectoryPanel {
             onViewCamera: (peerId: string) => this.onViewCamera(peerId),
             onOpenTransfer: (peerId: string) => this.onOpenTransfer(peerId),
           });
-        }, (peer: PeerRecord) => `${peer.source}-${peer.addressBookName}-${peer.id}-${peer.source === 'lan'
+        }, (peer: PeerRecord) => `${this.snapshot.revision}-${peer.source}-${peer.addressBookName}-${peer.id}-${peer.source === 'lan'
           ? peer.lanIp
           : ''}`);
       }
@@ -467,7 +469,7 @@ export struct DeviceDirectoryPanel {
           })
             .width(this.cardWidth())
             .margin({ bottom: 18 });
-        }, (peer: PeerRecord) => `${peer.source}-${peer.addressBookName}-${peer.id}-${peer.source === 'lan'
+        }, (peer: PeerRecord) => `${this.snapshot.revision}-${peer.source}-${peer.addressBookName}-${peer.id}-${peer.source === 'lan'
           ? peer.lanIp
           : ''}`);
       }
@@ -485,6 +487,28 @@ export struct DeviceDirectoryPanel {
               .width('100%')
               .height(this.sourceSwitcherContentInset())
               .flexShrink(0);
+
+            if (source === 'lan') {
+              Row() {
+                Button({ type: ButtonType.Capsule, stateEffect: true }) {
+                  Text(this.snapshot.lanScanning || this.lanRefreshing
+                    ? $r('app.string.device_scanning_lan')
+                    : $r('app.string.device_scan_lan'))
+                    .fontSize(12)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor($r('app.color.neu_accent'));
+                }
+                .height(34)
+                .padding({ left: 14, right: 14 })
+                .backgroundColor($r('app.color.neu_base'))
+                .enabled(!this.snapshot.lanScanning && !this.lanRefreshing)
+                .onClick(() => this.startLanRefresh());
+              }
+              .width(this.controlWidth())
+              .height(42)
+              .justifyContent(FlexAlign.End)
+              .alignItems(VerticalAlign.Center);
+            }
 
             this.PeerList(source);
           }

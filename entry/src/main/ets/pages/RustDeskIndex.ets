@@ -271,9 +271,8 @@ struct RustDeskIndex {
   private softKeyboardCtrlActive: boolean = false;
   private softKeyboardShiftActive: boolean = false;
   private softKeyboardCommandActive: boolean = false;
-  private lanScanTimer: number = -1;
-  private lanScanStartedAt: number = 0;
   private lanScanGeneration: number = 0;
+  private lanScanActive: boolean = false;
   private serverTestTimer: number = -1;
   private serverTestGeneration: number = 0;
   private systemImeCaretTimer: number = -1;
@@ -318,6 +317,7 @@ struct RustDeskIndex {
   @Local serverValidating: boolean = false;
   @Local serverSaving: boolean = false;
   @Local directorySnapshot: DirectorySnapshot = new DirectorySnapshot();
+  private directoryRevision: number = 0;
   @Local sessionDefaults: SessionDefaults = new SessionDefaults();
   @Local accountState: AccountState = new AccountState();
   @Local accountLoginProviders: AccountLoginProvider[] = [];
@@ -603,7 +603,7 @@ struct RustDeskIndex {
     this.clearPasswordTimeout();
     this.clearPreviewKeyboardBlurTimer();
     this.clearSystemImeCaretTimer();
-    this.clearLanScanTimer();
+    this.cancelLanScan();
     this.serverTestGeneration += 1;
     this.clearServerTestTimer();
     this.clearAccountPollTimer();
@@ -1783,15 +1783,21 @@ struct RustDeskIndex {
       return;
     }
     const snapshot = new DirectorySnapshot();
-    this.mainBridge.resetDirectoryMessage();
+    snapshot.revision = ++this.directoryRevision;
+    if (!this.lanScanActive) {
+      this.mainBridge.resetDirectoryMessage();
+    }
     snapshot.favorites = this.mainBridge.listFavorites();
     snapshot.recent = this.mainBridge.listRecentPeers();
     snapshot.addressBook = this.mainBridge.listAddressBookPeers();
-    snapshot.lan = this.mainBridge.listLanPeers();
+    snapshot.lan = this.lanScanActive ? [] : this.mainBridge.listLanPeers();
     this.preserveKnownPeerStatuses(snapshot.recent);
     this.preserveKnownPeerStatuses(snapshot.addressBook);
     this.preserveKnownPeerStatuses(snapshot.lan);
-    snapshot.message = this.mainBridge.getDirectoryMessage();
+    snapshot.lanScanning = this.lanScanActive;
+    snapshot.message = this.lanScanActive
+      ? '正在扫描局域网设备'
+      : this.mainBridge.getDirectoryMessage();
     this.directorySnapshot = snapshot;
     this.schedulePeerOnlineProbe(120);
   }
@@ -1803,13 +1809,19 @@ struct RustDeskIndex {
       this.directorySnapshot.lan,
     ];
     for (let index = 0; index < peers.length; index += 1) {
+      const targetId = this.peerTargetId(peers[index]);
+      if (targetId.length === 0) {
+        peers[index].online = false;
+        peers[index].onlineKnown = false;
+        continue;
+      }
       if (peers[index].onlineKnown) {
         continue;
       }
       for (let listIndex = 0; listIndex < previousLists.length; listIndex += 1) {
         const previous = previousLists[listIndex];
         for (let peerIndex = 0; peerIndex < previous.length; peerIndex += 1) {
-          if (previous[peerIndex].id === peers[index].id && previous[peerIndex].onlineKnown) {
+          if (this.peerTargetId(previous[peerIndex]) === targetId && previous[peerIndex].onlineKnown) {
             peers[index].onlineKnown = true;
             peers[index].online = previous[peerIndex].online;
             listIndex = previousLists.length;
@@ -1878,60 +1890,42 @@ struct RustDeskIndex {
     const targets: PeerDirectProbeTarget[] = [];
     const keys: string[] = [];
     const lists: PeerRecord[][] = [
+      this.directorySnapshot.lan,
       this.directorySnapshot.recent,
       this.directorySnapshot.addressBook,
-      this.directorySnapshot.lan,
     ];
     for (let listIndex = 0; listIndex < lists.length; listIndex += 1) {
       for (let peerIndex = 0; peerIndex < lists[listIndex].length; peerIndex += 1) {
         const peer = lists[listIndex][peerIndex];
-        const peerId = peer.id.trim();
-        const target = this.isDirectIpAddress(peerId) ? peerId : peer.lanIp.trim();
-        if (peerId.length === 0 || !this.isDirectIpAddress(target) || keys.indexOf(peerId) >= 0) {
+        if (this.peerTargetId(peer).length > 0) {
+          continue;
+        }
+        const target = peer.lanIp.trim();
+        const routeKey = this.peerDirectProbeKey(peer);
+        if (routeKey.length === 0 || keys.indexOf(routeKey) >= 0) {
           continue;
         }
         const probeTarget = new PeerDirectProbeTarget();
-        probeTarget.key = peerId;
+        probeTarget.key = routeKey;
         probeTarget.target = target;
         targets.push(probeTarget);
-        keys.push(peerId);
+        keys.push(routeKey);
       }
     }
     return targets;
   }
 
-  private peersShareLanIdentity(source: PeerRecord, lanPeer: PeerRecord): boolean {
-    const sourceId = source.id.trim();
-    const sourceLanIp = source.lanIp.trim();
-    const lanId = lanPeer.id.trim();
-    const lanIp = lanPeer.lanIp.trim();
-    if ((lanIp.length > 0 && sourceId === lanIp) ||
-      (sourceLanIp.length > 0 && sourceLanIp === lanIp) ||
-      (sourceLanIp.length > 0 && sourceLanIp === lanId)) {
-      return true;
-    }
-    const sourceHostname = source.hostname.trim().toLowerCase();
-    const lanHostname = lanPeer.hostname.trim().toLowerCase();
-    if (sourceHostname.length > 0 && sourceHostname === lanHostname) {
-      return true;
-    }
-    const sourceAlias = source.alias.trim().toLowerCase();
-    const lanAlias = lanPeer.alias.trim().toLowerCase();
-    return sourceAlias.length > 0 && sourceAlias === lanAlias;
+  private peerTargetId(source: PeerRecord): string {
+    return source.targetId.trim();
   }
 
   private peerOnlineQueryId(source: PeerRecord): string {
-    const id = source.id.trim();
-    if (id.length === 0 || !this.isDirectIpAddress(id)) {
-      return id;
-    }
-    for (let index = 0; index < this.directorySnapshot.lan.length; index += 1) {
-      const lanPeer = this.directorySnapshot.lan[index];
-      if (this.peersShareLanIdentity(source, lanPeer)) {
-        return lanPeer.id.trim();
-      }
-    }
-    return '';
+    return this.peerTargetId(source);
+  }
+
+  private peerDirectProbeKey(source: PeerRecord): string {
+    const target = source.lanIp.trim();
+    return this.isDirectIpAddress(target) ? `route:${target}` : '';
   }
 
   private schedulePeerOnlineProbe(delayMs: number): void {
@@ -1973,27 +1967,17 @@ struct RustDeskIndex {
     }
     this.peerOnlinePollInFlight = true;
     try {
-      const onlines: string[] = [];
-      const offlines: string[] = [];
-      let hasResult = false;
       if (ids.length > 0) {
         const result = await this.mainBridge.queryPeerOnlineStates(ids);
-        if (result.ok) {
-          hasResult = true;
-          onlines.push(...result.onlines);
-          offlines.push(...result.offlines);
+        if (generation === this.peerOnlinePollGeneration && result.ok) {
+          this.applyTargetPeerOnlineStates(result.onlines, result.offlines);
         }
       }
       if (directTargets.length > 0) {
         const result = await this.mainBridge.probePeerDirectStates(directTargets);
-        if (result.ok) {
-          hasResult = true;
-          onlines.push(...result.onlines);
-          offlines.push(...result.offlines);
+        if (generation === this.peerOnlinePollGeneration && result.ok) {
+          this.applyRoutePeerOnlineStates(result.onlines, result.offlines);
         }
-      }
-      if (generation === this.peerOnlinePollGeneration && hasResult) {
-        this.applyPeerOnlineStates(onlines, offlines);
       }
     } finally {
       if (generation === this.peerOnlinePollGeneration) {
@@ -2003,34 +1987,66 @@ struct RustDeskIndex {
     }
   }
 
-  private updatePeerOnlineState(peer: PeerRecord, onlines: string[], offlines: string[]): void {
+  private updateTargetPeerOnlineState(peer: PeerRecord, onlines: string[], offlines: string[]): void {
     const queryId = this.peerOnlineQueryId(peer);
-    const directKey = peer.id.trim();
-    if ((queryId.length > 0 && onlines.indexOf(queryId) >= 0) ||
-      (directKey.length > 0 && onlines.indexOf(directKey) >= 0)) {
+    if (queryId.length === 0) {
+      return;
+    }
+    if (onlines.indexOf(queryId) >= 0) {
       peer.online = true;
       peer.onlineKnown = true;
-    } else if ((queryId.length > 0 && offlines.indexOf(queryId) >= 0) ||
-      (directKey.length > 0 && offlines.indexOf(directKey) >= 0)) {
+    } else if (offlines.indexOf(queryId) >= 0) {
       peer.online = false;
       peer.onlineKnown = true;
     }
   }
 
-  private updatePeerListOnlineStates(peers: PeerRecord[], onlines: string[], offlines: string[]): void {
-    for (let index = 0; index < peers.length; index += 1) {
-      this.updatePeerOnlineState(peers[index], onlines, offlines);
+  private updateRoutePeerOnlineState(peer: PeerRecord, onlines: string[], offlines: string[]): void {
+    // Direct reachability is only a fallback for IP-only history. Canonical
+    // peers are keyed strictly by Target ID and never consume route results.
+    if (this.peerTargetId(peer).length > 0) {
+      return;
+    }
+    const routeKey = this.peerDirectProbeKey(peer);
+    if (routeKey.length > 0 && onlines.indexOf(routeKey) >= 0) {
+      peer.online = true;
+      peer.onlineKnown = true;
+    } else if (routeKey.length > 0 && offlines.indexOf(routeKey) >= 0) {
+      peer.online = false;
+      peer.onlineKnown = true;
+    } else {
+      peer.online = false;
+      peer.onlineKnown = false;
     }
   }
 
-  private applyPeerOnlineStates(onlines: string[], offlines: string[]): void {
-    this.updatePeerListOnlineStates(this.directorySnapshot.recent, onlines, offlines);
-    this.updatePeerListOnlineStates(this.directorySnapshot.addressBook, onlines, offlines);
-    this.updatePeerListOnlineStates(this.directorySnapshot.lan, onlines, offlines);
+  private updateTargetPeerListOnlineStates(peers: PeerRecord[], onlines: string[], offlines: string[]): void {
+    for (let index = 0; index < peers.length; index += 1) {
+      this.updateTargetPeerOnlineState(peers[index], onlines, offlines);
+    }
+  }
+
+  private applyTargetPeerOnlineStates(onlines: string[], offlines: string[]): void {
+    this.updateTargetPeerListOnlineStates(this.directorySnapshot.recent, onlines, offlines);
+    this.updateTargetPeerListOnlineStates(this.directorySnapshot.addressBook, onlines, offlines);
+    this.updateTargetPeerListOnlineStates(this.directorySnapshot.lan, onlines, offlines);
+  }
+
+  private updateRoutePeerListOnlineStates(peers: PeerRecord[], onlines: string[], offlines: string[]): void {
+    for (let index = 0; index < peers.length; index += 1) {
+      this.updateRoutePeerOnlineState(peers[index], onlines, offlines);
+    }
+  }
+
+  private applyRoutePeerOnlineStates(onlines: string[], offlines: string[]): void {
+    this.updateRoutePeerListOnlineStates(this.directorySnapshot.recent, onlines, offlines);
+    this.updateRoutePeerListOnlineStates(this.directorySnapshot.addressBook, onlines, offlines);
+    this.updateRoutePeerListOnlineStates(this.directorySnapshot.lan, onlines, offlines);
   }
 
   private directoryScanSnapshot(scanning: boolean, message: string): DirectorySnapshot {
     const snapshot = new DirectorySnapshot();
+    snapshot.revision = ++this.directoryRevision;
     snapshot.recent = this.directorySnapshot.recent.slice();
     snapshot.addressBook = this.directorySnapshot.addressBook.slice();
     snapshot.lan = this.directorySnapshot.lan.slice();
@@ -2040,49 +2056,35 @@ struct RustDeskIndex {
     return snapshot;
   }
 
-  private scanLanPeers(): void {
-    this.clearLanScanTimer();
+  private async scanLanPeers(): Promise<void> {
+    this.cancelLanScan();
     const scanGeneration = ++this.lanScanGeneration;
+    this.lanScanActive = true;
     const scanningSnapshot = this.directoryScanSnapshot(true, '正在扫描局域网设备');
     scanningSnapshot.lan = [];
     this.directorySnapshot = scanningSnapshot;
-    if (!this.mainBridge.scanLan()) {
-      this.lanScanStartedAt = 0;
-      this.directorySnapshot = this.directoryScanSnapshot(false, '无法启动局域网扫描');
+    const started = await this.mainBridge.scanLan();
+    if (scanGeneration !== this.lanScanGeneration) {
       return;
     }
-    this.lanScanStartedAt = Date.now();
-    this.scheduleLanScanPoll(250, scanGeneration);
+    this.lanScanActive = false;
+    if (!started) {
+      const nativeMessage = this.mainBridge.getDirectoryMessage().trim();
+      this.directorySnapshot = this.directoryScanSnapshot(
+        false,
+        nativeMessage.length > 0 ? nativeMessage : '无法启动局域网扫描',
+      );
+      return;
+    }
+    // The native Promise resolves only after Core's Flutter discovery window
+    // and route selection have completed, so one coherent refresh is enough.
+    this.refreshDirectorySnapshot();
+    this.directorySnapshot = this.directoryScanSnapshot(false, '局域网扫描完成');
   }
 
-  private scheduleLanScanPoll(delayMs: number, scanGeneration: number): void {
-    this.lanScanTimer = setTimeout(() => {
-      this.lanScanTimer = -1;
-      if (scanGeneration !== this.lanScanGeneration) {
-        return;
-      }
-      this.refreshDirectorySnapshot();
-      const elapsed = Date.now() - this.lanScanStartedAt;
-      const allDiscoveredAddressesResolved = this.directorySnapshot.lan.length > 0 &&
-        this.directorySnapshot.lan.every((peer: PeerRecord) => peer.lanIp.trim().length > 0);
-      if (!allDiscoveredAddressesResolved && elapsed < 10000) {
-        this.directorySnapshot = this.directoryScanSnapshot(true, '正在扫描局域网设备');
-        this.scheduleLanScanPoll(400, scanGeneration);
-      } else {
-        this.lanScanStartedAt = 0;
-        this.directorySnapshot = this.directoryScanSnapshot(false, '局域网扫描完成');
-      }
-    }, delayMs) as number;
-  }
-
-  private clearLanScanTimer(): void {
+  private cancelLanScan(): void {
     this.lanScanGeneration += 1;
-    this.lanScanStartedAt = 0;
-    if (this.lanScanTimer < 0) {
-      return;
-    }
-    clearTimeout(this.lanScanTimer);
-    this.lanScanTimer = -1;
+    this.lanScanActive = false;
   }
 
   private setPeerFavorite(peerId: string, favorite: boolean): void {
@@ -2099,6 +2101,7 @@ struct RustDeskIndex {
   private copyPeerWithFavorite(source: PeerRecord, peerId: string, favorite: boolean): PeerRecord {
     const peer = new PeerRecord();
     peer.id = source.id;
+    peer.targetId = source.targetId;
     peer.username = source.username;
     peer.hostname = source.hostname;
     peer.platform = source.platform;
@@ -2123,6 +2126,7 @@ struct RustDeskIndex {
 
   private directorySnapshotWithFavorite(peerId: string, favorite: boolean): DirectorySnapshot {
     const snapshot = new DirectorySnapshot();
+    snapshot.revision = ++this.directoryRevision;
     snapshot.recent = this.copyPeerListWithFavorite(this.directorySnapshot.recent, peerId, favorite);
     snapshot.addressBook = this.copyPeerListWithFavorite(this.directorySnapshot.addressBook, peerId, favorite);
     snapshot.lan = this.copyPeerListWithFavorite(this.directorySnapshot.lan, peerId, favorite);
@@ -8011,7 +8015,9 @@ struct RustDeskIndex {
       titleSpacerHeight: this.mainTitleSpacerHeight(),
       bottomAvoidInset: this.windowBottomAvoidInset,
       onRefresh: () => this.refreshDirectorySnapshot(),
-      onScanLan: () => this.scanLanPeers(),
+      onScanLan: (): void => {
+        void this.scanLanPeers();
+      },
       onSetFavorite: (peerId: string, favorite: boolean) => this.setPeerFavorite(peerId, favorite),
       onRemoveRecent: (peerId: string) => this.removeRecentPeer(peerId),
       onConnectRemote: (peerId: string) => this.launchPeer(peerId, 'remote_control'),

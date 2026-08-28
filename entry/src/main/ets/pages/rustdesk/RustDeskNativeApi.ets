@@ -207,7 +207,7 @@ export class RustDeskNativeApi {
     return bridgeRuntimeRemoveRecentPeer(peerId);
   }
 
-  runtimeScanLanPeers(): string {
+  runtimeScanLanPeers(): Promise<string> {
     return bridgeRuntimeScanLanPeers();
   }
 

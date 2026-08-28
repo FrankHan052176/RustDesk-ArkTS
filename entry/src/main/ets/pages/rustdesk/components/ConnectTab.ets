@@ -99,17 +99,19 @@ export struct ConnectTab {
   }
 
   private recentFrameWidth(): number {
-    if (this.isCompact()) {
-      return this.stageFrameWidth();
-    }
-    return Math.max(430, Math.min(this.viewportWidth - this.stageFrameWidth() - 150, 620));
+    return this.stageFrameWidth();
   }
 
   private recentContentWidth(): number {
-    if (this.isCompact()) {
-      return this.controlWidth();
-    }
-    return Math.max(390, this.recentFrameWidth() - 40);
+    return this.controlWidth();
+  }
+
+  private recentCardFrameWidth(): number {
+    return (this.recentFrameWidth() - 8) / 2;
+  }
+
+  private recentCardContentWidth(): number {
+    return Math.max(120, this.recentCardFrameWidth() - 20);
   }
 
   private targetReady(): boolean {
@@ -265,6 +267,26 @@ export struct ConnectTab {
     return result;
   }
 
+  private recentRowStarts(): number[] {
+    const starts: number[] = [];
+    const peers = this.recentPreview();
+    for (let index = 0; index < peers.length; index += 2) {
+      starts.push(index);
+    }
+    return starts;
+  }
+
+  private recentPeerRenderKey(peer: PeerRecord): string {
+    return `${peer.id}|${peer.targetId}|${peer.lanIp}`;
+  }
+
+  private recentRowRenderKey(start: number): string {
+    const peers = this.recentPreview();
+    const first = this.recentPeerRenderKey(peers[start]);
+    const second = start + 1 < peers.length ? this.recentPeerRenderKey(peers[start + 1]) : 'empty';
+    return `recent-row-${this.directorySnapshot.revision}-${first}-${second}`;
+  }
+
   private recentPeerName(peer: PeerRecord): string {
     if (peer.alias.trim().length > 0) {
       return peer.alias.trim();
@@ -275,12 +297,21 @@ export struct ConnectTab {
     if (peer.username.trim().length > 0) {
       return peer.username.trim();
     }
-    return peer.id;
+    const targetId = peer.targetId.trim();
+    return targetId.length > 0 ? targetId : peer.id;
   }
 
   private recentPeerTarget(peer: PeerRecord): string {
+    return peer.targetId.trim();
+  }
+
+  private recentPeerSubtitle(peer: PeerRecord): string {
     const lanIp = peer.lanIp.trim();
-    return lanIp.length > 0 ? lanIp : peer.id.trim();
+    if (lanIp.length > 0) {
+      return lanIp;
+    }
+    const targetId = peer.targetId.trim();
+    return targetId.length > 0 ? targetId : peer.id.trim();
   }
 
   private recentPeerStatus(peer: PeerRecord): ResourceStr {
@@ -300,13 +331,17 @@ export struct ConnectTab {
 
   private recentCardOpacity(peer: PeerRecord): number {
     const target = this.recentPeerTarget(peer);
-    if (this.recentPressedTarget === target) {
+    if (target.length > 0 && this.recentPressedTarget === target) {
       return 0.76;
     }
-    if (this.recentHoveredTarget === target) {
+    if (target.length > 0 && this.recentHoveredTarget === target) {
       return 0.9;
     }
     return 1;
+  }
+
+  private recentCardShadowPadding(): number {
+    return LuminousNeoTokens.shadowPaddingFor(72);
   }
 
   @Builder
@@ -439,11 +474,11 @@ export struct ConnectTab {
   private EmptyRecent() {
     Stack({ alignContent: Alignment.Center }) {
       LuminousSurface({
-        depth: 1,
+        depth: 0.3,
         surfaceWidth: this.recentContentWidth(),
         surfaceHeight: 72,
         cornerRadius: 20,
-        motionEnabled: true,
+        motionEnabled: false,
       }) {
         Row({ space: 14 }) {
           SymbolGlyph($r('sys.symbol.clock'))
@@ -472,72 +507,83 @@ export struct ConnectTab {
       }
     }
     .width(this.recentFrameWidth())
-    .height(88)
+    .height(80)
     .clip(false);
   }
 
   @Builder
   private CompactRecentCard(peer: PeerRecord) {
     Stack({ alignContent: Alignment.Center }) {
-      Stack({ alignContent: Alignment.Center }) {
-        LuminousSurface({
-          depth: 1,
-          surfaceWidth: this.recentContentWidth(),
-          surfaceHeight: 72,
-          cornerRadius: 20,
-          motionEnabled: true,
-        }) {
-          Row({ space: 12 }) {
-            Column({ space: 3 }) {
-              Text(this.recentPeerName(peer))
-                .width('100%')
-                .fontSize(15)
-                .fontWeight(FontWeight.Medium)
-                .fontColor($r('app.color.neu_text_primary'))
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis });
-              Text(this.recentPeerTarget(peer))
-                .width('100%')
-                .fontSize(12)
-                .fontColor($r('app.color.neu_text_secondary'))
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis });
-            }
-            .layoutWeight(1)
-            .alignItems(HorizontalAlign.Start);
+      Stack({ alignContent: Alignment.TopStart }) {
+        Stack({ alignContent: Alignment.TopStart }) {
+          LuminousSurface({
+            depth: 0.3,
+            surfaceWidth: this.recentCardContentWidth(),
+            surfaceHeight: 72,
+            cornerRadius: 20,
+            motionEnabled: false,
+          }) {
+            Row({ space: 12 }) {
+              Column({ space: 3 }) {
+                Text(this.recentPeerName(peer))
+                  .width('100%')
+                  .fontSize(15)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor($r('app.color.neu_text_primary'))
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis });
+                Text(this.recentPeerSubtitle(peer))
+                  .width('100%')
+                  .fontSize(12)
+                  .fontColor($r('app.color.neu_text_secondary'))
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis });
+              }
+              .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start);
 
-            Row({ space: 6 }) {
-              Row()
-                .width(8)
-                .height(8)
-                .borderRadius(4)
-                .backgroundColor(this.recentPeerStatusColor(peer));
-              Text(this.recentPeerStatus(peer))
-                .fontSize(12)
-                .fontWeight(FontWeight.Medium)
-                .fontColor(this.recentPeerStatusColor(peer));
+              Row({ space: 6 }) {
+                Row()
+                  .width(8)
+                  .height(8)
+                  .borderRadius(4)
+                  .backgroundColor(this.recentPeerStatusColor(peer));
+                Text(this.recentPeerStatus(peer))
+                  .fontSize(12)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(this.recentPeerStatusColor(peer));
+              }
+              .flexShrink(0)
+              .alignItems(VerticalAlign.Center);
             }
-            .flexShrink(0)
+            .width(this.recentCardContentWidth())
+            .height(72)
+            .padding({ left: 18, right: 18 })
             .alignItems(VerticalAlign.Center);
           }
-          .width(this.recentContentWidth())
-          .height(72)
-          .padding({ left: 18, right: 18 })
-          .alignItems(VerticalAlign.Center);
         }
+        .width(this.recentCardContentWidth() + this.recentCardShadowPadding() * 2)
+        .height(72 + this.recentCardShadowPadding() * 2)
+        .position({
+          x: -this.recentCardShadowPadding(),
+          y: -this.recentCardShadowPadding(),
+        })
+        .clip(false);
       }
-      .width(this.recentContentWidth())
+      .width(this.recentCardContentWidth())
       .height(72)
+      .clip(false)
       .opacity(this.recentCardOpacity(peer));
 
       Button({ type: ButtonType.Normal, stateEffect: false }) {
         Row()
       }
-      .width(this.recentContentWidth())
+      .width(this.recentCardContentWidth())
       .height(72)
       .padding(0)
       .backgroundColor(Color.Transparent)
       .borderRadius(20)
+      .enabled(this.recentPeerTarget(peer).length > 0)
       .hoverEffect(HoverEffect.None)
       .accessibilityText(`选择设备 ${this.recentPeerName(peer)}，填入 ${this.recentPeerTarget(peer)}`)
       .onHover((isHover: boolean): void => {
@@ -552,8 +598,8 @@ export struct ConnectTab {
       })
       .onClick((): void => this.onTargetChange(this.recentPeerTarget(peer)));
     }
-    .width(this.recentFrameWidth())
-    .height(88)
+    .width(this.recentCardFrameWidth())
+    .height(80)
     .clip(false);
   }
 
@@ -562,17 +608,30 @@ export struct ConnectTab {
     Column() {
       List({ scroller: this.scroller }) {
         ListItem() {
-          Column({ space: 10 }) {
+          Column({ space: 6 }) {
             if (this.recentPreview().length === 0) {
               this.EmptyRecent();
             } else {
-              ForEach(this.recentPreview(), (peer: PeerRecord) => {
-                this.CompactRecentCard(peer);
-              }, (peer: PeerRecord) => `recent-${peer.id}`);
+              ForEach(this.recentRowStarts(), (start: number) => {
+                Row({ space: 8 }) {
+                  this.CompactRecentCard(this.recentPreview()[start]);
+                  if (start + 1 < this.recentPreview().length) {
+                    this.CompactRecentCard(this.recentPreview()[start + 1]);
+                  } else {
+                    Blank()
+                      .width(this.recentCardFrameWidth())
+                      .height(80);
+                  }
+                }
+                .width(this.recentFrameWidth())
+                .height(80)
+                .clip(false);
+              }, (start: number) => this.recentRowRenderKey(start));
             }
           }
           .width(this.recentFrameWidth())
           .padding({
+            top: 7,
             bottom: (this.wideLayout ? 52 : 132) + this.bottomAvoidInset,
           })
           .alignItems(HorizontalAlign.Center);

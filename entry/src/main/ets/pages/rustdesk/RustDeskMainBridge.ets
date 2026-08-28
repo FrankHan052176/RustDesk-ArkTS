@@ -272,11 +272,13 @@ export class RustDeskMainBridge {
     }
   }
 
-  scanLan(): boolean {
+  async scanLan(): Promise<boolean> {
     try {
-      const response: ESObject = JSON.parse(native.runtimeScanLanPeers());
+      const response: ESObject = JSON.parse(await native.runtimeScanLanPeers());
+      this.directoryMessage = String(response.message ?? '');
       return Boolean(response.ok);
-    } catch (_) {
+    } catch (error) {
+      this.directoryMessage = String(error);
       return false;
     }
   }
@@ -516,6 +518,7 @@ export class RustDeskMainBridge {
       if (record.id.length === 0) {
         continue;
       }
+      record.targetId = String(row.targetId ?? '').trim();
       record.username = String(row.username ?? '').trim();
       record.hostname = String(row.hostname ?? '').trim();
       record.platform = String(row.platform ?? '').trim();

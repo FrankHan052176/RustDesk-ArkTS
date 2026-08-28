@@ -27,6 +27,7 @@ export class ServerConfig {
 @ObservedV2
 export class PeerRecord {
   id: string = '';
+  targetId: string = '';
   username: string = '';
   hostname: string = '';
   platform: string = '';
@@ -41,6 +42,7 @@ export class PeerRecord {
 }
 
 export class DirectorySnapshot {
+  revision: number = 0;
   recent: PeerRecord[] = [];
   addressBook: PeerRecord[] = [];
   lan: PeerRecord[] = [];

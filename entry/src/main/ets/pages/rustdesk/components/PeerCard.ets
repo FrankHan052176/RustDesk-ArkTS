@@ -37,6 +37,11 @@ export struct PeerCard {
     this.favoriteActive = this.peer.favorite;
   }
 
+  private targetIdText(): string {
+    const targetId = this.peer.targetId.trim();
+    return targetId.length > 0 ? targetId : this.peer.id.trim();
+  }
+
   private displayName(): string {
     if (this.peer.alias.trim().length > 0) {
       return this.peer.alias.trim();
@@ -47,14 +52,14 @@ export struct PeerCard {
     if (this.peer.username.trim().length > 0) {
       return this.peer.username.trim();
     }
-    return this.peer.id;
+    return this.targetIdText();
   }
 
   private identityDetail(): string {
-    if (this.peer.source === 'lan' && this.peer.lanIp.trim().length > 0) {
+    if (this.peer.lanIp.trim().length > 0) {
       return this.peer.lanIp.trim();
     }
-    return this.peer.id;
+    return this.targetIdText();
   }
 
   private connectionTarget(): string {
@@ -64,7 +69,8 @@ export struct PeerCard {
         return lanIp;
       }
     }
-    return this.peer.id;
+    const targetId = this.peer.targetId.trim();
+    return targetId.length > 0 ? targetId : this.peer.id;
   }
 
   private sourceAccent(): ResourceColor {
@@ -278,10 +284,11 @@ export struct PeerCard {
   @Builder
   private StatusRow() {
     Row({ space: 8 }) {
-      Circle()
+      Row()
         .width(8)
         .height(8)
-        .fill(this.peer.onlineKnown && this.peer.online
+        .borderRadius(4)
+        .backgroundColor(this.peer.onlineKnown && this.peer.online
           ? $r('app.color.success')
           : $r('app.color.neu_text_disabled'));
       Text(this.onlineStatusText())
@@ -291,7 +298,7 @@ export struct PeerCard {
       Text(this.sourceText())
         .fontSize(11)
         .fontColor(this.sourceAccent());
-      Text(`ID ${this.peer.id}`)
+      Text(`ID ${this.targetIdText()}`)
         .layoutWeight(1)
         .fontSize(11)
         .fontColor($r('app.color.neu_text_secondary'))
