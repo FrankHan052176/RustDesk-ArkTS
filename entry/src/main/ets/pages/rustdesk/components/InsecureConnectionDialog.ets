@@ -24,10 +24,22 @@ export struct InsecureConnectionDialog {
     return Math.max(300, Math.min(480, this.viewportWidth - 48));
   }
 
-  private buttonWidth(): number {
+  private buttonShadowPadding(): number {
     const controlHeight: number = LuminousNeoTokens.controlHeight(LuminousControlSize.Compact);
-    const shadowPadding: number = LuminousNeoTokens.shadowPaddingFor(controlHeight);
-    return Math.max(112, (this.panelWidth() - 48 - shadowPadding * 4) / 2);
+    return LuminousNeoTokens.shadowPaddingFor(controlHeight);
+  }
+
+  private buttonWidth(): number {
+    const shadowPadding: number = this.buttonShadowPadding();
+    return Math.max(112, (this.panelWidth() - 48 - 12 - shadowPadding * 4) / 2);
+  }
+
+  private buttonRowGap(): number {
+    return this.buttonShadowPadding() * 2 + 12;
+  }
+
+  private buttonFrameOffsetX(): number {
+    return -this.buttonShadowPadding();
   }
 
   private detail(): string {
@@ -80,28 +92,38 @@ export struct InsecureConnectionDialog {
             .maxLines(6)
             .textOverflow({ overflow: TextOverflow.Ellipsis });
 
-          Row({ space: $r('app.float.space_12') }) {
-            LuminousButton({
-              label: '继续连接',
-              controlWidth: this.buttonWidth(),
-              controlSizeMode: LuminousControlSize.Compact,
-              tone: LuminousTone.Neutral,
-              motionEnabled: true,
-              onAction: (): void => {
-                this.onContinue();
-              },
-            })
+          Row({ space: this.buttonRowGap() }) {
+            Row() {
+              LuminousButton({
+                label: '继续连接',
+                controlWidth: this.buttonWidth(),
+                controlSizeMode: LuminousControlSize.Compact,
+                tone: LuminousTone.Neutral,
+                motionEnabled: true,
+                onAction: (): void => {
+                  this.onContinue();
+                },
+              })
+                .translate({ x: this.buttonFrameOffsetX() })
+            }
+            .width(this.buttonWidth())
+            .clip(false);
 
-            LuminousButton({
-              label: '断开连接',
-              controlWidth: this.buttonWidth(),
-              controlSizeMode: LuminousControlSize.Compact,
-              tone: LuminousTone.Danger,
-              motionEnabled: true,
-              onAction: (): void => {
-                this.onDisconnect();
-              },
-            })
+            Row() {
+              LuminousButton({
+                label: '断开连接',
+                controlWidth: this.buttonWidth(),
+                controlSizeMode: LuminousControlSize.Compact,
+                tone: LuminousTone.Danger,
+                motionEnabled: true,
+                onAction: (): void => {
+                  this.onDisconnect();
+                },
+              })
+                .translate({ x: this.buttonFrameOffsetX() })
+            }
+            .width(this.buttonWidth())
+            .clip(false);
           }
           .width('100%')
           .justifyContent(FlexAlign.Center)

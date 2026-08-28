@@ -52,10 +52,22 @@ export struct PasswordDialog {
     return Math.max(220, this.panelWidth() - 96);
   }
 
+  private buttonShadowPadding(): number {
+    const controlHeight: number = LuminousNeoTokens.controlHeight(LuminousControlSize.Compact);
+    return LuminousNeoTokens.shadowPaddingFor(controlHeight);
+  }
+
   private buttonWidth(): number {
-    let controlHeight: number = LuminousNeoTokens.controlHeight(LuminousControlSize.Compact);
-    let shadowPadding: number = LuminousNeoTokens.shadowPaddingFor(controlHeight);
+    const shadowPadding: number = this.buttonShadowPadding();
     return Math.max(112, (this.panelWidth() - 48 - shadowPadding * 4) / 2);
+  }
+
+  private buttonRowGap(): number {
+    return this.buttonShadowPadding() * 2;
+  }
+
+  private buttonFrameOffsetX(): number {
+    return -this.buttonShadowPadding();
   }
 
   build(): void {
@@ -153,28 +165,38 @@ export struct PasswordDialog {
             })
           }
 
-          Row() {
-            LuminousButton({
-              label: '取消',
-              controlWidth: this.buttonWidth(),
-              controlSizeMode: LuminousControlSize.Compact,
-              tone: LuminousTone.Neutral,
-              motionEnabled: true,
-              onAction: (): void => {
-                this.onCancel();
-              },
-            })
+          Row({ space: this.buttonRowGap() }) {
+            Row() {
+              LuminousButton({
+                label: '取消',
+                controlWidth: this.buttonWidth(),
+                controlSizeMode: LuminousControlSize.Compact,
+                tone: LuminousTone.Neutral,
+                motionEnabled: true,
+                onAction: (): void => {
+                  this.onCancel();
+                },
+              })
+                .translate({ x: this.buttonFrameOffsetX() })
+            }
+            .width(this.buttonWidth())
+            .clip(false);
 
-            LuminousButton({
-              label: '提交',
-              controlWidth: this.buttonWidth(),
-              controlSizeMode: LuminousControlSize.Compact,
-              tone: LuminousTone.Accent,
-              motionEnabled: true,
-              onAction: (): void => {
-                this.onSubmit();
-              },
-            })
+            Row() {
+              LuminousButton({
+                label: '提交',
+                controlWidth: this.buttonWidth(),
+                controlSizeMode: LuminousControlSize.Compact,
+                tone: LuminousTone.Accent,
+                motionEnabled: true,
+                onAction: (): void => {
+                  this.onSubmit();
+                },
+              })
+                .translate({ x: this.buttonFrameOffsetX() })
+            }
+            .width(this.buttonWidth())
+            .clip(false);
           }
           .width('100%')
           .justifyContent(FlexAlign.Center)
