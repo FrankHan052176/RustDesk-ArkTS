@@ -9,6 +9,7 @@ interface ToolbarActionOptions {
   label: string;
   active: boolean;
   transitionId: string;
+  enabled?: boolean;
   onClick: () => void;
 }
 
@@ -40,6 +41,7 @@ export interface SessionToolbarProps {
   canResetTransform: boolean;
   panelContentHeight: number;
   windowControlsAvailable: boolean;
+  windowResizeAvailable: boolean;
   windowFullscreen: boolean;
   windowControlBusy: boolean;
   onOpenInput: () => void;
@@ -99,6 +101,7 @@ export struct SessionToolbar {
   @Param canResetTransform: boolean = false;
   @Param panelContentHeight: number = 360;
   @Param windowControlsAvailable: boolean = false;
+  @Param windowResizeAvailable: boolean = false;
   @Param windowFullscreen: boolean = false;
   @Param windowControlBusy: boolean = false;
   @Event onOpenInput: () => void = () => {};
@@ -118,6 +121,7 @@ export struct SessionToolbar {
   @Event onCloseSession: (sessionId: string) => void = (_sessionId: string) => {};
   @Event onAddSession: () => void = () => {};
   @Local toolbarWidth: number = 280;
+  @Local sessionTabsViewportWidth: number = 0;
   private sessionScroller: Scroller = new Scroller();
 
   @BuilderParam content: () => void = this.Empty;
@@ -157,18 +161,19 @@ export struct SessionToolbar {
   private Empty() {}
 
   private sessionCardWidth(): number {
-    return this.wideLayout ? 196 : 154;
+    if (this.sessionTabsViewportWidth > 0) {
+      return Math.min(220, Math.max(96, this.sessionTabsViewportWidth));
+    }
+    return 220;
   }
 
   private addSessionButtonWidth(): number {
-    return this.wideLayout ? 92 : 68;
+    return 64;
   }
 
-  private sessionViewportWidth(): number {
-    const maxVisibleCards = this.wideLayout ? 2.5 : 1.5;
-    const preferredWidth = this.sessionCardWidth() * Math.min(Math.max(this.tabs.length, 1), maxVisibleCards);
-    const remainingWidth = Math.max(96, this.toolbarWidth - this.addSessionButtonWidth() - 6);
-    return Math.min(preferredWidth, remainingWidth);
+  private sessionContentWidth(): number {
+    const contentWidth = this.tabs.length * this.sessionCardWidth() + Math.max(0, this.tabs.length - 1) * 6;
+    return Math.max(this.sessionTabsViewportWidth, contentWidth);
   }
 
   private activeSessionIndex(): number {
@@ -189,7 +194,10 @@ export struct SessionToolbar {
     if (activeIndex < 0) {
       return;
     }
-    const viewportWidth = this.sessionViewportWidth();
+    const viewportWidth = this.sessionTabsViewportWidth;
+    if (viewportWidth <= 0) {
+      return;
+    }
     const cardStep = this.sessionCardWidth() + 6;
     const cardStart = activeIndex * cardStep;
     const cardEnd = cardStart + this.sessionCardWidth();
@@ -199,7 +207,7 @@ export struct SessionToolbar {
       if (cardStart < currentOffset) {
         targetOffset = cardStart;
       } else if (cardEnd > currentOffset + viewportWidth) {
-        targetOffset = cardEnd - viewportWidth;
+        targetOffset = cardStart;
       }
       if (Math.abs(targetOffset - currentOffset) > 0.5) {
         this.sessionScroller.scrollTo({
@@ -299,13 +307,25 @@ export struct SessionToolbar {
             this.SessionCard(tab);
           }, (tab: RemoteSessionTab): string => tab.sessionId);
         }
+        .width(this.sessionContentWidth())
+        .justifyContent(FlexAlign.Start)
         .align(Alignment.Start);
       }
-      .width(this.sessionViewportWidth())
+      .layoutWeight(1)
       .height(50)
+      .align(Alignment.Start)
       .scrollable(ScrollDirection.Horizontal)
       .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: this.tabs.length > 2 });
+      .edgeEffect(EdgeEffect.Spring, {
+        alwaysEnabled: this.tabs.length * (this.sessionCardWidth() + 6) > this.sessionTabsViewportWidth,
+      })
+      .onAreaChange((_oldArea: Area, newArea: Area): void => {
+        const width = Number(newArea.width);
+        if (width > 0 && Math.abs(width - this.sessionTabsViewportWidth) > 0.5) {
+          this.sessionTabsViewportWidth = width;
+          this.scheduleRevealActiveSession();
+        }
+      });
 
       Button({ type: ButtonType.Normal, stateEffect: true }) {
         Column({ space: 1 }) {
@@ -332,15 +352,33 @@ export struct SessionToolbar {
       .hoverEffect(HoverEffect.Auto)
       .accessibilityText(this.canAddSession ? '新建远程会话' : '已达到六个会话上限')
       .onClick((): void => this.onAddSession());
-
-      Blank();
     }
     .width('100%')
     .alignItems(VerticalAlign.Center);
   }
 
   private actionHeight(): number {
-    return this.wideLayout ? 46 : 42;
+    return 38;
+  }
+
+  private actionColumnCount(): number {
+    if (this.toolbarWidth >= 1000) {
+      return 8;
+    }
+    return this.toolbarWidth >= 620 ? 4 : 2;
+  }
+
+  private actionGridWidth(): number {
+    return this.toolbarWidth;
+  }
+
+  private actionButtonWidth(): number {
+    const columns = this.actionColumnCount();
+    return (this.actionGridWidth() - (columns - 1) * 8) / columns;
+  }
+
+  private toolbarActionEnabled(options: ToolbarActionOptions): boolean {
+    return options.enabled !== false;
   }
 
   private pointerModeLabel(): string {
@@ -356,13 +394,16 @@ export struct SessionToolbar {
       Text(options.label)
         .fontSize($r('app.float.font_label'))
         .fontWeight(FontWeight.Medium)
-        .fontColor(options.active ? $r('app.color.white') : $r('app.color.neu_text_primary'))
+        .fontColor(!this.toolbarActionEnabled(options)
+          ? $r('app.color.neu_text_disabled')
+          : (options.active ? $r('app.color.white') : $r('app.color.neu_text_primary')))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis });
     }
-    .layoutWeight(1)
+    .width(this.actionButtonWidth())
     .height(this.actionHeight())
     .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_8') })
+    .enabled(this.toolbarActionEnabled(options))
     .backgroundColor(options.active ? $r('app.color.brand_primary') : $r('app.color.mica_control'))
     .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
       adaptiveColor: AdaptiveColor.DEFAULT,
@@ -374,7 +415,7 @@ export struct SessionToolbar {
     })
     .borderRadius($r('app.float.radius_14'))
     .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-    .hoverEffect(HoverEffect.None)
+    .hoverEffect(HoverEffect.Auto)
     .accessibilityText(options.label)
     .accessibilitySelected(options.active)
     .geometryTransition(options.transitionId)
@@ -396,7 +437,7 @@ export struct SessionToolbar {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis });
     }
-    .layoutWeight(1)
+    .width(this.actionButtonWidth())
     .height(this.actionHeight())
     .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_8') })
     .backgroundColor(this.activeOverlayPanel === 'input'
@@ -414,7 +455,7 @@ export struct SessionToolbar {
     })
     .borderRadius($r('app.float.radius_14'))
     .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-    .hoverEffect(HoverEffect.None)
+    .hoverEffect(HoverEffect.Auto)
     .accessibilityText(`打开输入模式设置，当前${this.pointerModeLabel()}`)
     .accessibilitySelected(this.activeOverlayPanel === 'input')
     .geometryTransition(this.inputTransitionId)
@@ -447,7 +488,7 @@ export struct SessionToolbar {
           this.onAudioChange(enabled);
         });
     }
-    .layoutWeight(1)
+    .width(this.actionButtonWidth())
     .height(this.actionHeight())
     .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_8') })
     .backgroundColor($r('app.color.mica_control'))
@@ -492,7 +533,7 @@ export struct SessionToolbar {
     })
     .borderRadius($r('app.float.radius_10'))
     .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-    .hoverEffect(HoverEffect.None)
+    .hoverEffect(HoverEffect.Auto)
     .accessibilityText(this.displayedAndroidNavigationVisible ? '收起安卓导航键' : '展开安卓导航键')
     .accessibilitySelected(this.displayedAndroidNavigationVisible)
     .transition(TransitionEffect.OPACITY)
@@ -531,7 +572,7 @@ export struct SessionToolbar {
     .border({ width: 1, color: selected ? $r('app.color.brand_primary') : $r('app.color.mica_border') })
     .borderRadius($r('app.float.radius_10'))
     .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-    .hoverEffect(HoverEffect.None)
+    .hoverEffect(HoverEffect.Auto)
     .accessibilityText(label)
     .onClick((): void => {
       if (enabled) {
@@ -549,7 +590,7 @@ export struct SessionToolbar {
         .fontColor($r('app.color.neu_danger'))
         .maxLines(1);
     }
-    .layoutWeight(1)
+    .width(this.actionButtonWidth())
     .height(this.actionHeight())
     .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_8') })
     .backgroundColor($r('app.color.mica_control'))
@@ -560,60 +601,65 @@ export struct SessionToolbar {
     .border({ width: 1, color: $r('app.color.mica_border') })
     .borderRadius($r('app.float.radius_14'))
     .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-    .hoverEffect(HoverEffect.None)
+    .hoverEffect(HoverEffect.Auto)
     .accessibilityText(label)
     .onClick((): void => {
       this.onDisconnect();
     });
   }
 
+  private transformResetLabel(): string {
+    return this.transformSummary.trim() === '100%' ? '居中' : '复位';
+  }
+
+  private windowUtilityLabel(kind: string): string {
+    if (kind === 'fullscreen') {
+      return this.windowFullscreen ? '还原窗口' : '最大化';
+    }
+    return '最小化';
+  }
+
   @Builder
-  private WindowControlAction(
-    label: string,
-    selected: boolean,
-    textColor: ResourceColor,
-    onClick: () => void,
-  ) {
+  private WindowUtilityAction(kind: string) {
     Button({ type: ButtonType.Normal, stateEffect: true }) {
-      Text(label)
-        .fontSize($r('app.float.font_label'))
+      Text(this.windowUtilityLabel(kind))
+        .fontSize($r('app.float.font_caption'))
         .fontWeight(FontWeight.Medium)
         .fontColor(this.windowControlBusy
           ? $r('app.color.neu_text_disabled')
-          : textColor)
+          : $r('app.color.neu_text_primary'))
         .maxLines(1);
     }
-    .layoutWeight(1)
-    .height(this.actionHeight())
-    .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_8') })
+    .width(kind === 'fullscreen' ? 88 : 68)
+    .height($r('app.float.control_compact'))
+    .padding({ left: $r('app.float.space_6'), right: $r('app.float.space_6') })
     .enabled(!this.windowControlBusy)
-    .backgroundColor(selected ? $r('app.color.brand_primary') : $r('app.color.mica_control'))
+    .backgroundColor($r('app.color.mica_control'))
     .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
       adaptiveColor: AdaptiveColor.DEFAULT,
       scale: 0.56,
     })
-    .border({ width: 1, color: selected ? $r('app.color.brand_primary') : $r('app.color.mica_border') })
-    .borderRadius($r('app.float.radius_14'))
+    .border({
+      width: 1,
+      color: kind === 'fullscreen' && this.windowFullscreen
+        ? $r('app.color.brand_primary')
+        : $r('app.color.mica_border'),
+    })
+    .borderRadius($r('app.float.radius_10'))
     .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-    .hoverEffect(HoverEffect.None)
-    .accessibilityText(label)
-    .accessibilitySelected(selected)
+    .hoverEffect(HoverEffect.Auto)
+    .accessibilityText(this.windowUtilityLabel(kind))
+    .accessibilitySelected(kind === 'fullscreen' && this.windowFullscreen)
     .onClick((): void => {
-      if (!this.windowControlBusy) {
-        onClick();
+      if (this.windowControlBusy) {
+        return;
+      }
+      if (kind === 'fullscreen') {
+        this.onToggleWindowFullscreen();
+      } else {
+        this.onMinimizeWindow();
       }
     });
-  }
-
-  @Builder
-  private WindowControlActions() {
-    this.WindowControlAction(
-      this.windowFullscreen ? '还原窗口' : '全屏',
-      this.windowFullscreen,
-      $r('app.color.success'),
-      () => this.onToggleWindowFullscreen(),
-    )
-    this.WindowControlAction('最小化', false, $r('app.color.warning'), () => this.onMinimizeWindow())
   }
 
   @Builder
@@ -626,7 +672,14 @@ export struct SessionToolbar {
         .maxLines(1);
 
       if (this.canResetTransform) {
-        this.CompactAction('reset-transform', '还原', false, false, true, () => this.onResetTransform())
+        this.CompactAction(
+          'reset-transform',
+          this.transformResetLabel(),
+          false,
+          false,
+          true,
+          () => this.onResetTransform(),
+        )
       }
     }
     .alignItems(VerticalAlign.Center);
@@ -636,6 +689,12 @@ export struct SessionToolbar {
   private ToolbarUtilityActions() {
     Row({ space: $r('app.float.space_6') }) {
       this.TransformControls()
+      if (this.windowControlsAvailable) {
+        if (this.windowResizeAvailable) {
+          this.WindowUtilityAction('fullscreen')
+        }
+        this.WindowUtilityAction('minimize')
+      }
       this.CompactAction('collapse', '收起', false, false, true, () => this.onCollapse())
     }
     .alignItems(VerticalAlign.Center);
@@ -643,183 +702,178 @@ export struct SessionToolbar {
 
   @Builder
   private NarrowToolbarUtilityActions() {
-    Row({ space: $r('app.float.space_6') }) {
-      Row() {
-        this.TransformControls()
-      }
-      .layoutWeight(1)
-      .clip(true);
+    Column({ space: $r('app.float.space_6') }) {
+      Row({ space: $r('app.float.space_6') }) {
+        Row() {
+          this.TransformControls()
+        }
+        .layoutWeight(1);
 
-      this.CompactAction('collapse', '收起', false, false, true, () => this.onCollapse())
+        this.CompactAction('collapse', '收起', false, false, true, () => this.onCollapse())
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center);
+
+      if (this.windowControlsAvailable) {
+        Row({ space: $r('app.float.space_6') }) {
+          if (this.windowResizeAvailable) {
+            this.WindowUtilityAction('fullscreen')
+          }
+          this.WindowUtilityAction('minimize')
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.End)
+        .alignItems(VerticalAlign.Center);
+      }
     }
     .width('100%')
-    .alignItems(VerticalAlign.Center);
+    .alignItems(HorizontalAlign.End);
+  }
+
+  @Builder
+  private SystemImeAction() {
+    this.ToolbarAction({
+      label: '输入法',
+      active: this.systemImeActive,
+      transitionId: SYSTEM_IME_TRANSITION_ID,
+      enabled: this.systemImeAvailable,
+      onClick: () => this.onToggleSystemIme(),
+    })
+  }
+
+  @Builder
+  private SoftKeyboardAction() {
+    this.ToolbarAction({
+      label: '虚拟键盘',
+      active: this.softKeyboardVisible,
+      transitionId: SOFT_KEYBOARD_TRANSITION_ID,
+      enabled: this.softKeyboardAvailable,
+      onClick: () => this.onToggleSoftKeyboard(),
+    })
+  }
+
+  @Builder
+  private ChatAction() {
+    this.ToolbarAction({
+      label: this.unreadCount > 0 ? `聊天 ${this.unreadCount}` : '聊天',
+      active: this.activeOverlayPanel === 'chat',
+      transitionId: this.chatTransitionId,
+      onClick: () => this.onOpenChat(),
+    })
+  }
+
+  @Builder
+  private DisplayAction() {
+    this.ToolbarAction({
+      label: '显示器',
+      active: this.activeOverlayPanel === 'display',
+      transitionId: this.displayTransitionId,
+      onClick: () => this.onOpenDisplay(),
+    })
+  }
+
+  @Builder
+  private QualityAction() {
+    this.ToolbarAction({
+      label: '画质',
+      active: this.activeOverlayPanel === 'quality',
+      transitionId: this.qualityTransitionId,
+      onClick: () => this.onOpenQuality(),
+    })
   }
 
   @Builder
   private FunctionHome() {
     if (this.cameraSession) {
-      Column({ space: $r('app.float.space_8') }) {
-        Row({ space: $r('app.float.space_8') }) {
-          this.ToolbarAction({
-            label: '画质',
-            active: this.activeOverlayPanel === 'quality',
-            transitionId: this.qualityTransitionId,
-            onClick: () => this.onOpenQuality(),
-          })
-          this.DangerAction('断开连接')
-        }
-        .width('100%');
-
-        if (this.windowControlsAvailable) {
-          Row({ space: $r('app.float.space_8') }) {
-            this.WindowControlActions();
-          }
-          .width('100%')
-          .justifyContent(FlexAlign.End);
-        }
+      Row({ space: $r('app.float.space_8') }) {
+        this.QualityAction()
+        this.DangerAction('断开')
       }
-      .width('100%');
-    } else if (this.viewOnlySession) {
+      .width(this.actionGridWidth())
+      .justifyContent(FlexAlign.Center);
+    } else if (this.viewOnlySession && this.actionColumnCount() === 2) {
       Column({ space: $r('app.float.space_8') }) {
         Row({ space: $r('app.float.space_8') }) {
-          this.ToolbarAction({
-            label: '显示器',
-            active: this.activeOverlayPanel === 'display',
-            transitionId: this.displayTransitionId,
-            onClick: () => this.onOpenDisplay(),
-          })
-          this.ToolbarAction({
-            label: '画质',
-            active: this.activeOverlayPanel === 'quality',
-            transitionId: this.qualityTransitionId,
-            onClick: () => this.onOpenQuality(),
-          })
+          this.DisplayAction()
+          this.QualityAction()
+        }
+        .width(this.actionGridWidth());
+
+        Row() {
           this.DangerAction('断开')
         }
-        .width('100%');
-
-        if (this.windowControlsAvailable) {
-          Row({ space: $r('app.float.space_8') }) {
-            this.WindowControlActions();
-          }
-          .width('100%')
-          .justifyContent(FlexAlign.End);
-        }
+        .width(this.actionGridWidth())
+        .justifyContent(FlexAlign.Center);
       }
-      .width('100%');
-    } else if (this.wideLayout) {
+      .width(this.actionGridWidth());
+    } else if (this.viewOnlySession) {
+      Row({ space: $r('app.float.space_8') }) {
+        this.DisplayAction()
+        this.QualityAction()
+        this.DangerAction('断开')
+      }
+      .width(this.actionGridWidth())
+      .justifyContent(FlexAlign.Center);
+    } else if (this.actionColumnCount() === 8) {
+      Row({ space: $r('app.float.space_8') }) {
+        this.PointerModeAction()
+        this.SystemImeAction()
+        this.SoftKeyboardAction()
+        this.ChatAction()
+        this.AudioToggle()
+        this.DisplayAction()
+        this.QualityAction()
+        this.DangerAction('断开')
+      }
+      .width(this.actionGridWidth())
+      .alignItems(VerticalAlign.Center);
+    } else if (this.actionColumnCount() === 4) {
       Column({ space: $r('app.float.space_8') }) {
         Row({ space: $r('app.float.space_8') }) {
           this.PointerModeAction()
-          if (this.systemImeAvailable) {
-            this.ToolbarAction({
-              label: '输入法',
-              active: this.systemImeActive,
-              transitionId: SYSTEM_IME_TRANSITION_ID,
-              onClick: () => this.onToggleSystemIme(),
-            })
-          }
-          if (this.softKeyboardAvailable) {
-            this.ToolbarAction({
-              label: '虚拟键盘',
-              active: this.softKeyboardVisible,
-              transitionId: SOFT_KEYBOARD_TRANSITION_ID,
-              onClick: () => this.onToggleSoftKeyboard(),
-            })
-          }
-          this.ToolbarAction({
-            label: this.unreadCount > 0 ? `聊天 ${this.unreadCount}` : '聊天',
-            active: this.activeOverlayPanel === 'chat',
-            transitionId: this.chatTransitionId,
-            onClick: () => this.onOpenChat(),
-          })
-          this.AudioToggle()
+          this.SystemImeAction()
+          this.SoftKeyboardAction()
+          this.ChatAction()
         }
-        .width('100%');
+        .width(this.actionGridWidth());
 
         Row({ space: $r('app.float.space_8') }) {
-          this.ToolbarAction({
-            label: '显示器',
-            active: this.activeOverlayPanel === 'display',
-            transitionId: this.displayTransitionId,
-            onClick: () => this.onOpenDisplay(),
-          })
-          this.ToolbarAction({
-            label: '画质',
-            active: this.activeOverlayPanel === 'quality',
-            transitionId: this.qualityTransitionId,
-            onClick: () => this.onOpenQuality(),
-          })
-          if (this.windowControlsAvailable) {
-            this.WindowControlActions()
-          }
+          this.AudioToggle()
+          this.DisplayAction()
+          this.QualityAction()
           this.DangerAction('断开')
         }
-        .width('100%')
+        .width(this.actionGridWidth())
         .alignItems(VerticalAlign.Center);
       }
-      .width('100%');
+      .width(this.actionGridWidth());
     } else {
       Column({ space: $r('app.float.space_8') }) {
         Row({ space: $r('app.float.space_8') }) {
           this.PointerModeAction()
-          if (this.systemImeAvailable) {
-            this.ToolbarAction({
-              label: '输入法',
-              active: this.systemImeActive,
-              transitionId: SYSTEM_IME_TRANSITION_ID,
-              onClick: () => this.onToggleSystemIme(),
-            })
-          }
-          if (this.softKeyboardAvailable) {
-            this.ToolbarAction({
-              label: '虚拟键盘',
-              active: this.softKeyboardVisible,
-              transitionId: SOFT_KEYBOARD_TRANSITION_ID,
-              onClick: () => this.onToggleSoftKeyboard(),
-            })
-          }
-          this.ToolbarAction({
-            label: this.unreadCount > 0 ? `聊天 ${this.unreadCount}` : '聊天',
-            active: this.activeOverlayPanel === 'chat',
-            transitionId: this.chatTransitionId,
-            onClick: () => this.onOpenChat(),
-          })
+          this.SystemImeAction()
         }
-        .width('100%');
+        .width(this.actionGridWidth());
 
         Row({ space: $r('app.float.space_8') }) {
-          this.ToolbarAction({
-            label: '显示器',
-            active: this.activeOverlayPanel === 'display',
-            transitionId: this.displayTransitionId,
-            onClick: () => this.onOpenDisplay(),
-          })
-          this.ToolbarAction({
-            label: '画质',
-            active: this.activeOverlayPanel === 'quality',
-            transitionId: this.qualityTransitionId,
-            onClick: () => this.onOpenQuality(),
-          })
+          this.SoftKeyboardAction()
+          this.ChatAction()
         }
-        .width('100%');
+        .width(this.actionGridWidth());
 
         Row({ space: $r('app.float.space_8') }) {
           this.AudioToggle()
-          this.DangerAction('断开连接')
+          this.DisplayAction()
         }
-        .width('100%');
+        .width(this.actionGridWidth());
 
-        if (this.windowControlsAvailable) {
-          Row({ space: $r('app.float.space_8') }) {
-            this.WindowControlActions();
-          }
-          .width('100%')
-          .justifyContent(FlexAlign.End);
+        Row({ space: $r('app.float.space_8') }) {
+          this.QualityAction()
+          this.DangerAction('断开')
         }
+        .width(this.actionGridWidth());
       }
-      .width('100%');
+      .width(this.actionGridWidth());
     }
   }
 
@@ -868,14 +922,6 @@ export struct SessionToolbar {
         .width('100%')
         .justifyContent(FlexAlign.End);
 
-      }
-
-      if (this.windowControlsAvailable && this.activeOverlayPanel !== 'home') {
-        Row({ space: $r('app.float.space_8') }) {
-          this.WindowControlActions();
-        }
-        .width('100%')
-        .justifyContent(FlexAlign.End);
       }
 
       if (this.activeOverlayPanel === 'home') {

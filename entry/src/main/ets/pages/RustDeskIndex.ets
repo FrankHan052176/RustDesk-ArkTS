@@ -489,6 +489,7 @@ struct RustDeskIndex {
   private pcSessionImmersiveApplied: boolean = false;
   private manualSessionWindowImmersiveApplied: boolean = false;
   @Local sessionWindowControlCapable: boolean = false;
+  @Local sessionWindowResizeCapable: boolean = false;
   @Local sessionWindowFullscreen: boolean = false;
   @Local sessionWindowControlBusy: boolean = false;
   @Local remoteCursorVisible: boolean = false;
@@ -4916,6 +4917,11 @@ struct RustDeskIndex {
     this.sessionWindowFullscreen = status === window.WindowStatusType.FULL_SCREEN
       || status === window.WindowStatusType.MAXIMIZE;
     const isFreeMultiWindow = status === window.WindowStatusType.FLOATING;
+    if (isFreeMultiWindow) {
+      this.sessionWindowResizeCapable = true;
+    } else if (status === window.WindowStatusType.FULL_SCREEN) {
+      this.sessionWindowResizeCapable = false;
+    }
     if (this.isPcDevice() || deviceInfo.deviceType === 'tablet' || isFreeMultiWindow) {
       this.sessionWindowControlCapable = true;
     }
@@ -5036,6 +5042,7 @@ struct RustDeskIndex {
     this.freeWindowChromeOwned = false;
     this.freeMultiWindow = false;
     this.sessionWindowControlCapable = false;
+    this.sessionWindowResizeCapable = false;
     this.sessionWindowFullscreen = false;
     this.freeWindow = undefined;
   }
@@ -5078,6 +5085,10 @@ struct RustDeskIndex {
     return this.freeWindow !== undefined && this.sessionWindowControlCapable;
   }
 
+  private sessionWindowResizeAvailable(): boolean {
+    return this.sessionWindowControlsAvailable() && this.sessionWindowResizeCapable;
+  }
+
   private reportSessionWindowControlFailure(action: string, error: Error | BusinessError): void {
     const message = `${action}失败：${String(error)}`;
     this.errorText = message;
@@ -5113,7 +5124,10 @@ struct RustDeskIndex {
       return;
     }
     this.sessionWindowControlBusy = true;
-    if (status === window.WindowStatusType.FULL_SCREEN || status === window.WindowStatusType.MAXIMIZE) {
+    const shouldRecover = this.sessionWindowFullscreen
+      || status === window.WindowStatusType.FULL_SCREEN
+      || status === window.WindowStatusType.MAXIMIZE;
+    if (shouldRecover) {
       currentWindow.recover()
         .then((): void => {
           this.manualSessionWindowImmersiveApplied = false;
@@ -7923,6 +7937,7 @@ struct RustDeskIndex {
             canResetTransform: this.hasPreviewViewTransform(),
             panelContentHeight: this.sessionOverlayContentHeight(),
             windowControlsAvailable: this.sessionWindowControlsAvailable(),
+            windowResizeAvailable: this.sessionWindowResizeAvailable(),
             windowFullscreen: this.sessionWindowFullscreen,
             windowControlBusy: this.sessionWindowControlBusy,
             onOpenInput: () => this.openInputModePanel(),
