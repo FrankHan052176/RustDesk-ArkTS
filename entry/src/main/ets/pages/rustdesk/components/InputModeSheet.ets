@@ -1,4 +1,5 @@
 import {
+  LuminousNeoTokens,
   LuminousSegmentedControl,
   LuminousSelectionItem,
 } from 'luminous_neo';
@@ -115,16 +116,23 @@ export struct InputModeSheet {
       : this.viewportWidth;
   }
 
+  private segmentedControlShadowInset(): number {
+    return LuminousNeoTokens.shadowPaddingFor(48) * 2;
+  }
+
   private modeControlWidth(): number {
-    return Math.min(620, Math.max(180, this.paneWidth()));
+    const controlWidth = Math.min(620, Math.max(180, this.paneWidth()));
+    return Math.max(120, controlWidth - this.segmentedControlShadowInset());
   }
 
   private rightClickControlWidth(): number {
     const available = this.paneWidth();
     if (this.useWideLayout()) {
-      return Math.min(620, Math.max(180, available - 28));
+      const innerWidth = Math.min(620, Math.max(180, available - 28));
+      return Math.max(120, innerWidth - this.segmentedControlShadowInset());
     }
-    return available >= 324 ? Math.min(420, available - 84) : Math.max(180, available);
+    const controlWidth = available >= 324 ? Math.min(420, available - 84) : Math.max(180, available);
+    return Math.max(120, controlWidth - this.segmentedControlShadowInset());
   }
 
   private rightClickGestureTitle(): string {
@@ -229,18 +237,23 @@ export struct InputModeSheet {
 
   @Builder
   private RightClickSelector() {
-    LuminousSegmentedControl({
-      items: [
-        new LuminousSelectionItem('double_tap', '双击'),
-        new LuminousSelectionItem('two_finger_tap', '双指点击'),
-        new LuminousSelectionItem('long_press', '长按'),
-      ],
-      selectedIndex: this.rightClickIndex(),
-      controlWidth: this.rightClickControlWidth(),
-      controlHeight: 48,
-      motionEnabled: true,
-      onChange: (index: number) => this.selectRightClick(index),
-    })
+    Row() {
+      LuminousSegmentedControl({
+        items: [
+          new LuminousSelectionItem('double_tap', '双击'),
+          new LuminousSelectionItem('two_finger_tap', '双指点击'),
+          new LuminousSelectionItem('long_press', '长按'),
+        ],
+        selectedIndex: this.rightClickIndex(),
+        controlWidth: this.rightClickControlWidth(),
+        controlHeight: 48,
+        motionEnabled: true,
+        onChange: (index: number) => this.selectRightClick(index),
+      })
+    }
+    .width('100%')
+    .justifyContent(FlexAlign.Center)
+    .clip(false);
   }
 
   build(): void {
@@ -286,17 +299,22 @@ export struct InputModeSheet {
 
   @Builder
   private ModeSelector() {
-    LuminousSegmentedControl({
-      items: [
-        new LuminousSelectionItem('mouse', '鼠标模式'),
-        new LuminousSelectionItem('touch', '触控模式'),
-        new LuminousSelectionItem('relative', '相对鼠标', '', this.relativeModeSupported),
-      ],
-      selectedIndex: this.modeIndex(),
-      controlWidth: this.modeControlWidth(),
-      controlHeight: 48,
-      motionEnabled: true,
-      onChange: (index: number) => this.selectMode(index),
-    })
+    Row() {
+      LuminousSegmentedControl({
+        items: [
+          new LuminousSelectionItem('mouse', '鼠标模式'),
+          new LuminousSelectionItem('touch', '触控模式'),
+          new LuminousSelectionItem('relative', '相对鼠标', '', this.relativeModeSupported),
+        ],
+        selectedIndex: this.modeIndex(),
+        controlWidth: this.modeControlWidth(),
+        controlHeight: 48,
+        motionEnabled: true,
+        onChange: (index: number) => this.selectMode(index),
+      })
+    }
+    .width('100%')
+    .justifyContent(FlexAlign.Center)
+    .clip(false);
   }
 }
