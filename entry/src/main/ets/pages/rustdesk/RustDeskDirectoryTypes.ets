@@ -1,17 +1,17 @@
-export type ServerMode = 'custom';
+export type ServerMode = 'official' | 'custom';
 export type ServerEndpointTestState = 'untested' | 'success' | 'error';
 export type PeerSource = 'recent' | 'addressBook' | 'lan';
 export type RustDeskInputMode = 'touch' | 'mouse' | 'relative';
 export type RustDeskRightClickGesture = 'double_tap' | 'two_finger_tap' | 'long_press';
 
 export class ServerConfig {
-  mode: ServerMode = 'custom';
+  mode: ServerMode = 'official';
   idServer: string = '';
   relayServer: string = '';
   apiServer: string = '';
   key: string = '';
   effectiveApiServer: string = '';
-  usingPublicServer: boolean = false;
+  usingPublicServer: boolean = true;
   remoteReachable: boolean = false;
   accountAvailable: boolean = false;
   resultState: string = 'idle';

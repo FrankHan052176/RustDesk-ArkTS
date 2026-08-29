@@ -2,11 +2,13 @@ import {
   LuminousButton,
   LuminousControlSize,
   LuminousNeoTokens,
+  LuminousSegmentedControl,
+  LuminousSelectionItem,
   LuminousSurface,
   LuminousTextField,
   LuminousTone,
 } from 'luminous_neo';
-import { ServerConfig, ServerEndpointTestState } from '../RustDeskDirectoryTypes';
+import { ServerConfig, ServerEndpointTestState, ServerMode } from '../RustDeskDirectoryTypes';
 
 export interface ServerSettingsCardProps {
   showHeader: boolean;
@@ -40,11 +42,16 @@ export struct ServerSettingsCard {
   }
 
   private selectorWidth(): number {
-    return Math.max(280, Math.min(this.viewportWidth - 40, 560));
+    return Math.max(96, Math.min(this.viewportWidth - 40, 560));
+  }
+
+  private modeControlWidth(): number {
+    const shadowInset = LuminousNeoTokens.shadowPaddingFor(50) * 2;
+    return Math.max(96, this.selectorWidth() - shadowInset);
   }
 
   private inputWidth(): number {
-    return Math.max(280, this.viewportWidth - this.surfaceHorizontalInset() * 2);
+    return Math.max(96, this.viewportWidth - this.surfaceHorizontalInset() * 2);
   }
 
   private surfaceHorizontalInset(): number {
@@ -56,7 +63,7 @@ export struct ServerSettingsCard {
   }
 
   private actionButtonWidth(): number {
-    return Math.max(240, this.inputWidth() - 32);
+    return Math.max(120, this.inputWidth() - 32);
   }
 
   private statusSummaryHeight(): number {
@@ -69,13 +76,13 @@ export struct ServerSettingsCard {
 
   private copyConfig(): ServerConfig {
     const next = new ServerConfig();
-    next.mode = 'custom';
+    next.mode = this.config.mode;
     next.idServer = this.config.idServer;
     next.relayServer = this.config.relayServer;
     next.apiServer = this.config.apiServer;
     next.key = this.config.key;
     next.effectiveApiServer = this.config.effectiveApiServer;
-    next.usingPublicServer = false;
+    next.usingPublicServer = this.config.usingPublicServer;
     next.remoteReachable = this.config.remoteReachable;
     next.accountAvailable = this.config.accountAvailable;
     next.resultState = this.config.resultState;
@@ -89,10 +96,20 @@ export struct ServerSettingsCard {
     return next;
   }
 
-  private emitDraft(next: ServerConfig): void {
+  private updateMode(mode: ServerMode): void {
+    const next = this.copyConfig();
+    next.mode = mode;
+    this.emitDraft(next, 'mode-draft');
+  }
+
+  private updateModeIndex(index: number): void {
+    this.updateMode(index === 1 ? 'custom' : 'official');
+  }
+
+  private emitDraft(next: ServerConfig, state: string = 'idle'): void {
     next.remoteReachable = false;
     next.accountAvailable = false;
-    next.resultState = 'idle';
+    next.resultState = state;
     next.message = '';
     next.idServerTestState = 'untested';
     next.relayServerTestState = 'untested';
@@ -139,6 +156,9 @@ export struct ServerSettingsCard {
   }
 
   private validateFormat(config: ServerConfig): ResourceStr {
+    if (config.mode === 'official') {
+      return '';
+    }
     if (config.idServer.includes(' ')) {
       return $r('app.string.settings_server_error_id_space');
     }
@@ -154,6 +174,9 @@ export struct ServerSettingsCard {
   }
 
   private findValidationField(config: ServerConfig): string {
+    if (config.mode === 'official') {
+      return '';
+    }
     if (config.idServer.includes(' ')) {
       return 'id-server';
     }
@@ -192,11 +215,16 @@ export struct ServerSettingsCard {
     }
     this.validationMessage = '';
     this.validationField = '';
-    this.onConfigChange(next);
     this.onSave(next);
   }
 
   private remoteStatusText(): ResourceStr {
+    if (this.config.resultState === 'mode-draft') {
+      return $r('app.string.settings_server_pending_apply');
+    }
+    if (this.config.mode === 'official') {
+      return $r('app.string.settings_server_remote_auto');
+    }
     if (this.config.idServer.trim().length === 0 && this.config.relayServer.trim().length === 0) {
       return $r('app.string.settings_server_remote_unconfigured');
     }
@@ -252,6 +280,9 @@ export struct ServerSettingsCard {
   }
 
   private accountStatusText(): ResourceStr {
+    if (this.config.resultState === 'mode-draft') {
+      return $r('app.string.settings_server_pending_apply');
+    }
     if (this.config.accountAvailable) {
       return $r('app.string.settings_server_account_ready');
     }
@@ -261,7 +292,29 @@ export struct ServerSettingsCard {
     return $r('app.string.settings_server_account_pending');
   }
 
+  @Builder
+  private ModeSelector() {
+    Row() {
+      LuminousSegmentedControl({
+        items: [
+          new LuminousSelectionItem('official', $r('app.string.settings_server_official')),
+          new LuminousSelectionItem('custom', $r('app.string.settings_server_custom')),
+        ],
+        selectedIndex: this.config.mode === 'custom' ? 1 : 0,
+        controlWidth: this.modeControlWidth(),
+        controlHeight: 50,
+        motionEnabled: true,
+        onChange: (index: number): void => this.updateModeIndex(index),
+      })
+    }
+    .width('100%')
+    .justifyContent(FlexAlign.Center);
+  }
+
   private effectiveApiText(): ResourceStr {
+    if (this.config.resultState === 'mode-draft') {
+      return $r('app.string.settings_server_pending_apply');
+    }
     const apiServer = this.config.effectiveApiServer.trim();
     if (apiServer.length > 0) {
       return apiServer;
@@ -645,25 +698,36 @@ export struct ServerSettingsCard {
         .alignItems(VerticalAlign.Center);
       }
 
-      Text($r('app.string.settings_server_custom_hint'))
+      this.ModeSelector()
+
+      Text(this.config.mode === 'official'
+        ? $r('app.string.settings_server_public_hint')
+        : $r('app.string.settings_server_custom_hint'))
         .width('100%')
         .fontSize($r('app.float.font_body'))
         .lineHeight(20)
-        .fontColor($r('app.color.neu_text_secondary'));
+        .fontColor($r('app.color.neu_text_secondary'))
+        .margin({ top: -8 });
 
-      this.CustomFields()
+      if (this.config.mode === 'official') {
+        this.StatusSummary()
+      } else {
+        this.CustomFields()
+      }
 
       this.ActionButtons()
 
-      Row() {
-        Text($r('app.string.settings_server_validation_note'))
-          .width(this.inputWidth())
-          .fontSize($r('app.float.font_caption'))
-          .lineHeight(17)
-          .fontColor($r('app.color.text_secondary'));
+      if (this.config.mode === 'custom') {
+        Row() {
+          Text($r('app.string.settings_server_validation_note'))
+            .width(this.inputWidth())
+            .fontSize($r('app.float.font_caption'))
+            .lineHeight(17)
+            .fontColor($r('app.color.text_secondary'));
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.Center);
       }
-      .width('100%')
-      .justifyContent(FlexAlign.Center);
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)

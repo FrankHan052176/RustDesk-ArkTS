@@ -142,7 +142,11 @@
     },
     {
       "name": "settings_server_subtitle",
-      "value": "配置 ID / Relay / API 与服务器公钥"
+      "value": "使用内置官方服务，或配置自己的 ID / Relay / API"
+    },
+    {
+      "name": "settings_server_official",
+      "value": "官方服务器"
     },
     {
       "name": "settings_server_custom",
@@ -210,7 +214,7 @@
     },
     {
       "name": "settings_server_effective_api_auto",
-      "value": "未配置"
+      "value": "由内核自动选择"
     },
     {
       "name": "settings_server_remote_capability",
@@ -223,6 +227,14 @@
     {
       "name": "settings_server_remote_ready",
       "value": "地址解析通过"
+    },
+    {
+      "name": "settings_server_remote_auto",
+      "value": "由内核自动选择公共节点"
+    },
+    {
+      "name": "settings_server_pending_apply",
+      "value": "待保存并应用"
     },
     {
       "name": "settings_server_remote_pending",
@@ -289,8 +301,12 @@
       "value": "API Server 需要以 http:// 或 https:// 开头。"
     },
     {
+      "name": "settings_server_public_hint",
+      "value": "使用 RustDesk 内置官方 ID、Relay 与账户服务；无需填写地址，保存后由内核自动选择公共节点。"
+    },
+    {
       "name": "settings_server_custom_hint",
-      "value": "所有服务器均可留空；仅使用局域网直连时无需配置服务器。配置 API 后会从该服务加载账户与通讯簿能力。"
+      "value": "填写自建或受信任服务的 ID / Relay / API 与公钥；只使用局域网 IP 直连时也可留空。"
     },
     {
       "name": "settings_server_test_success",
@@ -598,11 +614,11 @@
     },
     {
       "name": "settings_tutorial_subtitle",
-      "value": "安装 RustDesk，并选择适合你的连接方式"
+      "value": "从首次连接到远控、多会话、文件与被看功能"
     },
     {
       "name": "settings_tutorial_summary",
-      "value": "安装与两种连接方式"
+      "value": "完整连接与使用指南"
     },
     {
       "name": "guide_install_heading",
@@ -618,7 +634,7 @@
     },
     {
       "name": "guide_install_body",
-      "value": "在受控设备的浏览器中搜索 RustDesk，下载并完成安装；如果找不到合适的安装包，也可以加入 App 反馈群询问。"
+      "value": "在需要被控制的电脑或手机安装 RustDesk，并确认首页能看到设备 ID 与一次性密码。本 App 既可以主动连接其他设备，也可以在“服务端”中作为被看端接受连接。"
     },
     {
       "name": "guide_feedback_group_action",
@@ -638,11 +654,39 @@
     },
     {
       "name": "guide_path_heading_subtitle",
-      "value": "根据网络环境选择局域网直连或服务器连接"
+      "value": "默认使用官方 ID，也可选择局域网或自建服务器"
+    },
+    {
+      "name": "guide_official_description",
+      "value": "最简单的跨网络连接方式。首次安装默认启用内置 RustDesk 官方 ID、Relay 与账户服务，无需手动填写服务器。"
+    },
+    {
+      "name": "guide_official_step_1_title",
+      "value": "确认官方服务器"
+    },
+    {
+      "name": "guide_official_step_1_body",
+      "value": "进入“设置 > 服务器与网络”，保留“官方服务器”并保存。内核会自动选择公共节点。"
+    },
+    {
+      "name": "guide_official_step_2_title",
+      "value": "输入设备 ID"
+    },
+    {
+      "name": "guide_official_step_2_body",
+      "value": "回到首页输入受控设备显示的 RustDesk ID，选择远程控制、只看屏幕、查看相机或文件传输。"
+    },
+    {
+      "name": "guide_official_step_3_title",
+      "value": "完成身份确认"
+    },
+    {
+      "name": "guide_official_step_3_body",
+      "value": "输入受控设备的一次性密码，或等待对方确认。需要通讯簿时可在“设置 > 账户”登录。"
     },
     {
       "name": "guide_direct_description",
-      "value": "适合只需要在同一局域网或远程组网环境内进行控制的用户。"
+      "value": "适合同一局域网或 EasyTier 等远程组网环境；数据可直接到达受控设备，不依赖服务器转发。"
     },
     {
       "name": "guide_direct_step_1_title",
@@ -666,35 +710,99 @@
     },
     {
       "name": "guide_direct_step_3_body",
-      "value": "在本设备输入受控设备的 IP，再输入受控设备首页显示的一次性密码即可访问。"
+      "value": "在本设备首页输入受控设备的 IP 或 IP:端口，再输入一次性密码或等待对方确认。"
     },
     {
       "name": "guide_server_description",
-      "value": "适合已有自建服务器，或无法使用局域网与远程组网、只能通过服务器远程访问的用户。"
-    },
-    {
-      "name": "guide_server_help_title",
-      "value": "没有自建服务器？"
-    },
-    {
-      "name": "guide_server_help_body",
-      "value": "如果你没有可用的自建服务器，请先加入 App 反馈群，向其他群友寻求帮助。"
+      "value": "适合已经部署 RustDesk Server Pro 或开源服务端、需要使用私有 ID / Relay / API 与公钥的用户。"
     },
     {
       "name": "guide_server_step_1_title",
-      "value": "填写服务器并登录"
+      "value": "切换到自定义服务器"
     },
     {
       "name": "guide_server_step_1_body",
-      "value": "进入“设置 > 服务器”填写服务器信息，再前往“设置 > 账户”完成登录。"
+      "value": "进入“设置 > 服务器与网络”选择“自定义服务器”，填写 ID Server；Relay、API 与 Key 按部署情况填写。"
     },
     {
       "name": "guide_server_step_2_title",
-      "value": "输入 ID 和一次性密码"
+      "value": "逐项测试并保存"
     },
     {
       "name": "guide_server_step_2_body",
-      "value": "在本设备输入受控设备首页显示的 RustDesk ID，再输入其一次性密码即可访问。"
+      "value": "使用字段内的“测试 / 重测”确认 RustDesk 协议响应，再点击“保存并应用”。普通网页或仅端口可达不会判为成功。"
+    },
+    {
+      "name": "guide_server_step_3_title",
+      "value": "连接与账户同步"
+    },
+    {
+      "name": "guide_server_step_3_body",
+      "value": "输入同一服务器上的设备 ID 发起连接；配置了 API 时，可在“账户”中登录并同步通讯簿。"
+    },
+    {
+      "name": "guide_remote_heading",
+      "value": "掌握远控工具栏"
+    },
+    {
+      "name": "guide_remote_heading_subtitle",
+      "value": "输入、画面、协作和多设备会话都集中在悬浮栏"
+    },
+    {
+      "name": "guide_remote_input_title",
+      "value": "选择输入模式"
+    },
+    {
+      "name": "guide_remote_input_body",
+      "value": "“输入”中可切换触控、鼠标或相对鼠标，设置右键手势；手机长按并拖动可模拟按住拖动，也可使用系统输入法和虚拟键盘。"
+    },
+    {
+      "name": "guide_remote_tools_title",
+      "value": "调整画面与协作功能"
+    },
+    {
+      "name": "guide_remote_tools_body",
+      "value": "悬浮栏提供音频、显示器、画质、聊天和断开；文本、图片与文件剪贴板会按会话同步，画面支持缩放、平移、旋转与复位。"
+    },
+    {
+      "name": "guide_remote_sessions_title",
+      "value": "同时连接多台设备"
+    },
+    {
+      "name": "guide_remote_sessions_body",
+      "value": "点击“新建”回首页连接另一台设备；已有会话继续保留，可从“返回远控”或工具栏设备页签切换，最多同时保留六个会话。"
+    },
+    {
+      "name": "guide_features_heading",
+      "value": "使用设备与扩展功能"
+    },
+    {
+      "name": "guide_features_heading_subtitle",
+      "value": "设备中心、文件、相机与被看服务均可独立使用"
+    },
+    {
+      "name": "guide_devices_title",
+      "value": "设备中心"
+    },
+    {
+      "name": "guide_devices_body",
+      "value": "在“设备”中查看最近设备、服务器通讯簿和局域网发现结果，可搜索、收藏、检查在线状态，并直接发起远控、相机或文件会话。"
+    },
+    {
+      "name": "guide_transfer_title",
+      "value": "文件传输与查看相机"
+    },
+    {
+      "name": "guide_transfer_body",
+      "value": "首页连接类型可切换为“文件传输”或“查看相机”；文件任务支持进度、取消和后台保持，相机会使用独立只看会话。"
+    },
+    {
+      "name": "guide_host_title",
+      "value": "让本设备接受连接"
+    },
+    {
+      "name": "guide_host_body",
+      "value": "在“服务端”启动被看服务并按需共享屏幕与音频。对方可使用已设置的密码连接；本机“同意观看”是另一种仅限本次、免密且只看的授权。"
     },
     {
       "name": "guide_defaults_heading",
@@ -702,7 +810,7 @@
     },
     {
       "name": "guide_defaults_heading_subtitle",
-      "value": "提前设置新远控会话的默认操作方式"
+      "value": "把常用操作、安全与服务器选择提前配置好"
     },
     {
       "name": "guide_defaults_title",
@@ -710,7 +818,7 @@
     },
     {
       "name": "guide_defaults_body",
-      "value": "在“远控默认”中设置你习惯的控制模式、手势、画质和其他新会话默认行为。"
+      "value": "在“远控默认”设置输入、右键手势、音频、剪贴板、画质、编码和工具栏状态；在服务器、账户与安全页面管理网络和授权。"
     },
     {
       "name": "remote_session_tab_add",

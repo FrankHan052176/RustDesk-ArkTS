@@ -366,15 +366,22 @@ export class RustDeskMainBridge {
       config.message = message;
       return config;
     }
-    config.mode = 'custom';
     config.idServer = String(source.idServer ?? '').trim();
     config.relayServer = String(source.relayServer ?? '').trim();
     config.apiServer = String(source.apiServer ?? '').trim();
     config.key = String(source.key ?? '').trim();
     config.effectiveApiServer = String(source.effectiveApiServer ?? config.apiServer).trim();
-    config.usingPublicServer = false;
+    const requestedMode = String(source.mode ?? '').trim();
+    config.usingPublicServer = source.usingPublicServer === undefined
+      ? requestedMode === 'official'
+      : Boolean(source.usingPublicServer);
+    if (requestedMode === 'official' || requestedMode === 'custom') {
+      config.mode = requestedMode;
+    } else {
+      config.mode = config.usingPublicServer ? 'official' : 'custom';
+    }
     config.remoteReachable = source.remoteReachable === undefined
-      ? reachable
+      ? (config.mode === 'official' || reachable)
       : Boolean(source.remoteReachable);
     config.accountAvailable = source.accountAvailable === undefined
       ? false

@@ -27,7 +27,6 @@ export struct QualityControlSheet {
     targetBitrate: '--',
     chroma: '--',
   };
-  @Local viewportWidth: number = 390;
   @Event onSelectPreset: (preset: ImageQualityPreset) => void = (_preset: ImageQualityPreset) => {};
   @Event onCustomQualityChange: (value: number) => void = (_value: number) => {};
   @Event onCustomFpsChange: (value: number) => void = (_value: number) => {};
@@ -70,10 +69,6 @@ export struct QualityControlSheet {
     } else {
       this.onSelectPreset('balanced');
     }
-  }
-
-  private sliderWidth(): number {
-    return Math.max(180, Math.min(520, this.viewportWidth - 48));
   }
 
   @Builder
@@ -128,7 +123,7 @@ export struct QualityControlSheet {
         step: step,
         style: SliderStyle.OutSet,
       })
-        .width(this.sliderWidth())
+        .width('100%')
         .selectedColor($r('app.color.brand_primary'))
         .trackColor($r('app.color.mica_control'))
         .blockColor($r('app.color.white'))
@@ -257,12 +252,6 @@ export struct QualityControlSheet {
     .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.None)
     .borderRadius($r('app.float.radius_14'))
-    .clip(true)
-    .onAreaChange((_oldArea: Area, newArea: Area): void => {
-      let width: number = Number(newArea.width);
-      if (width > 0) {
-        this.viewportWidth = width;
-      }
-    });
+    .clip(true);
   }
 }

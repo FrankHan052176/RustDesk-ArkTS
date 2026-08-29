@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import {
   LuminousButton,
   LuminousControlSize,
+  LuminousNeoTokens,
   LuminousSegmentedControl,
   LuminousSelectionItem,
   LuminousSurface,
@@ -18,17 +19,37 @@ export struct BeginnerGuidePage {
   @Local selectedPathIndex: number = 0;
 
   private contentWidth(): number {
-    return Math.max(280, Math.min(this.viewportWidth, 900));
+    return Math.max(96, Math.min(this.viewportWidth, 900));
   }
 
   private surfaceWidth(): number {
-    return Math.max(264, this.contentWidth() - 16);
+    return Math.max(80, this.contentWidth() - 16);
+  }
+
+  private segmentedControlWidth(): number {
+    const shadowInset = LuminousNeoTokens.shadowPaddingFor(52) * 2;
+    return Math.max(64, this.surfaceWidth() - shadowInset);
+  }
+
+  private adaptiveCardHeight(baseHeight: number): number {
+    if (this.surfaceWidth() < 300) {
+      return baseHeight + 72;
+    }
+    if (this.surfaceWidth() < 420) {
+      return baseHeight + 36;
+    }
+    return baseHeight;
+  }
+
+  private installCardHeight(): number {
+    return this.adaptiveCardHeight(270);
   }
 
   private pathItems(): LuminousSelectionItem[] {
     return [
-      new LuminousSelectionItem('direct', '局域网 / 组网', 'IP 直连'),
-      new LuminousSelectionItem('server', '服务器连接', 'ID 连接'),
+      new LuminousSelectionItem('official', '官方服务', 'ID 连接'),
+      new LuminousSelectionItem('direct', '局域网', 'IP 直连'),
+      new LuminousSelectionItem('custom', '自建服务', '私有节点'),
     ];
   }
 
@@ -88,7 +109,7 @@ export struct BeginnerGuidePage {
     Column({ space: 8 }) {
       LuminousButton({
         label: $r('app.string.guide_feedback_group_action'),
-        controlWidth: Math.max(220, this.surfaceWidth() - 36),
+        controlWidth: Math.max(64, this.surfaceWidth() - 36),
         controlSizeMode: LuminousControlSize.Compact,
         tone: LuminousTone.Accent,
         motionEnabled: true,
@@ -108,7 +129,7 @@ export struct BeginnerGuidePage {
       LuminousSurface({
         depth: 1,
         surfaceWidth: this.surfaceWidth(),
-        surfaceHeight: 270,
+        surfaceHeight: this.installCardHeight(),
         cornerRadius: 24,
         motionEnabled: true,
       }) {
@@ -136,13 +157,13 @@ export struct BeginnerGuidePage {
           this.FeedbackGroupButton()
         }
         .width(this.surfaceWidth())
-        .height(270)
+        .height(this.installCardHeight())
         .padding({ left: 18, right: 18, top: 18, bottom: 14 })
         .alignItems(HorizontalAlign.Start);
       }
     }
     .width(this.surfaceWidth() + 16)
-    .height(286)
+    .height(this.installCardHeight() + 16)
     .clip(false);
   }
 
@@ -152,7 +173,7 @@ export struct BeginnerGuidePage {
       LuminousSurface({
         depth: 1,
         surfaceWidth: this.surfaceWidth(),
-        surfaceHeight: height,
+        surfaceHeight: this.adaptiveCardHeight(height),
         cornerRadius: 22,
         motionEnabled: true,
       }) {
@@ -192,75 +213,33 @@ export struct BeginnerGuidePage {
           .alignItems(HorizontalAlign.Start);
         }
         .width(this.surfaceWidth())
-        .height(height)
+        .height(this.adaptiveCardHeight(height))
         .padding({ left: 16, right: 16 })
         .alignItems(VerticalAlign.Center);
       }
     }
     .width(this.surfaceWidth() + 16)
-    .height(height + 16)
+    .height(this.adaptiveCardHeight(height) + 16)
     .clip(false);
   }
 
   @Builder
-  private ServerHelpCard() {
-    Stack({ alignContent: Alignment.Center }) {
-      LuminousSurface({
-        depth: 1,
-        surfaceWidth: this.surfaceWidth(),
-        surfaceHeight: 220,
-        cornerRadius: 22,
-        motionEnabled: true,
-      }) {
-        Column({ space: 10 }) {
-          Row({ space: 14 }) {
-            Stack({ alignContent: Alignment.Center }) {
-              LuminousSurface({
-                depth: -1,
-                surfaceWidth: 38,
-                surfaceHeight: 38,
-                cornerRadius: 19,
-                motionEnabled: true,
-              }) {
-                Text('0')
-                  .fontSize(14)
-                  .fontWeight(FontWeight.Bold)
-                  .fontColor($r('app.color.warning'));
-              }
-            }
-            .width(44)
-            .height(44)
-            .clip(false);
-
-            Column({ space: 5 }) {
-              Text($r('app.string.guide_server_help_title'))
-                .width('100%')
-                .fontSize(14)
-                .lineHeight(19)
-                .fontWeight(FontWeight.Bold)
-                .fontColor($r('app.color.neu_text_primary'));
-              Text($r('app.string.guide_server_help_body'))
-                .width('100%')
-                .fontSize(12)
-                .lineHeight(18)
-                .fontColor($r('app.color.neu_text_secondary'));
-            }
-            .layoutWeight(1)
-            .alignItems(HorizontalAlign.Start);
-          }
-          .width('100%')
-          .alignItems(VerticalAlign.Center);
-
-          this.FeedbackGroupButton()
-        }
+  private OfficialPath() {
+    Column({ space: 10 }) {
+      Text($r('app.string.guide_official_description'))
         .width(this.surfaceWidth())
-        .height(220)
-        .padding({ left: 16, right: 16, top: 14, bottom: 10 });
-      }
+        .fontSize(12)
+        .lineHeight(18)
+        .fontColor($r('app.color.neu_text_secondary'));
+      this.StepCard('1', $r('app.string.guide_official_step_1_title'),
+        $r('app.string.guide_official_step_1_body'), 116)
+      this.StepCard('2', $r('app.string.guide_official_step_2_title'),
+        $r('app.string.guide_official_step_2_body'), 116)
+      this.StepCard('3', $r('app.string.guide_official_step_3_title'),
+        $r('app.string.guide_official_step_3_body'), 116)
     }
-    .width(this.surfaceWidth() + 16)
-    .height(236)
-    .clip(false);
+    .width('100%')
+    .alignItems(HorizontalAlign.Center);
   }
 
   @Builder
@@ -283,18 +262,47 @@ export struct BeginnerGuidePage {
   }
 
   @Builder
-  private ServerPath() {
+  private CustomServerPath() {
     Column({ space: 10 }) {
       Text($r('app.string.guide_server_description'))
         .width(this.surfaceWidth())
         .fontSize(12)
         .lineHeight(18)
         .fontColor($r('app.color.neu_text_secondary'));
-      this.ServerHelpCard()
       this.StepCard('1', $r('app.string.guide_server_step_1_title'),
         $r('app.string.guide_server_step_1_body'), 124)
       this.StepCard('2', $r('app.string.guide_server_step_2_title'),
         $r('app.string.guide_server_step_2_body'), 124)
+      this.StepCard('3', $r('app.string.guide_server_step_3_title'),
+        $r('app.string.guide_server_step_3_body'), 124)
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Center);
+  }
+
+  @Builder
+  private RemoteControlGuide() {
+    Column({ space: 10 }) {
+      this.StepCard('1', $r('app.string.guide_remote_input_title'),
+        $r('app.string.guide_remote_input_body'), 124)
+      this.StepCard('2', $r('app.string.guide_remote_tools_title'),
+        $r('app.string.guide_remote_tools_body'), 132)
+      this.StepCard('3', $r('app.string.guide_remote_sessions_title'),
+        $r('app.string.guide_remote_sessions_body'), 132)
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Center);
+  }
+
+  @Builder
+  private FeatureGuide() {
+    Column({ space: 10 }) {
+      this.StepCard('1', $r('app.string.guide_devices_title'),
+        $r('app.string.guide_devices_body'), 124)
+      this.StepCard('2', $r('app.string.guide_transfer_title'),
+        $r('app.string.guide_transfer_body'), 124)
+      this.StepCard('3', $r('app.string.guide_host_title'),
+        $r('app.string.guide_host_body'), 132)
     }
     .width('100%')
     .alignItems(HorizontalAlign.Center);
@@ -306,7 +314,7 @@ export struct BeginnerGuidePage {
       LuminousSurface({
         depth: 1,
         surfaceWidth: this.surfaceWidth(),
-        surfaceHeight: 124,
+        surfaceHeight: this.adaptiveCardHeight(124),
         cornerRadius: 22,
         motionEnabled: true,
       }) {
@@ -345,13 +353,13 @@ export struct BeginnerGuidePage {
           .alignItems(HorizontalAlign.Start);
         }
         .width(this.surfaceWidth())
-        .height(124)
+        .height(this.adaptiveCardHeight(124))
         .padding({ left: 16, right: 16 })
         .alignItems(VerticalAlign.Center);
       }
     }
     .width(this.surfaceWidth() + 16)
-    .height(140)
+    .height(this.adaptiveCardHeight(124) + 16)
     .clip(false);
   }
 
@@ -367,7 +375,7 @@ export struct BeginnerGuidePage {
       LuminousSegmentedControl({
         items: this.pathItems(),
         selectedIndex: this.selectedPathIndex,
-        controlWidth: this.surfaceWidth(),
+        controlWidth: this.segmentedControlWidth(),
         controlHeight: 52,
         motionEnabled: true,
         onChange: (index: number): void => {
@@ -376,12 +384,22 @@ export struct BeginnerGuidePage {
       })
 
       if (this.selectedPathIndex === 0) {
+        this.OfficialPath()
+      } else if (this.selectedPathIndex === 1) {
         this.DirectPath()
       } else {
-        this.ServerPath()
+        this.CustomServerPath()
       }
 
-      this.SectionHeading('3', $r('app.string.guide_defaults_heading'),
+      this.SectionHeading('3', $r('app.string.guide_remote_heading'),
+        $r('app.string.guide_remote_heading_subtitle'))
+      this.RemoteControlGuide()
+
+      this.SectionHeading('4', $r('app.string.guide_features_heading'),
+        $r('app.string.guide_features_heading_subtitle'))
+      this.FeatureGuide()
+
+      this.SectionHeading('5', $r('app.string.guide_defaults_heading'),
         $r('app.string.guide_defaults_heading_subtitle'))
       this.DefaultsCard()
     }
