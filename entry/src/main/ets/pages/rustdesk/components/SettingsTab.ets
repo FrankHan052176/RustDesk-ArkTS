@@ -781,7 +781,7 @@ export struct SettingsTab {
         LuminousSurface({
           depth: 1,
           surfaceWidth: this.diagnosticPanelWidth(),
-          surfaceHeight: 116,
+          surfaceHeight: 108,
           cornerRadius: 20,
           motionEnabled: true,
         }) {
@@ -792,12 +792,12 @@ export struct SettingsTab {
               () => this.openExternalLink(RUSTDESK_PRIVACY_URL))
           }
           .width(this.diagnosticPanelWidth())
-          .height(116)
+          .height(108)
           .padding({ left: 14, right: 14, top: 10, bottom: 10 });
         }
       }
       .width(this.diagnosticPanelWidth() + 16)
-      .height(132)
+      .height(124)
       .clip(false);
     }
     .width(this.diagnosticPanelWidth() + 16)

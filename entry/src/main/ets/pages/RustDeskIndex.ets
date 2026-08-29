@@ -148,7 +148,6 @@ import {
 } from '../services/EasyTierApiService';
 import {
   ActionResponse,
-  BridgeSummary,
   DecoderCapability,
   DOMAIN,
   EVENT_POLL_INTERVAL_MS,
@@ -319,13 +318,7 @@ struct RustDeskIndex {
   private firstLaunchTutorialSchedulePending: boolean = false;
   private lastViewportPortrait: boolean = true;
 
-  @Local nativeVersion: string = 'loading...';
-  @Local health: string = 'waiting...';
-  @Local integrationStage: string = 'unknown';
-  @Local upstreamRepo: string = '';
-  @Local notes: string = '';
   @Local apiServer: string = '';
-  @Local nativeBuildMarker: string = '';
   @Local decoderCapabilities: DecoderCapability[] = [];
   @Local errorText: string = '';
   @Local serverConfig: ServerConfig = new ServerConfig();
@@ -1040,7 +1033,6 @@ struct RustDeskIndex {
       this.runtimeInitialized = true;
       controlledHostCoordinator.onRuntimeReady();
       this.apiServer = native.runtimeGetApiServer();
-      this.nativeBuildMarker = native.buildMarker();
       let decoderCapabilityResponse: ESObject = JSON.parse(native.runtimeGetDecoderCapabilities());
       let decoderCapabilityRows: ESObject = decoderCapabilityResponse.capabilities;
       const decoderCapabilities = this.copyDecoderCapabilities(decoderCapabilityRows);
@@ -2513,14 +2505,7 @@ struct RustDeskIndex {
 
   private refreshNativeState(): void {
     try {
-      this.nativeVersion = native.nativeVersion();
-      this.health = native.healthcheck();
-      const summary = JSON.parse(native.backendSummary()) as BridgeSummary;
-      this.integrationStage = summary.integrationStage;
-      this.upstreamRepo = summary.upstreamRepo;
-      this.notes = summary.notes;
       this.apiServer = native.runtimeGetApiServer();
-      this.nativeBuildMarker = native.buildMarker();
       let decoderCapabilityResponse: ESObject = JSON.parse(native.runtimeGetDecoderCapabilities());
       let decoderCapabilityRows: ESObject = decoderCapabilityResponse.capabilities;
       const decoderCapabilities = this.copyDecoderCapabilities(decoderCapabilityRows);
