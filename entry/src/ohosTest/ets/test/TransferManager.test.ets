@@ -80,6 +80,10 @@ class RecordingTransferBridge implements NativeSessionBridge {
     return this.ok('refresh');
   }
 
+  setVideoPaused(_sessionId: string, _paused: boolean): ActionResponse {
+    return this.ok('set_video_paused');
+  }
+
   changeResolution(_sessionId: string, _display: number, _width: number, _height: number): ActionResponse {
     return this.ok('change_resolution');
   }
@@ -90,6 +94,18 @@ class RecordingTransferBridge implements NativeSessionBridge {
 
   getConnToken(_sessionId: string): string | null {
     return null;
+  }
+
+  getEnableTrustedDevices(_sessionId: string): boolean {
+    return false;
+  }
+
+  send2fa(_sessionId: string, _code: string, _trustThisDevice: boolean): ActionResponse {
+    return this.ok('send_2fa');
+  }
+
+  inputString(_sessionId: string, _value: string): ActionResponse {
+    return this.ok('input_string');
   }
 
   setImageQuality(_sessionId: string, _quality: string): ActionResponse {
@@ -108,6 +124,26 @@ class RecordingTransferBridge implements NativeSessionBridge {
 
   sendClipboard(_sessionId: string, _content: string): ActionResponse {
     return this.ok('send_clipboard');
+  }
+
+  sendClipboardFiles(_sessionId: string, _paths: Array<string>): ActionResponse {
+    return this.ok('send_clipboard_files');
+  }
+
+  sendClipboardImage(_sessionId: string, _image: Uint8Array): ActionResponse {
+    return this.ok('send_clipboard_image');
+  }
+
+  setClipboardFileRoot(_sessionId: string, _root: string): ActionResponse {
+    return this.ok('set_clipboard_file_root');
+  }
+
+  takeClipboard(_sessionId: string): ActionResponse {
+    return this.ok('take_clipboard');
+  }
+
+  takeClipboardImage(_sessionId: string): Uint8Array {
+    return new Uint8Array(0);
   }
 
   login(_sessionId: string, _password: string, _remember: boolean = false): ActionResponse {

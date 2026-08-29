@@ -6,10 +6,24 @@ interface RemoteAudioStateResponse extends ActionResponse {
   audio?: RemoteAudioState;
 }
 
+export interface NativeClipboardImageDescriptor {
+  format: string;
+  width: number;
+  height: number;
+  byteLength: number;
+}
+
+export interface NativeClipboardResponse extends ActionResponse {
+  text?: string;
+  html?: string;
+  image?: NativeClipboardImageDescriptor | null;
+}
+
 export interface NativeSessionBridge {
   switchDisplay(sessionId: string, display: number): ActionResponse;
   setSize(sessionId: string, display: number, width: number, height: number): ActionResponse;
   refresh(sessionId: string, display: number): ActionResponse;
+  setVideoPaused(sessionId: string, paused: boolean): ActionResponse;
   changeResolution(sessionId: string, display: number, width: number, height: number): ActionResponse;
   getImageQuality(sessionId: string): string | null;
   getConnToken(sessionId: string): string | null;
@@ -21,6 +35,11 @@ export interface NativeSessionBridge {
   setCustomFps(sessionId: string, fps: number): ActionResponse;
   sendChat(sessionId: string, text: string): ActionResponse;
   sendClipboard(sessionId: string, content: string): ActionResponse;
+  sendClipboardFiles(sessionId: string, paths: Array<string>): ActionResponse;
+  sendClipboardImage(sessionId: string, image: Uint8Array): ActionResponse;
+  setClipboardFileRoot(sessionId: string, root: string): ActionResponse;
+  takeClipboard(sessionId: string): NativeClipboardResponse;
+  takeClipboardImage(sessionId: string): Uint8Array;
   addSession(sessionId: string, target: string, options: SessionStartOptions): ActionResponse;
   startSession(sessionId: string): ActionResponse;
   setViewOnly(sessionId: string, enabled: boolean): ActionResponse;
@@ -51,6 +70,10 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
 
   refresh(sessionId: string, display: number): ActionResponse {
     return this.parseNativeResponse(() => native.sessionRefresh(sessionId, display));
+  }
+
+  setVideoPaused(sessionId: string, paused: boolean): ActionResponse {
+    return this.parseNativeResponse(() => native.sessionSetVideoPaused(sessionId, paused));
   }
 
   changeResolution(sessionId: string, display: number, width: number, height: number): ActionResponse {
@@ -95,6 +118,34 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
 
   sendClipboard(sessionId: string, content: string): ActionResponse {
     return this.parseNativeResponse(() => native.sessionSendClipboard(sessionId, content));
+  }
+
+  sendClipboardFiles(sessionId: string, paths: Array<string>): ActionResponse {
+    return this.parseNativeResponse(() => native.sessionSendClipboardFiles(sessionId, JSON.stringify(paths)));
+  }
+
+  sendClipboardImage(sessionId: string, image: Uint8Array): ActionResponse {
+    return this.parseNativeResponse(() => native.sessionSendClipboardImage(sessionId, image));
+  }
+
+  setClipboardFileRoot(sessionId: string, root: string): ActionResponse {
+    return this.parseNativeResponse(() => native.sessionSetClipboardFileRoot(sessionId, root));
+  }
+
+  takeClipboard(sessionId: string): NativeClipboardResponse {
+    try {
+      return JSON.parse(native.sessionTakeClipboard(sessionId)) as NativeClipboardResponse;
+    } catch (error) {
+      return {
+        ok: false,
+        action: 'session_take_clipboard',
+        message: `Native response parsing failed: ${String(error)}`,
+      };
+    }
+  }
+
+  takeClipboardImage(sessionId: string): Uint8Array {
+    return native.sessionTakeClipboardImage(sessionId);
   }
 
   addSession(sessionId: string, target: string, options: SessionStartOptions): ActionResponse {

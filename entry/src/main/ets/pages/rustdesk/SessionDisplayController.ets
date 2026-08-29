@@ -167,6 +167,18 @@ export class SessionDisplayController {
     return this.customFps;
   }
 
+  restoreQualityState(
+    quality: ImageQualityPreset,
+    customQuality: number,
+    customFps: number,
+  ): void {
+    this.imageQuality = this.isValidQuality(quality) ? quality : 'balanced';
+    this.customImageQuality = this.isValidCustomQuality(customQuality)
+      ? Math.round(customQuality)
+      : 50;
+    this.customFps = this.isValidCustomFps(customFps) ? Math.round(customFps) : 30;
+  }
+
   isAwaitingAction(): boolean {
     return this.awaitingAction;
   }

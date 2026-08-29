@@ -57,12 +57,16 @@ import {
   sessionPollEvents as bridgeSessionPollEvents,
   sessionReadRemoteDir as bridgeSessionReadRemoteDir,
   sessionRefresh as bridgeSessionRefresh,
+  sessionSetVideoPaused as bridgeSessionSetVideoPaused,
   sessionSend2Fa as bridgeSessionSend2Fa,
   sessionSendChat as bridgeSessionSendChat,
   sessionSendClipboard as bridgeSessionSendClipboard,
+  sessionSendClipboardFiles as bridgeSessionSendClipboardFiles,
+  sessionSendClipboardImage as bridgeSessionSendClipboardImage,
   sessionSendFiles as bridgeSessionSendFiles,
   sessionSendMouse as bridgeSessionSendMouse,
   sessionSetCodecPreference as bridgeSessionSetCodecPreference,
+  sessionSetClipboardFileRoot as bridgeSessionSetClipboardFileRoot,
   sessionSetCommon as bridgeSessionSetCommon,
   sessionSetConfirmOverrideFile as bridgeSessionSetConfirmOverrideFile,
   sessionSetCustomFps as bridgeSessionSetCustomFps,
@@ -73,6 +77,8 @@ import {
   sessionSetViewOnly as bridgeSessionSetViewOnly,
   sessionStart as bridgeSessionStart,
   sessionSwitchDisplay as bridgeSessionSwitchDisplay,
+  sessionTakeClipboard as bridgeSessionTakeClipboard,
+  sessionTakeClipboardImage as bridgeSessionTakeClipboardImage,
   sessionTakeRgbaFrame as bridgeSessionTakeRgbaFrame,
   sessionToggleOption as bridgeSessionToggleOption,
   transferNextJobId as bridgeTransferNextJobId,
@@ -311,6 +317,10 @@ export class RustDeskNativeApi {
     return bridgeSessionRefresh(sessionId, display);
   }
 
+  sessionSetVideoPaused(sessionId: string, paused: boolean): string {
+    return bridgeSessionSetVideoPaused(sessionId, paused);
+  }
+
   sessionSend2fa(sessionId: string, code: string, trustThisDevice: boolean): string {
     return bridgeSessionSend2Fa(sessionId, code, trustThisDevice);
   }
@@ -323,6 +333,14 @@ export class RustDeskNativeApi {
     return bridgeSessionSendClipboard(sessionId, content);
   }
 
+  sessionSendClipboardFiles(sessionId: string, pathsJson: string): string {
+    return bridgeSessionSendClipboardFiles(sessionId, pathsJson);
+  }
+
+  sessionSendClipboardImage(sessionId: string, image: Uint8Array): string {
+    return bridgeSessionSendClipboardImage(sessionId, image);
+  }
+
   sessionSendFiles(sessionId: string, actId: number, path: string, to: string, fileNum: number, includeHidden: boolean, isRemote: boolean, isDir: boolean): string {
     return bridgeSessionSendFiles(sessionId, actId, path, to, fileNum, includeHidden, isRemote, isDir);
   }
@@ -333,6 +351,10 @@ export class RustDeskNativeApi {
 
   sessionSetCodecPreference(sessionId: string, codec: string): string {
     return bridgeSessionSetCodecPreference(sessionId, codec);
+  }
+
+  sessionSetClipboardFileRoot(sessionId: string, root: string): string {
+    return bridgeSessionSetClipboardFileRoot(sessionId, root);
   }
 
   sessionSetCommon(sessionId: string, key: string, value: string): void {
@@ -373,6 +395,14 @@ export class RustDeskNativeApi {
 
   sessionSwitchDisplay(sessionId: string, displaysJson: string): string {
     return bridgeSessionSwitchDisplay(sessionId, displaysJson);
+  }
+
+  sessionTakeClipboard(sessionId: string): string {
+    return bridgeSessionTakeClipboard(sessionId);
+  }
+
+  sessionTakeClipboardImage(sessionId: string): Uint8Array {
+    return bridgeSessionTakeClipboardImage(sessionId);
   }
 
   sessionTakeRgbaFrame(sessionId: string, display: number): Uint8Array {

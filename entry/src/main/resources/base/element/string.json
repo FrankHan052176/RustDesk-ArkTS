@@ -711,6 +711,22 @@
     {
       "name": "guide_defaults_body",
       "value": "在“远控默认”中设置你习惯的控制模式、手势、画质和其他新会话默认行为。"
+    },
+    {
+      "name": "remote_session_tab_add",
+      "value": "连接另一台设备"
+    },
+    {
+      "name": "remote_session_tab_add_symbol",
+      "value": "+"
+    },
+    {
+      "name": "remote_session_tab_close",
+      "value": "断开并关闭此会话"
+    },
+    {
+      "name": "remote_session_tab_close_symbol",
+      "value": "×"
     }
   ]
 }

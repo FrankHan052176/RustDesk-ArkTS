@@ -44,6 +44,7 @@ export interface RenderStatsSnapshot {
 export interface NativeEvent {
   name: string;
   content?: string;
+  paths?: Array<string>;
   type?: string;
   secure?: string;
   direct?: string;

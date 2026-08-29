@@ -72,5 +72,19 @@ export default function chatStoreTest(): void {
       expect(retry!.state).assertEqual('pending');
       expect(retry!.text).assertEqual('retry this text');
     });
+
+    it('restores per-session history without reusing local ids', 0, () => {
+      const source = new ChatStore();
+      source.send('first', 100);
+      source.receive('second', 200);
+      const restored = new ChatStore();
+
+      restored.restore(source.messages(), source.unreadCount());
+      const next = restored.send('third', 300);
+
+      expect(restored.messages().length).assertEqual(3);
+      expect(restored.unreadCount()).assertEqual(1);
+      expect(next?.localId ?? '').assertEqual('3');
+    });
   });
 }

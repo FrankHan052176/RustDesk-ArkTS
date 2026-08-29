@@ -27,6 +27,7 @@ import { InsecureConnectionDialog } from './rustdesk/components/InsecureConnecti
 import { SettingsTab } from './rustdesk/components/SettingsTab';
 import { ViewedHostPage } from './rustdesk/components/ViewedHostPage';
 import { SessionToolbar } from './rustdesk/components/SessionToolbar';
+import { RemoteSessionTabStrip } from './rustdesk/components/RemoteSessionTabStrip';
 import {
   ANDROID_NAVIGATION_BAR_HEIGHT,
   ANDROID_NAVIGATION_BAR_WIDTH,
@@ -68,7 +69,10 @@ import {
   RustDeskImeInputDelta,
 } from './rustdesk/RustDeskImeInputController';
 import { RustDeskCursorModel } from './rustdesk/RustDeskCursorModel';
-import { RustDeskClipboardController } from './rustdesk/RustDeskClipboardController';
+import {
+  RustDeskClipboardController,
+  RustDeskRemoteClipboardPayload,
+} from './rustdesk/RustDeskClipboardController';
 import {
   RustDeskCoordinateSpace,
   RustDeskFlutterKeyPayload,
@@ -82,6 +86,10 @@ import {
   RemoteSessionOrientationPolicy,
 } from './rustdesk/RemoteSessionOrientationPolicy';
 import { RustDeskNativeSessionBridge } from './rustdesk/NativeSessionBridge';
+import {
+  RemoteSessionTab,
+  RemoteSessionTabsController,
+} from './rustdesk/RemoteSessionTabsController';
 import { DownloadRootManager } from './rustdesk/DownloadRootManager';
 import { TransferManager } from './rustdesk/TransferManager';
 import { RemoteFilePath } from './rustdesk/RemoteFilePath';
@@ -181,9 +189,11 @@ const PREVIEW_MIN_USER_SCALE = 0.5;
 const PREVIEW_MAX_USER_SCALE = 4.0;
 const PREVIEW_SURFACE_WAIT_ATTEMPTS = 100;
 const PREVIEW_SURFACE_WAIT_INTERVAL_MS = 50;
+const NEW_REMOTE_SESSION_SWITCH_TARGET = '__new_remote_session__';
 const ANDROID_NAVIGATION_BOTTOM_OFFSET = 80;
 const ANDROID_NAVIGATION_EDGE_MARGIN = 12;
 const ANDROID_RECENT_PRESS_DURATION_MS = 500;
+const BACKGROUND_SESSION_POLL_INTERVAL_MS = 250;
 
 type PrimarySessionKind = 'remote_control' | 'view_only' | 'view_camera';
 type PasswordSessionKind = 'primary' | 'file_transfer';
@@ -239,6 +249,7 @@ struct RustDeskIndex {
   private imeInputController: RustDeskImeInputController = new RustDeskImeInputController();
   private systemImeTextController: TextInputController = new TextInputController();
   private clipboardController?: RustDeskClipboardController;
+  private clipboardFileRootSessionId: string = '';
   private preferences?: RustDeskPreferences;
   private connectScroller: Scroller = new Scroller();
   private deviceRecentScroller: Scroller = new Scroller();
@@ -285,6 +296,8 @@ struct RustDeskIndex {
   private accountOidcActive: boolean = false;
   private accountOidcOpenedUrl: string = '';
   private sessionReturnTabIndex: number = 0;
+  private lastBackgroundSessionPollAt: number = 0;
+  private remoteSessionTabsController: RemoteSessionTabsController = new RemoteSessionTabsController(6);
 
   @Local currentTabIndex: number = 0;
   @Local firstLaunchTutorialPending: boolean = false;
@@ -328,6 +341,7 @@ struct RustDeskIndex {
   @Local rememberPassword: boolean = false;
 
   @Local activeSessionId: string = '';
+  @Local remoteSessionTabs: Array<RemoteSessionTab> = [];
   @Local activeCoreSessionId: string = '';
   @Local activeSessionKind: PrimarySessionKind = 'remote_control';
   @Local sessionPhase: string = 'idle';
@@ -383,6 +397,11 @@ struct RustDeskIndex {
   private lastConnectionKind: PrimarySessionKind = 'remote_control';
   private connectionAttemptKind: PasswordSessionKind = 'primary';
   private sessionCloseInFlight: boolean = false;
+  private sessionConnectInFlight: boolean = false;
+  private sessionSwitchInFlight: boolean = false;
+  private pendingSessionSwitchId: string = '';
+  private readonly pendingClosedSessionIds: Array<string> = [];
+  private pendingTransitionClose: boolean = false;
   private pollTimer: number = -1;
   private passwordTimeoutId: number = -1;
   private eventPollInFlight: boolean = false;
@@ -581,10 +600,10 @@ struct RustDeskIndex {
     this.pageVisible = true;
     this.appForeground = true;
     this.detectHdsMaterialCapability();
-    this.previewController.onCreated = (surfaceId: string) => this.handlePreviewSurfaceCreated(surfaceId);
-    this.previewController.onChanged = (surfaceId: string, rect: SurfaceRect) =>
-      this.handlePreviewSurfaceChanged(surfaceId, rect);
-    this.previewController.onDestroyed = (surfaceId: string) => this.handlePreviewSurfaceDestroyed(surfaceId);
+    this.previewController = this.createPreviewSurfaceController(
+      this.previewSurfaceGeneration,
+      this.activeSessionId,
+    );
     this.initializeRuntime();
     this.registerRemoteSessionHandoffListener();
     this.registerEasyTierResultListener();
@@ -620,6 +639,7 @@ struct RustDeskIndex {
     this.releaseSoftKeyboardKeys();
     this.stopInputInterceptor();
     this.clipboardController?.reset();
+    this.clipboardFileRootSessionId = '';
     this.setSessionKeyboardEntered(false);
     this.unregisterWindowAvoidAreaListener();
     this.unregisterFoldHoverListeners();
@@ -648,6 +668,15 @@ struct RustDeskIndex {
     this.schedulePeerOnlineProbe(0);
     this.scheduleFirstLaunchTutorial();
     this.syncRemoteSessionSharing();
+    this.startPolling();
+    if (this.showPreviewModal && this.activeSessionId.length > 0) {
+      this.syncSurfaceBinding();
+      const activeTab = this.remoteSessionTabsController.get(this.activeSessionId);
+      if (activeTab !== undefined && activeTab.audioPreferenceCaptured) {
+        this.nativeSessionBridge.setRemoteAudioMuted(activeTab.sessionId, activeTab.audioMuted);
+        this.refreshRemoteAudioState();
+      }
+    }
   }
 
   onPageHide(): void {
@@ -657,6 +686,17 @@ struct RustDeskIndex {
     this.stopPeerOnlinePolling();
     this.clipboardController?.stop();
     this.stopInputInterceptor();
+    this.stopPolling();
+    for (const tab of this.remoteSessionTabsController.snapshot()) {
+      if (tab.sessionId === this.activeSessionId) {
+        tab.audioMuted = this.remoteAudioState.muted;
+        tab.audioPreferenceCaptured = this.remoteAudioState.available;
+      }
+      this.setSessionVideoPaused(tab.sessionId, true);
+      this.nativeSessionBridge.setRemoteAudioMuted(tab.sessionId, true);
+      tab.paused = true;
+    }
+    this.syncRemoteSessionTabs();
   }
 
   private registerRemoteSessionHandoffListener(): void {
@@ -719,6 +759,7 @@ struct RustDeskIndex {
         isPeerMacOS: () => this.isPeerMacOS(),
         isPeerAndroid: () => this.isPeerAndroid(),
         isPeerMobile: () => this.isPeerMobile(),
+        isLocalPhone: () => deviceInfo.deviceType === 'phone',
         gesturesEnabled: () => this.activeSessionDefaults.gesturesEnabled,
         rightClickGesture: () => this.rightClickGesture,
         getCoordinateSpace: () => this.getCoordinateSpace(),
@@ -960,7 +1001,12 @@ struct RustDeskIndex {
         this.scheduleFirstLaunchTutorial();
       }
       this.clipboardController = new RustDeskClipboardController(hostContext, {
-        sendText: (content: string) => this.sendClipboardText(content),
+        sendText: (sessionId: string, content: string) =>
+          sessionId === this.activeSessionId && this.sendClipboardText(content),
+        sendImage: (sessionId: string, content: Uint8Array) =>
+          sessionId === this.activeSessionId && this.sendClipboardImage(content),
+        sendFiles: (sessionId: string, paths: Array<string>) =>
+          sessionId === this.activeSessionId && this.sendClipboardFiles(paths),
         log: (label: string, payload: string) => this.logRelativeDebug(label, payload),
       });
       this.applySavedSettings(this.preferences.load());
@@ -2612,6 +2658,87 @@ struct RustDeskIndex {
     await this.preparePeerLaunch(this.peerTarget, 'view_only');
   }
 
+  private syncRemoteSessionTabs(): void {
+    this.remoteSessionTabs = this.remoteSessionTabsController.snapshot();
+  }
+
+  private setSessionVideoPaused(sessionId: string, paused: boolean): boolean {
+    if (sessionId.length === 0) {
+      return false;
+    }
+    const response = this.nativeSessionBridge.setVideoPaused(sessionId, paused);
+    if (!response.ok) {
+      hilog.warn(
+        DOMAIN,
+        TAG,
+        'setSessionVideoPaused sessionId=%{public}s paused=%{public}s message=%{public}s',
+        sessionId,
+        String(paused),
+        response.message ?? '',
+      );
+    }
+    return response.ok;
+  }
+
+  private async suspendActiveSessionForNewConnection(): Promise<void> {
+    if (this.activeSessionId.length === 0) {
+      return;
+    }
+    const sessionId = this.activeSessionId;
+    const tab = this.remoteSessionTabsController.get(sessionId);
+    if (tab !== undefined) {
+      tab.coreSessionId = this.activeCoreSessionId;
+      tab.phase = this.sessionPhase;
+      tab.message = this.sessionMessage;
+      tab.connectionSummary = this.connectionSummary;
+      tab.connected = this.sessionPhase === 'connected';
+      tab.paused = true;
+      tab.audioMuted = this.remoteAudioState.muted;
+      tab.audioPreferenceCaptured = this.remoteAudioState.available;
+      tab.uiStateCaptured = true;
+      tab.touchMode = this.touchMode;
+      tab.relativeMouseMode = this.relativeMouseMode;
+      tab.toolbarExpanded = this.isMiniBarExpanded;
+      tab.displayIndex = this.viewportModel.getCurrentDisplayIndex();
+      if (tab.peerInfo !== undefined) {
+        tab.peerInfo.current_display = String(tab.displayIndex);
+      }
+      tab.viewScale = this.previewUserScale;
+      tab.viewOffsetX = this.previewUserOffsetX;
+      tab.viewOffsetY = this.previewUserOffsetY;
+      tab.viewRotation = this.previewUserRotation;
+      tab.chatMessages = this.chatStore.messages();
+      tab.chatUnread = this.chatStore.unreadCount();
+      tab.chatDraft = this.chatDraft;
+      tab.imageQuality = this.sessionDisplayController.getImageQuality();
+      tab.customImageQuality = this.sessionDisplayController.getCustomImageQuality();
+      tab.customFps = this.sessionDisplayController.getCustomFps();
+      tab.sessionDefaults = this.copySessionDefaults(this.activeSessionDefaults);
+      tab.serverConfig = this.copyServerConfig(this.activeSessionServerConfig);
+      tab.shareTargetKind = this.activeSessionShareTargetKind;
+      tab.forceRelay = this.activeSessionForceRelay;
+    }
+    await this.clipboardController?.stopAndDrainRemoteWrite();
+    this.inputController?.releasePressedButtons();
+    this.hideSystemIme(false);
+    this.hideSoftKeyboard();
+    this.clearSurfaceBinding();
+    this.previewSurfaceId = '';
+    this.setSessionVideoPaused(sessionId, true);
+    this.nativeSessionBridge.setRemoteAudioMuted(sessionId, true);
+    this.closeRemoteAudio();
+    this.remoteInteractionReady = false;
+    this.showPreviewModal = false;
+    this.previewSurfaceVisible = false;
+    this.connectionGeneration += 1;
+    this.activeSessionId = '';
+    this.activeCoreSessionId = '';
+    this.syncClipboardController();
+    this.syncInputInterceptor();
+    this.syncRemoteSessionSharing();
+    this.syncRemoteSessionTabs();
+  }
+
   private async connectRemoteSessionHandoff(envelope: RemoteSessionHandoffEnvelope): Promise<void> {
     this.sessionReturnTabIndex = 0;
     try {
@@ -2623,6 +2750,24 @@ struct RustDeskIndex {
   }
 
   private async connectSessionDirect(
+    kind: PrimarySessionKind,
+    handoff?: RemoteSessionHandoffEnvelope,
+  ): Promise<void> {
+    if (this.sessionTransitionBusy()) {
+      this.connectionUiMessage = '已有连接请求正在处理，请稍候';
+      return;
+    }
+    this.sessionConnectInFlight = true;
+    try {
+      await this.performConnectSessionDirect(kind, handoff);
+    } finally {
+      this.sessionConnectInFlight = false;
+      this.materializePendingTransitionClose();
+      this.drainPendingSessionTransitions();
+    }
+  }
+
+  private async performConnectSessionDirect(
     kind: PrimarySessionKind,
     handoff?: RemoteSessionHandoffEnvelope,
   ): Promise<void> {
@@ -2642,8 +2787,18 @@ struct RustDeskIndex {
     }
     this.peerTarget = displayTarget;
     this.preferences?.saveTarget(displayTarget);
+    const existingTab = this.remoteSessionTabs.find((tab: RemoteSessionTab) =>
+      tab.target === displayTarget && tab.kind === kind && tab.phase !== 'closed');
+    if (existingTab !== undefined) {
+      await this.switchRemoteSessionTab(existingTab.sessionId);
+      return;
+    }
+    if (!this.remoteSessionTabsController.canAdd()) {
+      this.errorText = '最多可同时保留 6 个远控会话，请先关闭一个标签页';
+      return;
+    }
     if (this.activeSessionId.length > 0) {
-      await this.closeSession('正在切换会话');
+      await this.suspendActiveSessionForNewConnection();
     }
     this.activeSessionPassword = '';
     this.trustThisDevice = false;
@@ -2708,6 +2863,24 @@ struct RustDeskIndex {
       this.failConnectionAttempt(this.errorText || '无法创建连接会话');
       return;
     }
+    const createdTab = this.remoteSessionTabsController.add(this.activeSessionId, displayTarget, kind);
+    if (createdTab === undefined) {
+      const rejectedSessionId = this.activeSessionId;
+      this.nativeSessionBridge.closeSession(rejectedSessionId);
+      this.activeSessionId = '';
+      this.activeCoreSessionId = '';
+      this.failConnectionAttempt('远控会话标签数量已达到上限');
+      return;
+    }
+    createdTab.coreSessionId = this.activeCoreSessionId;
+    createdTab.phase = this.sessionPhase;
+    createdTab.message = this.sessionMessage;
+    createdTab.connectionSummary = this.connectionSummary;
+    createdTab.sessionDefaults = this.copySessionDefaults(this.activeSessionDefaults);
+    createdTab.serverConfig = this.copyServerConfig(this.activeSessionServerConfig);
+    createdTab.shareTargetKind = this.activeSessionShareTargetKind;
+    createdTab.forceRelay = this.activeSessionForceRelay;
+    this.syncRemoteSessionTabs();
     // Set the codec preference before the first LoginRequest is created.  The
     // peer chooses its encoder from that request; waiting for peer_info means
     // the default (often VP9) may already be active and can leave the first
@@ -2756,6 +2929,7 @@ struct RustDeskIndex {
       if (!response.ok || this.activeSessionId.length === 0) {
         return false;
       }
+      this.syncClipboardController();
       if (kind === 'view_camera') {
         return true;
       }
@@ -2967,7 +3141,223 @@ struct RustDeskIndex {
     this.closeSession('已取消密码输入');
   }
 
+  private async switchRemoteSessionTab(sessionId: string): Promise<void> {
+    if (this.sessionTransitionBusy()) {
+      this.pendingSessionSwitchId = sessionId;
+      return;
+    }
+    this.sessionSwitchInFlight = true;
+    try {
+      await this.performRemoteSessionTabSwitch(sessionId);
+    } finally {
+      this.finishRemoteSessionSwitch();
+    }
+  }
+
+  private async performRemoteSessionTabSwitch(sessionId: string): Promise<void> {
+    const nextTab = this.remoteSessionTabsController.get(sessionId);
+    if (nextTab === undefined) {
+      return;
+    }
+    if (this.activeSessionId === sessionId) {
+      this.showPreviewModal = true;
+      this.syncRemoteSessionTabs();
+      return;
+    }
+    if (this.activeSessionId.length > 0) {
+      await this.suspendActiveSessionForNewConnection();
+    }
+    const switched = this.remoteSessionTabsController.activate(sessionId);
+    if (switched === undefined) {
+      return;
+    }
+    this.connectionGeneration += 1;
+    this.passwordDialogVisible = false;
+    this.clearPasswordTimeout();
+    this.authErrorMessage = '';
+    this.code2faDraft = '';
+    this.trustThisDevice = false;
+    this.activeSessionId = nextTab.sessionId;
+    this.activeCoreSessionId = nextTab.coreSessionId;
+    this.activeSessionKind = nextTab.kind;
+    this.activeSessionShareTarget = nextTab.target;
+    this.activeSessionShareTargetKind = nextTab.shareTargetKind;
+    this.activeSessionServerConfig = this.copyServerConfig(nextTab.serverConfig);
+    this.activeSessionForceRelay = nextTab.forceRelay;
+    this.peerTarget = nextTab.target;
+    this.sessionPhase = nextTab.phase;
+    this.sessionMessage = nextTab.message.length > 0 ? nextTab.message : nextTab.phase;
+    this.connectionSummary = nextTab.connectionSummary.length > 0
+      ? nextTab.connectionSummary
+      : `${nextTab.target} · ${nextTab.phase}`;
+    this.connectionUiTarget = nextTab.target;
+    this.connectionUiPhase = nextTab.connected ? 'connected' : 'connecting';
+    this.connectionUiMessage = nextTab.connected ? '已切换到此设备' : '会话仍在连接';
+    this.activeSessionDefaults = this.copySessionDefaults(nextTab.sessionDefaults);
+    this.clipboardSyncEnabled = this.activeSessionDefaults.clipboardEnabled;
+    this.performanceTuningApplied = false;
+    this.remoteInteractionReady = false;
+    this.clipboardFileRootSessionId = '';
+    this.resetPreviewState();
+    if (nextTab.uiStateCaptured) {
+      this.chatStore.restore(nextTab.chatMessages, nextTab.chatUnread);
+      this.chatDraft = nextTab.chatDraft;
+      this.sessionDisplayController.restoreQualityState(
+        nextTab.imageQuality,
+        nextTab.customImageQuality,
+        nextTab.customFps,
+      );
+      this.selectedQualityPreset = this.sessionDisplayController.getImageQuality();
+      this.customQualityDraft = this.sessionDisplayController.getCustomImageQuality();
+      this.customFpsDraft = this.sessionDisplayController.getCustomFps();
+      this.touchMode = nextTab.touchMode;
+      this.relativeMouseMode = nextTab.relativeMouseMode;
+      this.isMiniBarExpanded = nextTab.toolbarExpanded;
+      this.previewUserScale = nextTab.viewScale;
+      this.previewUserOffsetX = nextTab.viewOffsetX;
+      this.previewUserOffsetY = nextTab.viewOffsetY;
+      this.previewUserRotation = nextTab.viewRotation;
+      this.viewportModel.setViewTransform(
+        nextTab.viewScale,
+        nextTab.viewOffsetX,
+        nextTab.viewOffsetY,
+        nextTab.viewRotation,
+      );
+    } else {
+      this.chatStore.clear();
+      this.chatDraft = '';
+      this.sessionDisplayController.restoreQualityState(
+        this.selectedQualityPreset,
+        this.customQualityDraft,
+        this.customFpsDraft,
+      );
+    }
+    this.refreshChatState();
+    this.showPreviewModal = true;
+    this.syncClipboardController();
+    this.syncInputInterceptor();
+    this.syncRemoteSessionTabs();
+    if (nextTab.peerInfo !== undefined) {
+      this.handleSessionEvent(nextTab.peerInfo);
+      if (nextTab.uiStateCaptured) {
+        this.viewportModel.selectDisplay(nextTab.displayIndex);
+        this.currentDisplayIndex = this.viewportModel.getCurrentDisplayIndex();
+      }
+    }
+    const pendingEvents = this.remoteSessionTabsController.takePendingEvents(sessionId);
+    for (const event of pendingEvents) {
+      this.handleSessionEvent(event);
+    }
+    if (nextTab.kind === 'remote_control') {
+      this.refreshRemoteAudioState();
+      if (nextTab.audioPreferenceCaptured) {
+        this.nativeSessionBridge.setRemoteAudioMuted(nextTab.sessionId, nextTab.audioMuted);
+        this.refreshRemoteAudioState();
+      }
+      this.startRemoteAudioPolling();
+    } else {
+      this.closeRemoteAudio();
+    }
+    this.startPolling();
+    this.syncRemoteSessionTabs();
+  }
+
+  private openNewRemoteSession(): void {
+    void this.performOpenNewRemoteSession();
+  }
+
+  private async performOpenNewRemoteSession(): Promise<void> {
+    if (this.sessionTransitionBusy()) {
+      this.pendingSessionSwitchId = NEW_REMOTE_SESSION_SWITCH_TARGET;
+      return;
+    }
+    this.sessionSwitchInFlight = true;
+    try {
+      await this.suspendActiveSessionForNewConnection();
+      this.restoreSessionReturnTab();
+    } finally {
+      this.finishRemoteSessionSwitch();
+    }
+  }
+
+  private finishRemoteSessionSwitch(): void {
+    this.sessionSwitchInFlight = false;
+    this.materializePendingTransitionClose();
+    this.drainPendingSessionTransitions();
+  }
+
+  private sessionTransitionBusy(): boolean {
+    return this.sessionConnectInFlight || this.sessionSwitchInFlight || this.sessionCloseInFlight;
+  }
+
+  private queueClosedSession(sessionId: string): void {
+    if (sessionId.length > 0 && !this.pendingClosedSessionIds.includes(sessionId)) {
+      this.pendingClosedSessionIds.push(sessionId);
+    }
+  }
+
+  private materializePendingTransitionClose(): void {
+    if (!this.pendingTransitionClose) {
+      return;
+    }
+    this.pendingTransitionClose = false;
+    this.queueClosedSession(this.activeSessionId);
+  }
+
+  private drainPendingSessionTransitions(): void {
+    if (this.sessionTransitionBusy()) {
+      return;
+    }
+    const closedSessionId = this.pendingClosedSessionIds.shift();
+    if (closedSessionId !== undefined) {
+      void this.closeRemoteSessionTab(closedSessionId).finally((): void => {
+        this.drainPendingSessionTransitions();
+      });
+      return;
+    }
+    const pendingSessionId = this.pendingSessionSwitchId;
+    this.pendingSessionSwitchId = '';
+    if (pendingSessionId === NEW_REMOTE_SESSION_SWITCH_TARGET) {
+      void this.performOpenNewRemoteSession();
+    } else if (pendingSessionId.length > 0 && pendingSessionId !== this.activeSessionId) {
+      void this.switchRemoteSessionTab(pendingSessionId);
+    }
+  }
+
+  private async closeRemoteSessionTab(sessionId: string): Promise<void> {
+    if (this.sessionTransitionBusy()) {
+      this.queueClosedSession(sessionId);
+      return;
+    }
+    if (sessionId === this.activeSessionId) {
+      await this.closeSession('已手动断开连接');
+      return;
+    }
+    this.sessionCloseInFlight = true;
+    try {
+      await this.clipboardController?.cleanupIncomingRootForClosedSession(sessionId);
+      try {
+        this.nativeSessionBridge.closeSession(sessionId);
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'close background session failed: %{public}s', String(error));
+      }
+      this.remoteSessionTabsController.remove(sessionId);
+      this.syncRemoteSessionTabs();
+    } finally {
+      this.sessionCloseInFlight = false;
+      this.drainPendingSessionTransitions();
+    }
+  }
+
   private async closeSession(reason?: string, preserveConnectionFailure: boolean = false): Promise<void> {
+    if (this.sessionConnectInFlight || this.sessionSwitchInFlight) {
+      if (this.activeSessionId.length > 0) {
+        this.queueClosedSession(this.activeSessionId);
+      } else {
+        this.pendingTransitionClose = true;
+      }
+      return;
+    }
     if (this.sessionCloseInFlight) {
       return;
     }
@@ -2989,7 +3379,14 @@ struct RustDeskIndex {
       }
       this.remoteInteractionReady = false;
       this.stopInputInterceptor();
-      this.clipboardController?.reset();
+      await this.clipboardController?.stopAndDrainRemoteWrite();
+      await this.clipboardController?.cleanupIncomingRootForClosedSession(sessionId);
+      if (this.remoteSessionTabsController.count() > 1) {
+        this.clipboardController?.stop();
+      } else {
+        this.clipboardController?.reset();
+      }
+      this.clipboardFileRootSessionId = '';
       this.clearPreviewKeyboardBlurTimer();
       this.previewKeyboardCaptureFocused = false;
       this.setSessionKeyboardEntered(false);
@@ -3002,7 +3399,6 @@ struct RustDeskIndex {
       this.clearPasswordTimeout();
       this.inputController?.releasePressedButtons();
       this.clearSurfaceBinding();
-      this.stopPolling();
       this.closeRemoteAudio();
       this.resetPreviewState();
       this.connectionSummary = preserveConnectionFailure
@@ -3012,6 +3408,12 @@ struct RustDeskIndex {
         this.sessionMessage = reason;
       }
       if (!sessionId) {
+        const fallbackSessionId = this.remoteSessionTabsController.activeId();
+        if (fallbackSessionId.length > 0) {
+          await this.switchRemoteSessionTab(fallbackSessionId);
+          return;
+        }
+        this.stopPolling();
         this.chatStore.clear();
         this.refreshChatState();
         this.sessionPhase = preserveConnectionFailure ? 'failed' : 'idle';
@@ -3034,18 +3436,26 @@ struct RustDeskIndex {
         this.refreshChatState();
         this.activeSessionId = '';
         this.activeCoreSessionId = '';
-        this.sessionPhase = preserveConnectionFailure ? 'failed' : 'idle';
-        this.activeSessionKind = 'remote_control';
-        this.activeSessionDefaults = this.copySessionDefaults(this.sessionDefaults);
-        this.applySessionDefaultsToIdleState(this.decoderCapabilities);
-        this.refreshDirectorySnapshot();
+        const nextSessionId = this.remoteSessionTabsController.remove(sessionId);
+        this.syncRemoteSessionTabs();
         this.publishDataTransferChanged();
-        if (shouldRestoreMainTab) {
-          this.restoreSessionReturnTab();
+        if (nextSessionId.length > 0) {
+          await this.switchRemoteSessionTab(nextSessionId);
+        } else {
+          this.stopPolling();
+          this.sessionPhase = preserveConnectionFailure ? 'failed' : 'idle';
+          this.activeSessionKind = 'remote_control';
+          this.activeSessionDefaults = this.copySessionDefaults(this.sessionDefaults);
+          this.applySessionDefaultsToIdleState(this.decoderCapabilities);
+          this.refreshDirectorySnapshot();
+          if (shouldRestoreMainTab) {
+            this.restoreSessionReturnTab();
+          }
         }
       }
     } finally {
       this.sessionCloseInFlight = false;
+      this.drainPendingSessionTransitions();
     }
   }
 
@@ -3192,6 +3602,12 @@ struct RustDeskIndex {
       return;
     }
     this.chatStore.markRead();
+    const activeTab = this.remoteSessionTabsController.get(this.activeSessionId);
+    if (activeTab !== undefined) {
+      activeTab.unreadCount = 0;
+      activeTab.chatUnread = 0;
+      this.syncRemoteSessionTabs();
+    }
     this.refreshChatState();
     this.openOverlayPanel('chat');
   }
@@ -3773,9 +4189,75 @@ struct RustDeskIndex {
     return response.ok;
   }
 
+  private sendClipboardImage(content: Uint8Array): boolean {
+    if (!this.remoteInteractionReady || !this.isRemoteControlSessionActive()) {
+      return false;
+    }
+    const response = this.nativeSessionBridge.sendClipboardImage(this.activeSessionId, content);
+    if (!response.ok) {
+      this.logRelativeDebug('clipboard_local', `native image failed=${String(response.message ?? '')}`);
+    }
+    return response.ok;
+  }
+
+  private sendClipboardFiles(paths: Array<string>): boolean {
+    if (!this.remoteInteractionReady || !this.isRemoteControlSessionActive()) {
+      return false;
+    }
+    const response = this.nativeSessionBridge.sendClipboardFiles(this.activeSessionId, paths);
+    if (!response.ok) {
+      this.logRelativeDebug('clipboard_local', `native files failed=${String(response.message ?? '')}`);
+    }
+    return response.ok;
+  }
+
+  private applyRemoteNativeClipboard(): void {
+    const response = this.nativeSessionBridge.takeClipboard(this.activeSessionId);
+    if (!response.ok) {
+      this.logRelativeDebug('clipboard_remote', `native take failed=${String(response.message ?? '')}`);
+      return;
+    }
+    const payload: RustDeskRemoteClipboardPayload = {};
+    if (response.text !== undefined) {
+      payload.text = response.text;
+    }
+    if (response.html !== undefined) {
+      payload.html = response.html;
+    }
+    if (response.image !== undefined && response.image !== null) {
+      const bytes = this.nativeSessionBridge.takeClipboardImage(this.activeSessionId);
+      if (bytes.length !== response.image.byteLength) {
+        this.logRelativeDebug(
+          'clipboard_remote',
+          `image length mismatch expected=${response.image.byteLength} actual=${bytes.length}`,
+        );
+        return;
+      }
+      payload.image = {
+        format: response.image.format,
+        width: response.image.width,
+        height: response.image.height,
+        bytes,
+      };
+    }
+    this.clipboardController?.applyRemoteClipboard(this.activeSessionId, payload);
+  }
+
   private syncClipboardController(): void {
+    if (this.clipboardSyncEnabled && this.isRemoteControlSessionActive()
+      && this.clipboardFileRootSessionId !== this.activeSessionId) {
+      const root = this.clipboardController?.incomingFileRoot(this.activeSessionId);
+      if (root !== undefined) {
+        const response = this.nativeSessionBridge.setClipboardFileRoot(this.activeSessionId, root);
+        if (!response.ok) {
+          this.logRelativeDebug('clipboard_files', `root failed=${String(response.message ?? '')}`);
+        } else {
+          this.clipboardFileRootSessionId = this.activeSessionId;
+        }
+      }
+    }
     if (this.clipboardSyncEnabled && this.pageVisible && this.remoteInteractionReady && this.isRemoteControlSessionActive()) {
-      this.clipboardController?.start();
+      this.clipboardController?.start(this.activeSessionId);
       return;
     }
     this.clipboardController?.stop();
@@ -5266,6 +5748,10 @@ struct RustDeskIndex {
     this.frameHeight = 0;
     this.frameStatus = 'Preparing preview surface';
     this.previewSurfaceGeneration += 1;
+    this.previewController = this.createPreviewSurfaceController(
+      this.previewSurfaceGeneration,
+      this.activeSessionId,
+    );
     this.previewSurfaceVisible = true;
     this.setSessionKeyboardEntered(true);
     await this.waitForPreviewSurfaceBinding(connectionGeneration);
@@ -5920,7 +6406,8 @@ struct RustDeskIndex {
   }
 
   private startPolling(): void {
-    if (!this.activeSessionId || this.pollTimer >= 0) {
+    if ((this.activeSessionId.length === 0 && this.remoteSessionTabsController.count() === 0)
+      || this.pollTimer >= 0) {
       return;
     }
     this.isPolling = true;
@@ -6247,9 +6734,30 @@ struct RustDeskIndex {
     }
   }
 
-  private handlePreviewSurfaceCreated(surfaceId: string): void {
+  private createPreviewSurfaceController(
+    generation: number,
+    sessionId: string,
+  ): RustDeskSurfaceController {
+    const controller = new RustDeskSurfaceController();
+    controller.onCreated = (surfaceId: string): void =>
+      this.handlePreviewSurfaceCreated(surfaceId, generation, sessionId);
+    controller.onChanged = (surfaceId: string, rect: SurfaceRect): void =>
+      this.handlePreviewSurfaceChanged(surfaceId, rect, generation, sessionId);
+    controller.onDestroyed = (surfaceId: string): void =>
+      this.handlePreviewSurfaceDestroyed(surfaceId, generation, sessionId);
+    return controller;
+  }
+
+  private isCurrentPreviewSurface(generation: number, sessionId: string): boolean {
+    return generation === this.previewSurfaceGeneration
+      && sessionId.length > 0
+      && sessionId === this.activeSessionId;
+  }
+
+  private handlePreviewSurfaceCreated(surfaceId: string, generation: number, sessionId: string): void {
     setTimeout(() => {
-      if (!this.activeSessionId || !this.showPreviewModal || !this.previewSurfaceVisible) {
+      if (!this.isCurrentPreviewSurface(generation, sessionId)
+        || !this.showPreviewModal || !this.previewSurfaceVisible) {
         return;
       }
       this.previewSurfaceId = surfaceId;
@@ -6273,9 +6781,14 @@ struct RustDeskIndex {
     }
   }
 
-  private handlePreviewSurfaceChanged(surfaceId: string, rect: SurfaceRect): void {
+  private handlePreviewSurfaceChanged(
+    surfaceId: string,
+    rect: SurfaceRect,
+    generation: number,
+    sessionId: string,
+  ): void {
     setTimeout(() => {
-      if (surfaceId !== this.previewSurfaceId) {
+      if (!this.isCurrentPreviewSurface(generation, sessionId) || surfaceId !== this.previewSurfaceId) {
         return;
       }
       this.frameWidth = rect.surfaceWidth;
@@ -6287,9 +6800,9 @@ struct RustDeskIndex {
     }, 0);
   }
 
-  private handlePreviewSurfaceDestroyed(surfaceId: string): void {
+  private handlePreviewSurfaceDestroyed(surfaceId: string, generation: number, sessionId: string): void {
     setTimeout(() => {
-      if (surfaceId !== this.previewSurfaceId) {
+      if (!this.isCurrentPreviewSurface(generation, sessionId) || surfaceId !== this.previewSurfaceId) {
         return;
       }
       this.inputController?.releasePressedButtons();
@@ -6315,6 +6828,17 @@ struct RustDeskIndex {
       this.updateSessionState(response);
       if (!response.ok) {
         return false;
+      }
+      this.setSessionVideoPaused(this.activeSessionId, false);
+      const activeTab = this.remoteSessionTabsController.get(this.activeSessionId);
+      if (activeTab !== undefined) {
+        activeTab.paused = false;
+        this.syncRemoteSessionTabs();
+      }
+      if (this.isRemoteControlSessionActive()) {
+        this.remoteInteractionReady = true;
+        this.syncClipboardController();
+        this.syncInputInterceptor();
       }
       if (refreshAfterBind) {
         this.requestVideoRefresh();
@@ -6417,36 +6941,99 @@ struct RustDeskIndex {
   }
 
   private async pollSessionEvents(): Promise<void> {
-    if (!this.activeSessionId || this.eventPollInFlight) {
+    if ((this.activeSessionId.length === 0 && this.remoteSessionTabsController.count() === 0)
+      || this.eventPollInFlight) {
       return;
     }
     this.eventPollInFlight = true;
     try {
-      const response = this.parseResponse(native.sessionPollEvents(this.activeSessionId, 20));
-      this.updateSessionState(response);
-      if (!response.ok) {
-        this.closeRemoteAudio();
-        return;
+      const tabs = this.remoteSessionTabsController.snapshot();
+      const pollBackgroundSessions = Date.now() - this.lastBackgroundSessionPollAt
+        >= BACKGROUND_SESSION_POLL_INTERVAL_MS;
+      if (pollBackgroundSessions) {
+        this.lastBackgroundSessionPollAt = Date.now();
       }
-      if (this.activeSessionKind === 'remote_control' && !this.isRemoteAudioSessionActive()) {
-        this.closeRemoteAudio();
+      for (const tab of tabs) {
+        if (tab.sessionId === this.activeSessionId) {
+          const response = this.parseResponse(native.sessionPollEvents(tab.sessionId, 20));
+          this.updateSessionState(response);
+          tab.coreSessionId = response.session?.coreSessionId ?? tab.coreSessionId;
+          tab.phase = response.session?.phase ?? tab.phase;
+          tab.connected = tab.phase === 'connected';
+          if (!response.ok) {
+            this.closeRemoteAudio();
+            continue;
+          }
+          if (this.activeSessionKind === 'remote_control' && !this.isRemoteAudioSessionActive()) {
+            this.closeRemoteAudio();
+          }
+          const events = (response.events ?? []) as NativeEvent[];
+          if (events.length > 0) {
+            hilog.info(DOMAIN, TAG, 'pollSessionEvents count=%{public}d phase=%{public}s', events.length, this.sessionPhase);
+          }
+          this.logEventBatch(events, 'poll');
+          this.logCursorEventBatch(events, 'poll');
+          events.forEach((event: NativeEvent) => this.handleSessionEvent(event));
+        } else if (pollBackgroundSessions) {
+          this.pollBackgroundSessionEvents(tab);
+        }
       }
-      const events = (response.events ?? []) as NativeEvent[];
-      if (events.length > 0) {
-        hilog.info(DOMAIN, TAG, 'pollSessionEvents count=%{public}d phase=%{public}s', events.length, this.sessionPhase);
-      }
-      this.logEventBatch(events, 'poll');
-      this.logCursorEventBatch(events, 'poll');
-      events.forEach((event: NativeEvent) => this.handleSessionEvent(event));
       this.pollInputInterceptorEvents();
       if (this.isRemoteControlSessionActive()) {
         this.ensureRemoteCursorEnabled();
       }
+      this.syncRemoteSessionTabs();
     } catch (error) {
       this.errorText = String(error);
       hilog.error(DOMAIN, TAG, 'pollSessionEvents failed sessionId=%{public}s error=%{public}s', this.activeSessionId, this.errorText);
     } finally {
       this.eventPollInFlight = false;
+    }
+  }
+
+  private pollBackgroundSessionEvents(tab: RemoteSessionTab): void {
+    const response = this.parseResponse(native.sessionPollEvents(tab.sessionId, 20));
+    if (response.session !== undefined) {
+      tab.coreSessionId = response.session.coreSessionId ?? tab.coreSessionId;
+      tab.phase = response.session.phase;
+      tab.connected = tab.phase === 'connected';
+    }
+    if (!response.ok) {
+      tab.needsAttention = true;
+      tab.message = response.message ?? '后台会话不可用';
+      return;
+    }
+    const events = (response.events ?? []) as NativeEvent[];
+    for (const event of events) {
+      if (event.name === 'peer_info' || event.name === 'sync_peer_info') {
+        this.remoteSessionTabsController.markPeerInfo(tab.sessionId, event);
+        this.setSessionVideoPaused(tab.sessionId, true);
+        this.nativeSessionBridge.setRemoteAudioMuted(tab.sessionId, true);
+        continue;
+      }
+      if (event.name === 'rgba') {
+        native.sessionNextRgba(tab.sessionId, Number(event.display ?? 0));
+        continue;
+      }
+      if (event.name === 'clipboard_multi') {
+        const clipboard = this.nativeSessionBridge.takeClipboard(tab.sessionId);
+        if (clipboard.image !== undefined && clipboard.image !== null) {
+          this.nativeSessionBridge.takeClipboardImage(tab.sessionId);
+        }
+        continue;
+      }
+      if (event.name === 'clipboard' || event.name === 'clipboard_files'
+        || event.name === 'cursor_data' || event.name === 'cursor_id'
+        || event.name === 'cursor_position' || event.name === 'update_quality_status') {
+        continue;
+      }
+      if (event.name === 'close') {
+        this.remoteSessionTabsController.markPhase(tab.sessionId, 'closed', '远端连接已结束');
+        this.remoteSessionTabsController.enqueue(tab.sessionId, event, true);
+        continue;
+      }
+      const needsAttention = event.name === 'msgbox' || event.name === 'switch_display';
+      this.remoteSessionTabsController.enqueue(tab.sessionId, event, needsAttention);
     }
   }
 
@@ -6493,6 +7080,8 @@ struct RustDeskIndex {
 
   private handleSessionEvent(event: NativeEvent): void {
     if (event.name === 'close') {
+      this.remoteSessionTabsController.markPhase(this.activeSessionId, 'closed', '远端连接已结束');
+      this.syncRemoteSessionTabs();
       this.handleRemoteDisconnect('远端连接已结束');
       return;
     }
@@ -6538,6 +7127,13 @@ struct RustDeskIndex {
       this.connectionUiPhase = 'connected';
       this.connectionUiMessage = '连接成功，正在准备远端画面。';
       this.sessionPhase = 'connected';
+      this.remoteSessionTabsController.markPeerInfo(this.activeSessionId, event);
+      const activeTab = this.remoteSessionTabsController.get(this.activeSessionId);
+      if (activeTab !== undefined) {
+        activeTab.coreSessionId = this.activeCoreSessionId;
+        activeTab.message = '已连接';
+      }
+      this.syncRemoteSessionTabs();
       if (event.name === 'peer_info') {
         if (event.platform && event.platform.length > 0) {
           this.peerPlatform = String(event.platform);
@@ -6549,15 +7145,15 @@ struct RustDeskIndex {
       }
       this.applyPerformanceTuning();
       if (this.isRemoteControlSessionActive()) {
-        this.remoteInteractionReady = true;
+        this.remoteInteractionReady = this.showPreviewModal
+          && this.previewSurfaceVisible
+          && this.previewSurfaceId.length > 0;
         if (this.relativeMouseMode && !this.relativeMouseModeSupported()) {
           this.relativeMouseMode = false;
           this.sessionMessage = '当前远端不支持相对指针模式，已使用普通指针';
         }
         this.syncTouchMode(this.touchMode);
         this.syncRelativeMouseMode(this.relativeMouseMode);
-        this.syncClipboardController();
-        this.syncInputInterceptor();
         this.ensureRemoteCursorEnabled();
       }
       if (!this.showPreviewModal || !this.previewSurfaceVisible) {
@@ -6615,13 +7211,31 @@ struct RustDeskIndex {
     }
     if (event.name === 'clipboard') {
       if (this.clipboardSyncEnabled && this.isRemoteControlSessionActive()) {
-        this.clipboardController?.applyRemoteText(String(event.content ?? ''));
+        this.clipboardController?.applyRemoteText(this.activeSessionId, String(event.content ?? ''));
+      }
+      return;
+    }
+    if (event.name === 'clipboard_multi') {
+      if (this.clipboardSyncEnabled && this.isRemoteControlSessionActive()) {
+        this.applyRemoteNativeClipboard();
+      }
+      return;
+    }
+    if (event.name === 'clipboard_files') {
+      if (this.clipboardSyncEnabled && this.isRemoteControlSessionActive()
+        && event.paths !== undefined && event.paths.length > 0) {
+        this.clipboardController?.applyRemoteClipboard(this.activeSessionId, { files: event.paths });
       }
       return;
     }
     if (event.name === 'chat_client_mode') {
       this.chatStore.receive(String(event.text ?? ''), Date.now());
+      const activeTab = this.remoteSessionTabsController.get(this.activeSessionId);
+      if (activeTab !== undefined) {
+        activeTab.unreadCount = this.chatStore.unreadCount();
+      }
       this.refreshChatState();
+      this.syncRemoteSessionTabs();
       return;
     }
     if (event.name === 'msgbox') {
@@ -7013,6 +7627,64 @@ struct RustDeskIndex {
     }
   }
 
+  private remoteSessionTabsWidth(): number {
+    const availableWidth = Math.max(
+      this.mainViewportWidth - this.windowCutoutLeftWidth - this.windowCutoutRightWidth,
+      0,
+    );
+    return Math.min(
+      Math.max(availableWidth - 24, Math.min(280, availableWidth)),
+      900,
+    );
+  }
+
+  private remoteSessionTabsX(): number {
+    const availableWidth = Math.max(
+      this.mainViewportWidth - this.windowCutoutLeftWidth - this.windowCutoutRightWidth,
+      0,
+    );
+    return this.windowCutoutLeftWidth
+      + Math.max((availableWidth - this.remoteSessionTabsWidth()) / 2, 0);
+  }
+
+  @Builder
+  private remoteSessionTabsOverlay(inPreview: boolean) {
+    if (this.remoteSessionTabs.length > 0) {
+      Row() {
+        RemoteSessionTabStrip({
+          tabs: this.remoteSessionTabs,
+          activeSessionId: this.remoteSessionTabsController.activeId(),
+          wideLayout: this.isWideMainLayout(),
+          canAdd: this.remoteSessionTabsController.canAdd(),
+          onSelect: (sessionId: string) => void this.switchRemoteSessionTab(sessionId),
+          onClose: (sessionId: string) => void this.closeRemoteSessionTab(sessionId),
+          onAdd: () => this.openNewRemoteSession(),
+        });
+      }
+      .width(this.remoteSessionTabsWidth())
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .position({
+        x: this.remoteSessionTabsX(),
+        y: inPreview
+          ? Math.max(this.windowTopAvoidInset + 6, 8)
+          : Math.max(
+            this.mainViewportHeight - this.windowBottomAvoidInset - (this.isWideMainLayout() ? 76 : 136),
+            this.windowTopAvoidInset + 8,
+          ),
+      })
+      .backgroundColor($r('app.color.glass_surface'))
+      .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
+        adaptiveColor: AdaptiveColor.DEFAULT,
+        scale: 0.66,
+      })
+      .border({ width: 1, color: $r('app.color.mica_border') })
+      .borderRadius($r('app.float.radius_18'))
+      .shadow(ShadowStyle.OUTER_DEFAULT_MD)
+      .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY)
+      .zIndex(inPreview ? 36 : 140);
+    }
+  }
+
   @Builder
   remotePreviewPane() {
     Stack({ alignContent: Alignment.Top }) {
@@ -7210,6 +7882,7 @@ struct RustDeskIndex {
         .backgroundColor($r('app.color.black'));
 
       this.androidNavigationOverlay();
+      this.remoteSessionTabsOverlay(true);
       this.previewMiniBar();
     }
     .width('100%')
@@ -7299,7 +7972,9 @@ struct RustDeskIndex {
             : (this.previewViewWidth >= 700 ? 580 : 380),
         })
         .padding($r('app.float.space_12'))
-        .margin({ top: Math.max(16, this.windowTopAvoidInset + 8) })
+        .margin({
+          top: Math.max(16, this.windowTopAvoidInset + (this.remoteSessionTabs.length > 0 ? 74 : 8)),
+        })
         .backgroundColor($r('app.color.glass_surface'))
         .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
           adaptiveColor: AdaptiveColor.DEFAULT,
@@ -8610,6 +9285,10 @@ struct RustDeskIndex {
       .opacity(this.rotationTransitionOpacity)
       .scale({ x: this.rotationTransitionScale, y: this.rotationTransitionScale })
       .zIndex(1)
+
+      if (!this.showPreviewModal && !this.showTransferWorkspace) {
+        this.remoteSessionTabsOverlay(false);
+      }
 
       ConnectionAttemptOverlay({
         visible: this.connectionUiPhase !== 'idle' && !this.showPreviewModal && !this.passwordDialogVisible

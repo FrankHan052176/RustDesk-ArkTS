@@ -23,6 +23,11 @@ class RecordingNativeSessionBridge implements NativeSessionBridge {
     return this.ok('refresh');
   }
 
+  setVideoPaused(_sessionId: string, paused: boolean): ActionResponse {
+    this.commands.push(`video-paused:${String(paused)}`);
+    return this.ok('set_video_paused');
+  }
+
   changeResolution(_sessionId: string, display: number, width: number, height: number): ActionResponse {
     this.commands.push(`resolution:${display}:${width}:${height}`);
     return this.ok('change_resolution');
@@ -30,6 +35,22 @@ class RecordingNativeSessionBridge implements NativeSessionBridge {
 
   getImageQuality(_sessionId: string): string | null {
     return null;
+  }
+
+  getConnToken(_sessionId: string): string | null {
+    return null;
+  }
+
+  getEnableTrustedDevices(_sessionId: string): boolean {
+    return false;
+  }
+
+  send2fa(_sessionId: string, _code: string, _trustThisDevice: boolean): ActionResponse {
+    return this.ok('send_2fa');
+  }
+
+  inputString(_sessionId: string, _value: string): ActionResponse {
+    return this.ok('input_string');
   }
 
   setImageQuality(_sessionId: string, quality: string): ActionResponse {
@@ -53,6 +74,26 @@ class RecordingNativeSessionBridge implements NativeSessionBridge {
 
   sendClipboard(_sessionId: string, _content: string): ActionResponse {
     return this.ok('send_clipboard');
+  }
+
+  sendClipboardFiles(_sessionId: string, _paths: Array<string>): ActionResponse {
+    return this.ok('send_clipboard_files');
+  }
+
+  sendClipboardImage(_sessionId: string, _image: Uint8Array): ActionResponse {
+    return this.ok('send_clipboard_image');
+  }
+
+  setClipboardFileRoot(_sessionId: string, _root: string): ActionResponse {
+    return this.ok('set_clipboard_file_root');
+  }
+
+  takeClipboard(_sessionId: string): ActionResponse {
+    return this.ok('take_clipboard');
+  }
+
+  takeClipboardImage(_sessionId: string): Uint8Array {
+    return new Uint8Array(0);
   }
 
   addSession(_sessionId: string, _target: string, _options: SessionStartOptions): ActionResponse {
@@ -237,6 +278,18 @@ export default function sessionDisplayControllerTest(): void {
       expect(controller.canChangeResolution('Windows')).assertTrue();
       expect(controller.applyQuality('session-1', 'low', 500, 60)).assertTrue();
       expect(bridge.commands.join(',')).assertEqual('quality:low');
+    });
+
+    it('restores per-session quality state without sending native commands', 0, () => {
+      const bridge = new RecordingNativeSessionBridge();
+      const controller = createController(bridge);
+
+      controller.restoreQualityState('custom', 125, 48);
+
+      expect(controller.getImageQuality()).assertEqual('custom');
+      expect(controller.getCustomImageQuality()).assertEqual(125);
+      expect(controller.getCustomFps()).assertEqual(48);
+      expect(bridge.commands.length).assertEqual(0);
     });
   });
 }

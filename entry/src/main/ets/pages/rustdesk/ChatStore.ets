@@ -76,6 +76,19 @@ export class ChatStore {
     this.unread = 0;
   }
 
+  restore(messages: ChatMessage[], unread: number): void {
+    this.items = messages.slice();
+    this.unread = Math.max(Math.min(Math.floor(unread), this.items.length), 0);
+    let nextNonce = 1;
+    for (const message of this.items) {
+      const parsed = Number(message.localId);
+      if (Number.isFinite(parsed)) {
+        nextNonce = Math.max(nextNonce, Math.floor(parsed) + 1);
+      }
+    }
+    this.nextLocalNonce = nextNonce;
+  }
+
   private createLocalId(): string {
     const localId = String(this.nextLocalNonce);
     this.nextLocalNonce++;

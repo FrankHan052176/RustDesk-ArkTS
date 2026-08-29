@@ -46,6 +46,7 @@ export interface RustDeskInputControllerCallbacks {
   isPeerMacOS: () => boolean;
   isPeerAndroid: () => boolean;
   isPeerMobile: () => boolean;
+  isLocalPhone: () => boolean;
   gesturesEnabled: () => boolean;
   rightClickGesture: () => RustDeskRightClickGesture;
   getCoordinateSpace: () => RustDeskCoordinateSpace | undefined;
@@ -915,7 +916,11 @@ export class RustDeskInputController {
       this.touchLongPressTimer = -1;
       const preserveMobileLongPress = this.callbacks.isPeerMobile()
         && this.callbacks.rightClickGesture() !== 'long_press';
-      this.applyTouchActions(this.touchGestureState.onHold(Date.now(), preserveMobileLongPress));
+      const allowLongPressDrag = this.callbacks.isLocalPhone()
+        && this.callbacks.rightClickGesture() !== 'long_press';
+      this.applyTouchActions(
+        this.touchGestureState.onHold(Date.now(), preserveMobileLongPress, allowLongPressDrag),
+      );
     }, delay === 0 ? 1 : delay) as number;
   }
 

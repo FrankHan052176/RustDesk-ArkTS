@@ -41,6 +41,7 @@ export class RustDeskTouchGestureState {
   private holdCancelledByMovement: boolean = false;
   private dragActive: boolean = false;
   private holdConsumed: boolean = false;
+  private longPressDragArmed: boolean = false;
   private secondTapDown: boolean = false;
 
   private pendingTap: boolean = false;
@@ -70,6 +71,7 @@ export class RustDeskTouchGestureState {
     this.holdCancelledByMovement = false;
     this.dragActive = false;
     this.holdConsumed = false;
+    this.longPressDragArmed = false;
     this.secondTapDown = this.pendingTap
       && at - this.pendingTapAt <= TOUCH_DOUBLE_TAP_MAX_MS
       && !this.distanceExceedsTapRange(x, y, this.pendingTapX, this.pendingTapY);
@@ -87,7 +89,16 @@ export class RustDeskTouchGestureState {
     this.lastX = x;
     this.lastY = y;
     const actions: Array<RustDeskTouchAction> = [];
-    if (!this.dragActive && this.distanceReachesLongPressRange(x, y, this.downX, this.downY)) {
+    const reachesLongPressRange = this.distanceReachesLongPressRange(x, y, this.downX, this.downY);
+    if (this.holdConsumed && this.longPressDragArmed && !this.dragActive && reachesLongPressRange) {
+      this.dragActive = true;
+      actions.push({ type: 'drag_start', x: this.downX, y: this.downY });
+      return actions;
+    }
+    if (this.holdConsumed) {
+      return actions;
+    }
+    if (!this.dragActive && reachesLongPressRange) {
       this.holdCancelledByMovement = true;
     }
     if (!this.movedBeyondTapDistance && this.distanceExceedsTapRange(x, y, this.downX, this.downY)) {
@@ -113,7 +124,7 @@ export class RustDeskTouchGestureState {
   /**
    * Resolve either Flutter's double-tap-hold drag or its ordinary long press.
    */
-  onHold(at: number, peerMobile: boolean): Array<RustDeskTouchAction> {
+  onHold(at: number, peerMobile: boolean, allowLongPressDrag: boolean = false): Array<RustDeskTouchAction> {
     if (!this.downActive || this.dragActive || this.holdConsumed) {
       return [];
     }
@@ -135,6 +146,11 @@ export class RustDeskTouchGestureState {
         this.dragActive = true;
         return [{ type: 'drag_start', x: this.downX, y: this.downY }];
       }
+      this.longPressDragArmed = allowLongPressDrag;
+      return [];
+    }
+    this.longPressDragArmed = allowLongPressDrag;
+    if (this.longPressDragArmed) {
       return [];
     }
     return [{ type: 'click_right', x: this.downX, y: this.downY }];
@@ -152,7 +168,14 @@ export class RustDeskTouchGestureState {
       this.clearDownState();
       return actions;
     }
-    if (cancelled || this.holdConsumed) {
+    if (cancelled) {
+      this.clearDownState();
+      return actions;
+    }
+    if (this.holdConsumed) {
+      if (this.longPressDragArmed) {
+        actions.push({ type: 'click_right', x: x, y: y });
+      }
       this.clearDownState();
       return actions;
     }
@@ -244,6 +267,7 @@ export class RustDeskTouchGestureState {
     this.holdCancelledByMovement = false;
     this.dragActive = false;
     this.holdConsumed = false;
+    this.longPressDragArmed = false;
     this.secondTapDown = false;
   }
 

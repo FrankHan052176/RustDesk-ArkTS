@@ -98,6 +98,41 @@ export default function touchGestureStateTest(): void {
       expect(state.onRelease(30, 30, 600, false).length).assertEqual(0);
     });
 
+    it('does not turn a committed desktop long press into a left drag', 0, () => {
+      const state = new RustDeskTouchGestureState();
+      state.onDown(30, 30, 0, 'touch');
+      expect(state.onHold(TOUCH_LONG_PRESS_MS, false).length).assertEqual(1);
+
+      expect(state.onMove(60, 30).length).assertEqual(0);
+      expect(state.onRelease(60, 30, 700, false).length).assertEqual(0);
+    });
+
+    it('starts a phone left-button drag when mouse-mode long press moves', 0, () => {
+      const state = new RustDeskTouchGestureState();
+      state.onDown(30, 30, 0, 'mouse');
+      expect(state.onHold(TOUCH_LONG_PRESS_MS, false, true).length).assertEqual(0);
+
+      const start = state.onMove(40, 30);
+      expect(start.length).assertEqual(1);
+      expect(start[0].type).assertEqual('drag_start');
+      expect(start[0].x).assertEqual(30);
+
+      const end = state.onRelease(60, 30, 700, false);
+      expect(end.length).assertEqual(1);
+      expect(end[0].type).assertEqual('drag_end');
+    });
+
+    it('keeps explicit long-press right click instead of arming phone drag', 0, () => {
+      const state = new RustDeskTouchGestureState();
+      state.onDown(30, 30, 0, 'mouse');
+
+      const hold = state.onHold(TOUCH_LONG_PRESS_MS, false, false);
+      expect(hold.length).assertEqual(1);
+      expect(hold[0].type).assertEqual('click_right');
+      expect(state.onMove(40, 30).length).assertEqual(0);
+      expect(state.onRelease(40, 30, 700, false).length).assertEqual(0);
+    });
+
     it('uses held left button for a mobile peer long press in touch mode', 0, () => {
       const state = new RustDeskTouchGestureState();
       state.onDown(30, 30, 0, 'touch');
