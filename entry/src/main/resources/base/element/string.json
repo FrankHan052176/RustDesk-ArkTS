@@ -381,6 +381,22 @@
       "value": "自动模式会根据双方能力选择；手动首选项仅在当前设备支持时生效。"
     },
     {
+      "name": "settings_about_website",
+      "value": "RustDesk 官网"
+    },
+    {
+      "name": "settings_about_privacy",
+      "value": "隐私声明"
+    },
+    {
+      "name": "settings_about_open",
+      "value": "打开"
+    },
+    {
+      "name": "settings_about_open_failed",
+      "value": "无法打开链接，请检查系统浏览器设置"
+    },
+    {
       "name": "settings_quality_speed",
       "value": "流畅"
     },

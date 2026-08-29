@@ -44,11 +44,13 @@ export interface SessionToolbarProps {
   windowResizeAvailable: boolean;
   windowFullscreen: boolean;
   windowControlBusy: boolean;
+  refreshDisplayEnabled: boolean;
   onOpenInput: () => void;
   onResetTransform: () => void;
   onOpenChat: () => void;
   onOpenDisplay: () => void;
   onOpenQuality: () => void;
+  onRefreshDisplay: () => void;
   onToggleSoftKeyboard: () => void;
   onToggleSystemIme: () => void;
   onToggleAndroidNavigation: () => void;
@@ -104,11 +106,13 @@ export struct SessionToolbar {
   @Param windowResizeAvailable: boolean = false;
   @Param windowFullscreen: boolean = false;
   @Param windowControlBusy: boolean = false;
+  @Param refreshDisplayEnabled: boolean = false;
   @Event onOpenInput: () => void = () => {};
   @Event onResetTransform: () => void = () => {};
   @Event onOpenChat: () => void = () => {};
   @Event onOpenDisplay: () => void = () => {};
   @Event onOpenQuality: () => void = () => {};
+  @Event onRefreshDisplay: () => void = () => {};
   @Event onToggleSoftKeyboard: () => void = () => {};
   @Event onToggleSystemIme: () => void = () => {};
   @Event onToggleAndroidNavigation: () => void = () => {};
@@ -689,6 +693,8 @@ export struct SessionToolbar {
   private ToolbarUtilityActions() {
     Row({ space: $r('app.float.space_6') }) {
       this.TransformControls()
+      this.CompactAction('refresh-display', '刷新画面', false, false, this.refreshDisplayEnabled,
+        () => this.onRefreshDisplay())
       if (this.windowControlsAvailable) {
         if (this.windowResizeAvailable) {
           this.WindowUtilityAction('fullscreen')
@@ -709,6 +715,10 @@ export struct SessionToolbar {
         }
         .layoutWeight(1);
 
+        if (!this.windowControlsAvailable) {
+          this.CompactAction('refresh-display', '刷新画面', false, false, this.refreshDisplayEnabled,
+            () => this.onRefreshDisplay())
+        }
         this.CompactAction('collapse', '收起', false, false, true, () => this.onCollapse())
       }
       .width('100%')
@@ -716,6 +726,8 @@ export struct SessionToolbar {
 
       if (this.windowControlsAvailable) {
         Row({ space: $r('app.float.space_6') }) {
+          this.CompactAction('refresh-display', '刷新画面', false, false, this.refreshDisplayEnabled,
+            () => this.onRefreshDisplay())
           if (this.windowResizeAvailable) {
             this.WindowUtilityAction('fullscreen')
           }
@@ -728,6 +740,10 @@ export struct SessionToolbar {
     }
     .width('100%')
     .alignItems(HorizontalAlign.End);
+  }
+
+  private useNarrowUtilityLayout(): boolean {
+    return !this.wideLayout || this.toolbarWidth < 920;
   }
 
   @Builder
@@ -908,14 +924,14 @@ export struct SessionToolbar {
             .maxLines(1);
         }
         Blank()
-        if (this.wideLayout) {
+        if (!this.useNarrowUtilityLayout()) {
           this.ToolbarUtilityActions()
         }
       }
       .width('100%')
       .alignItems(VerticalAlign.Center);
 
-      if (!this.wideLayout) {
+      if (this.useNarrowUtilityLayout()) {
         Row() {
           this.NarrowToolbarUtilityActions();
         }

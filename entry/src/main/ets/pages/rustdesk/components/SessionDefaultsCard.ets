@@ -213,6 +213,9 @@ export struct SessionDefaultsCard {
     if (this.defaults.preferredCodec === 'vp9') {
       return 4;
     }
+    if (this.defaults.preferredCodec === 'vp8') {
+      return 5;
+    }
     return 0;
   }
 
@@ -225,6 +228,8 @@ export struct SessionDefaultsCard {
       this.updateCodec('av1');
     } else if (index === 4) {
       this.updateCodec('vp9');
+    } else if (index === 5) {
+      this.updateCodec('vp8');
     } else {
       this.updateCodec('auto');
     }
@@ -250,6 +255,14 @@ export struct SessionDefaultsCard {
 
   private customSliderWidth(): number {
     return Math.max(220, Math.min(this.viewportWidth - 72, 620));
+  }
+
+  private codecOptionWidth(): number {
+    return (this.fullSelectorWidth(620) - 16) / 3;
+  }
+
+  private codecHintTopMargin(): number {
+    return this.isWide() ? -10 : 4;
   }
 
   @Builder
@@ -552,6 +565,37 @@ export struct SessionDefaultsCard {
   }
 
   @Builder
+  private CodecOption(label: string, index: number) {
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Text(label)
+        .fontSize($r('app.float.font_label'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.codecIndex() === index
+          ? $r('app.color.white')
+          : $r('app.color.neu_text_primary'))
+        .maxLines(1);
+    }
+    .width(this.codecOptionWidth())
+    .height(48)
+    .padding({ left: 6, right: 6 })
+    .backgroundColor(this.codecIndex() === index
+      ? $r('app.color.brand_primary')
+      : $r('app.color.mica_control'))
+    .border({
+      width: 1,
+      color: this.codecIndex() === index
+        ? $r('app.color.brand_primary')
+        : $r('app.color.mica_border'),
+    })
+    .borderRadius($r('app.float.radius_14'))
+    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+    .hoverEffect(HoverEffect.Auto)
+    .accessibilityText(label)
+    .accessibilitySelected(this.codecIndex() === index)
+    .onClick((): void => this.updateCodecIndex(index));
+  }
+
+  @Builder
   private CodecSelector() {
     Column({ space: 2 }) {
       Text($r('app.string.settings_codec_preference'))
@@ -560,28 +604,49 @@ export struct SessionDefaultsCard {
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.neu_text_secondary'));
 
-      LuminousSegmentedControl({
-        items: [
-          new LuminousSelectionItem('auto', $r('app.string.settings_codec_auto')),
-          new LuminousSelectionItem('h265', 'H.265'),
-          new LuminousSelectionItem('h264', 'H.264'),
-          new LuminousSelectionItem('av1', 'AV1'),
-          new LuminousSelectionItem('vp9', 'VP9'),
-        ],
-        selectedIndex: this.codecIndex(),
-        controlWidth: this.fullSelectorWidth(720),
-        controlHeight: 50,
-        motionEnabled: true,
-        onChange: (index: number) => this.updateCodecIndex(index),
-      })
-        .margin({ top: -10 })
+      if (this.isWide()) {
+        LuminousSegmentedControl({
+          items: [
+            new LuminousSelectionItem('auto', $r('app.string.settings_codec_auto')),
+            new LuminousSelectionItem('h265', 'H.265'),
+            new LuminousSelectionItem('h264', 'H.264'),
+            new LuminousSelectionItem('av1', 'AV1'),
+            new LuminousSelectionItem('vp9', 'VP9'),
+            new LuminousSelectionItem('vp8', 'VP8'),
+          ],
+          selectedIndex: this.codecIndex(),
+          controlWidth: this.fullSelectorWidth(720),
+          controlHeight: 50,
+          motionEnabled: true,
+          onChange: (index: number) => this.updateCodecIndex(index),
+        })
+          .margin({ top: -10 })
+      } else {
+        Column({ space: 8 }) {
+          Row({ space: 8 }) {
+            this.CodecOption('自动', 0)
+            this.CodecOption('H.265', 1)
+            this.CodecOption('H.264', 2)
+          }
+          .width(this.fullSelectorWidth(620));
+
+          Row({ space: 8 }) {
+            this.CodecOption('AV1', 3)
+            this.CodecOption('VP9', 4)
+            this.CodecOption('VP8', 5)
+          }
+          .width(this.fullSelectorWidth(620));
+        }
+        .width(this.fullSelectorWidth(620))
+        .margin({ top: 2 });
+      }
 
       Text($r('app.string.settings_codec_hint'))
         .width('100%')
         .fontSize($r('app.float.font_caption'))
         .lineHeight(17)
         .fontColor($r('app.color.neu_text_secondary'))
-        .margin({ top: -10 });
+        .margin({ top: this.codecHintTopMargin() });
     }
     .width('100%');
   }

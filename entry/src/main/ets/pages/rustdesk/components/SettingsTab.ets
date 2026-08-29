@@ -1,3 +1,4 @@
+import { bundleManager, common, OpenLinkOptions } from '@kit.AbilityKit';
 import {
   HdsNavigation,
   HdsNavigationTitleMode,
@@ -26,16 +27,14 @@ import {
   ControlledTwoFactorState,
 } from '../../../services/controlled/ControlledHostTypes';
 
+const RUSTDESK_WEBSITE_URL: string = 'https://rustdesk.com';
+const RUSTDESK_PRIVACY_URL: string = 'https://rustdesk.com/privacy.html';
+
 type SettingsSection = 'tutorial' | 'server' | 'account'
   | 'session_input' | 'session_quality' | 'session_security' | 'session_other'
   | 'diagnostics';
 
 export interface SettingsTabProps {
-  nativeVersion: string;
-  health: string;
-  integrationStage: string;
-  upstreamRepo: string;
-  buildMarker: string;
   decoderCapabilities: DecoderCapability[];
   serverConfig: ServerConfig;
   serverValidating: boolean;
@@ -45,7 +44,6 @@ export interface SettingsTabProps {
   accountLoginProviders: AccountLoginProvider[];
   controlledHostState: ControlledHostState;
   controlledTwoFactorState: ControlledTwoFactorState;
-  notes: string;
   errorText: string;
   scroller: Scroller;
   wideLayout: boolean;
@@ -80,11 +78,6 @@ export interface SettingsTabProps {
 
 @ComponentV2
 export struct SettingsTab {
-  @Param nativeVersion: string = 'loading...';
-  @Param health: string = 'waiting...';
-  @Param integrationStage: string = 'unknown';
-  @Param upstreamRepo: string = '';
-  @Param buildMarker: string = '';
   @Param decoderCapabilities: DecoderCapability[] = [];
   @Param serverConfig: ServerConfig = new ServerConfig();
   @Param serverValidating: boolean = false;
@@ -94,7 +87,6 @@ export struct SettingsTab {
   @Param accountLoginProviders: AccountLoginProvider[] = [];
   @Param controlledHostState: ControlledHostState = new ControlledHostState();
   @Param controlledTwoFactorState: ControlledTwoFactorState = new ControlledTwoFactorState();
-  @Param notes: string = '';
   @Param errorText: string = '';
   @Param wideLayout: boolean = false;
   @Param titleSpacerHeight: number = 56;
@@ -107,6 +99,7 @@ export struct SettingsTab {
   @Local selectedSection: SettingsSection = 'server';
   @Local settingsSheetVisible: boolean = false;
   @Local pressedSection: string = '';
+  @Local appVersionName: string = '--';
   @Local sessionDefaultsDraft: SessionDefaults = new SessionDefaults();
   @Param scroller: Scroller = new Scroller();
   private sheetScroller: Scroller = new Scroller();
@@ -140,7 +133,19 @@ export struct SettingsTab {
   @Event onTutorialAutoOpened: () => void = () => {};
 
   aboutToAppear(): void {
+    void this.loadAppVersion();
     setTimeout((): void => this.openRequestedTutorialIfNeeded(), 0);
+  }
+
+  private async loadAppVersion(): Promise<void> {
+    try {
+      const bundleInfo = await bundleManager.getBundleInfoForSelf(
+        bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT,
+      );
+      this.appVersionName = bundleInfo.versionName.trim().length > 0 ? bundleInfo.versionName : '--';
+    } catch (_) {
+      this.appVersionName = '--';
+    }
   }
 
   @Monitor('tutorialLaunchToken')
@@ -157,6 +162,29 @@ export struct SettingsTab {
     this.onTutorialAutoOpened();
   }
 
+  private openExternalLink(url: string): void {
+    try {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const options: OpenLinkOptions = {
+        appLinkingOnly: false,
+        hideFailureTipDialog: true,
+      };
+      void context.openLink(url, options).catch((): void => this.showOpenLinkFailure());
+    } catch (_) {
+      this.showOpenLinkFailure();
+    }
+  }
+
+  private showOpenLinkFailure(): void {
+    try {
+      this.getUIContext().getPromptAction().showToast({
+        message: $r('app.string.settings_about_open_failed'),
+        duration: 3500,
+      });
+    } catch (_) {
+    }
+  }
+
   private hasError(): boolean {
     return this.errorText.trim().length > 0;
   }
@@ -167,11 +195,6 @@ export struct SettingsTab {
 
   private wideHubLeftInset(): number {
     return RustDeskLayoutTokens.WIDE_CONTENT_EDGE - 12;
-  }
-
-  private bridgeReady(): boolean {
-    const health = this.health.toLowerCase();
-    return health.includes('ready') || health.includes('ok') || this.integrationStage.includes('bind');
   }
 
   private decoderAvailable(item: DecoderCapability): boolean {
@@ -396,10 +419,7 @@ export struct SettingsTab {
     if (this.hasError()) {
       return '检测到需要处理的运行日志';
     }
-    if (this.bridgeReady()) {
-      return `核心已就绪 · ${this.decoderCapabilities.length} 项视频能力`;
-    }
-    return '正在检查核心服务与设备能力';
+    return `版本与关于 · ${this.decoderCapabilities.length} 项视频能力`;
   }
 
   private diagnosticPanelWidth(): number {
@@ -652,27 +672,35 @@ export struct SettingsTab {
   }
 
   @Builder
-  private InfoRow(label: string, value: string, showDivider: boolean = true) {
-    Row({ space: 10 }) {
-      Text(label)
-        .width(72)
-        .fontSize(12)
-        .fontColor($r('app.color.neu_text_secondary'));
-      Text(value || '--')
-        .layoutWeight(1)
-        .fontSize(12)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.neu_text_primary'))
-        .textAlign(TextAlign.End)
-        .maxLines(2)
-        .textOverflow({ overflow: TextOverflow.Ellipsis });
+  private LinkRow(label: ResourceStr, showDivider: boolean, onClick: () => void) {
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Row({ space: 10 }) {
+        Text(label)
+          .layoutWeight(1)
+          .fontSize(12)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.neu_text_primary'));
+        Text($r('app.string.settings_about_open'))
+          .fontSize(12)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.neu_accent'));
+        SymbolGlyph($r('sys.symbol.chevron_right'))
+          .fontSize(14)
+          .fontColor([$r('app.color.neu_text_secondary')]);
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center);
     }
     .width('100%')
     .constraintSize({ minHeight: 44 })
+    .padding({ left: 0, right: 0 })
+    .backgroundColor(Color.Transparent)
     .border({
       width: { bottom: showDivider ? 0.5 : 0 },
       color: $r('app.color.divider'),
-    });
+    })
+    .hoverEffect(HoverEffect.Auto)
+    .onClick(onClick);
   }
 
   @Builder
@@ -708,18 +736,18 @@ export struct SettingsTab {
         motionEnabled: true,
       }) {
         Row({ space: 12 }) {
-          Image($r('app.media.startIcon'))
-            .width(44)
-            .height(44)
+          Image($r('app.media.resk'))
+            .width(52)
+            .height(52)
             .borderRadius(12);
 
           Column({ space: 3 }) {
-            Text('RustDesk HMOS')
+            Text('Resk')
               .width('100%')
               .fontSize(16)
               .fontWeight(FontWeight.Bold)
               .fontColor($r('app.color.neu_text_primary'));
-            Text(this.nativeVersion)
+            Text(`版本 ${this.appVersionName}`)
               .width('100%')
               .fontSize(11)
               .fontColor($r('app.color.neu_text_secondary'))
@@ -728,12 +756,6 @@ export struct SettingsTab {
           }
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Start);
-
-          this.StatusTag(
-            this.bridgeReady() ? '已就绪' : '检查中',
-            this.bridgeReady() ? $r('app.color.success') : $r('app.color.warning'),
-            this.bridgeReady() ? $r('app.color.success_soft') : $r('app.color.warning_soft'),
-          )
         }
         .width(this.diagnosticPanelWidth())
         .height(78)
@@ -747,43 +769,9 @@ export struct SettingsTab {
   }
 
   @Builder
-  private RuntimeUnit() {
-    Column({ space: 6 }) {
-      Text('核心状态')
-        .width('100%')
-        .fontSize(16)
-        .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.neu_text_primary'));
-
-      Stack({ alignContent: Alignment.Center }) {
-        LuminousSurface({
-          depth: 1,
-          surfaceWidth: this.diagnosticPanelWidth(),
-          surfaceHeight: 104,
-          cornerRadius: 20,
-          motionEnabled: true,
-        }) {
-          Column({ space: 0 }) {
-            this.InfoRow('健康状态', this.health || 'waiting...', true)
-            this.InfoRow('集成阶段', this.integrationStage, false)
-          }
-          .width(this.diagnosticPanelWidth())
-          .height(104)
-          .padding({ left: 14, right: 14, top: 8, bottom: 8 });
-        }
-      }
-      .width(this.diagnosticPanelWidth() + 16)
-      .height(120)
-      .clip(false);
-    }
-    .width(this.diagnosticPanelWidth() + 16)
-    .alignItems(HorizontalAlign.Start);
-  }
-
-  @Builder
   private BuildUnit() {
     Column({ space: 6 }) {
-      Text('构建与关于')
+      Text('关于')
         .width('100%')
         .fontSize(16)
         .fontWeight(FontWeight.Bold)
@@ -793,24 +781,23 @@ export struct SettingsTab {
         LuminousSurface({
           depth: 1,
           surfaceWidth: this.diagnosticPanelWidth(),
-          surfaceHeight: 160,
+          surfaceHeight: 116,
           cornerRadius: 20,
           motionEnabled: true,
         }) {
           Column({ space: 0 }) {
-            this.InfoRow('构建标识', this.buildMarker, true)
-            this.InfoRow('上游仓库', this.upstreamRepo, this.notes.trim().length > 0)
-            if (this.notes.trim().length > 0) {
-              this.InfoRow('运行说明', this.notes, false)
-            }
+            this.LinkRow($r('app.string.settings_about_website'), true,
+              () => this.openExternalLink(RUSTDESK_WEBSITE_URL))
+            this.LinkRow($r('app.string.settings_about_privacy'), false,
+              () => this.openExternalLink(RUSTDESK_PRIVACY_URL))
           }
           .width(this.diagnosticPanelWidth())
-          .height(160)
+          .height(116)
           .padding({ left: 14, right: 14, top: 10, bottom: 10 });
         }
       }
       .width(this.diagnosticPanelWidth() + 16)
-      .height(176)
+      .height(132)
       .clip(false);
     }
     .width(this.diagnosticPanelWidth() + 16)
@@ -948,7 +935,7 @@ export struct SettingsTab {
   @Builder
   private DiagnosticRefreshButton() {
     LuminousButton({
-      label: '刷新底层状态',
+      label: '刷新诊断信息',
       controlWidth: this.diagnosticPanelWidth(),
       controlSizeMode: LuminousControlSize.Compact,
       tone: LuminousTone.Accent,
@@ -964,7 +951,6 @@ export struct SettingsTab {
         Row({ space: 24 }) {
           Column({ space: 12 }) {
             this.DiagnosticIdentityUnit()
-            this.RuntimeUnit()
             this.DiagnosticRefreshButton()
           }
           .layoutWeight(1)
@@ -983,7 +969,6 @@ export struct SettingsTab {
       } else {
         Column({ space: 12 }) {
           this.DiagnosticIdentityUnit()
-          this.RuntimeUnit()
           this.BuildUnit()
           this.DecoderUnits()
           this.DiagnosticErrorUnit()

@@ -7428,7 +7428,7 @@ struct RustDeskIndex {
   }
 
   private requestVideoRefresh(): void {
-    if (!this.activeSessionId) {
+    if (!this.activeSessionId || this.sessionPhase !== 'connected') {
       return;
     }
     try {
@@ -7940,12 +7940,14 @@ struct RustDeskIndex {
             windowResizeAvailable: this.sessionWindowResizeAvailable(),
             windowFullscreen: this.sessionWindowFullscreen,
             windowControlBusy: this.sessionWindowControlBusy,
+            refreshDisplayEnabled: this.sessionPhase === 'connected',
             onOpenInput: () => this.openInputModePanel(),
             onResetTransform: () => this.resetPreviewViewTransform(),
             onOpenChat: () => this.openChatDrawer(),
             onAudioChange: (enabled: boolean) => this.setRemoteAudioEnabled(enabled),
             onOpenDisplay: () => this.openDisplaySheet(),
             onOpenQuality: () => this.openQualitySheet(),
+            onRefreshDisplay: () => this.requestVideoRefresh(),
             onToggleSoftKeyboard: () => this.toggleSoftKeyboard(),
             onToggleSystemIme: () => this.toggleSystemIme(),
             onToggleAndroidNavigation: () => {
@@ -8722,11 +8724,6 @@ struct RustDeskIndex {
   @Builder
   private SettingsPageContent() {
     SettingsTab({
-      nativeVersion: this.nativeVersion,
-      health: this.health,
-      integrationStage: this.integrationStage,
-      upstreamRepo: this.upstreamRepo,
-      buildMarker: this.nativeBuildMarker,
       decoderCapabilities: this.decoderCapabilities,
       serverConfig: this.serverConfig,
       serverValidating: this.serverValidating,
@@ -8736,7 +8733,6 @@ struct RustDeskIndex {
       accountLoginProviders: this.accountLoginProviders,
       controlledHostState: controlledHostCoordinator.state,
       controlledTwoFactorState: controlledHostCoordinator.twoFactorState,
-      notes: this.notes,
       errorText: this.errorText,
       wideLayout: this.isWideMainLayout(),
       scroller: this.settingsScroller,
