@@ -47,6 +47,7 @@ export class RemoteSessionTab {
   omittedChatEvents: number = 0;
   omittedProtectedEvents: number = 0;
   createdAt: number = 0;
+  lastActivatedAt: number = 0;
 
   constructor(sessionId: string, target: string, kind: RemoteSessionKind) {
     this.sessionId = sessionId;
@@ -66,6 +67,7 @@ export class RemoteSessionTabsController {
   private tabs: Array<RemoteSessionTab> = [];
   private activeSessionId: string = '';
   private readonly maxSessions: number;
+  private activationSequence: number = 0;
 
   constructor(maxSessions: number = 6) {
     this.maxSessions = Math.max(1, maxSessions);
@@ -115,6 +117,8 @@ export class RemoteSessionTabsController {
     result.previousSessionId = this.activeSessionId;
     result.activeSessionId = sessionId;
     this.activeSessionId = sessionId;
+    this.activationSequence += 1;
+    tab.lastActivatedAt = this.activationSequence;
     for (const item of this.tabs) {
       item.paused = item.sessionId !== sessionId;
     }
@@ -137,8 +141,13 @@ export class RemoteSessionTabsController {
       this.activeSessionId = '';
       return '';
     }
-    const nextIndex = Math.min(index, this.tabs.length - 1);
-    this.activeSessionId = this.tabs[nextIndex].sessionId;
+    let fallback = this.tabs[0];
+    for (const candidate of this.tabs) {
+      if (candidate.lastActivatedAt > fallback.lastActivatedAt) {
+        fallback = candidate;
+      }
+    }
+    this.activeSessionId = fallback.sessionId;
     for (const item of this.tabs) {
       item.paused = item.sessionId !== this.activeSessionId;
     }

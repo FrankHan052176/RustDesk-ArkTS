@@ -31,6 +31,17 @@ export default function remoteSessionTabsControllerTest(): void {
       expect(controller.count()).assertEqual(2);
     });
 
+    it('returns to the most recently used session after active close', 0, () => {
+      const controller = new RemoteSessionTabsController();
+      controller.add('session-1', 'one', 'remote_control');
+      controller.add('session-2', 'two', 'remote_control');
+      controller.add('session-3', 'three', 'remote_control');
+      controller.activate('session-1');
+      controller.activate('session-2');
+
+      expect(controller.remove('session-2')).assertEqual('session-1');
+    });
+
     it('stores background peer info and bounded attention events', 0, () => {
       const controller = new RemoteSessionTabsController();
       controller.add('session-1', '100 001', 'remote_control');

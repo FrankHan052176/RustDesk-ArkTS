@@ -11,6 +11,7 @@ export interface InputModeSheetProps {
   selectedMode: RustDeskInputMode;
   rightClickGesture: RustDeskRightClickGesture;
   relativeModeSupported: boolean;
+  wideLayout: boolean;
   onSelectMode: (mode: RustDeskInputMode) => void;
   onSelectRightClick: (gesture: RustDeskRightClickGesture) => void;
 }
@@ -21,8 +22,9 @@ export struct InputModeSheet {
   @Local displayedMode: RustDeskInputMode = 'touch';
   @Param rightClickGesture: RustDeskRightClickGesture = 'two_finger_tap';
   @Local displayedRightClickGesture: RustDeskRightClickGesture = 'two_finger_tap';
-  @Local controlWidth: number = 280;
+  @Local viewportWidth: number = 280;
   @Param relativeModeSupported: boolean = false;
+  @Param wideLayout: boolean = false;
   @Event onSelectMode: (mode: RustDeskInputMode) => void = (_mode: RustDeskInputMode) => {};
   @Event onSelectRightClick: (gesture: RustDeskRightClickGesture) => void = (
     _gesture: RustDeskRightClickGesture,
@@ -103,6 +105,35 @@ export struct InputModeSheet {
     return '单指相对移动 · 单击左键 · 双击并移动可拖拽 · 三指纵向滑动滚轮（Android 远端除外）';
   }
 
+  private useWideLayout(): boolean {
+    return this.wideLayout && this.viewportWidth >= 680;
+  }
+
+  private paneWidth(): number {
+    return this.useWideLayout()
+      ? Math.max(280, (this.viewportWidth - 12) / 2)
+      : this.viewportWidth;
+  }
+
+  private modeControlWidth(): number {
+    return Math.min(620, Math.max(180, this.paneWidth()));
+  }
+
+  private rightClickControlWidth(): number {
+    const available = this.paneWidth();
+    if (this.useWideLayout()) {
+      return Math.min(620, Math.max(180, available - 28));
+    }
+    return available >= 324 ? Math.min(420, available - 84) : Math.max(180, available);
+  }
+
+  private rightClickGestureTitle(): string {
+    if (this.displayedRightClickGesture === 'double_tap') {
+      return '双击';
+    }
+    return this.displayedRightClickGesture === 'two_finger_tap' ? '双指点击' : '长按';
+  }
+
   @Builder
   private ModeDescription() {
     Column({ space: 7 }) {
@@ -141,7 +172,36 @@ export struct InputModeSheet {
 
   @Builder
   private RightClickMapping() {
-    if (this.controlWidth >= 324) {
+    if (this.useWideLayout()) {
+      Column({ space: 10 }) {
+        Row() {
+          Text('右键映射')
+            .layoutWeight(1)
+            .fontSize($r('app.float.font_label'))
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.neu_text_primary'));
+          Text(`当前：${this.rightClickGestureTitle()}`)
+            .fontSize($r('app.float.font_caption'))
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.neu_text_secondary'));
+        }
+        .width('100%');
+
+        Text('选择在触屏操作中触发远端右键的手势。')
+          .width('100%')
+          .fontSize($r('app.float.font_caption'))
+          .fontColor($r('app.color.neu_text_secondary'));
+
+        this.RightClickSelector()
+      }
+      .width('100%')
+      .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+      .alignItems(HorizontalAlign.Start)
+      .backgroundColor($r('app.color.mica_control'))
+      .border({ width: 1, color: $r('app.color.mica_border') })
+      .borderRadius($r('app.float.radius_14'))
+      .shadow(ShadowStyle.OUTER_DEFAULT_SM);
+    } else if (this.paneWidth() >= 324) {
       Row({ space: 12 }) {
         Text('右键映射')
           .width(72)
@@ -176,7 +236,7 @@ export struct InputModeSheet {
         new LuminousSelectionItem('long_press', '长按'),
       ],
       selectedIndex: this.rightClickIndex(),
-      controlWidth: this.controlWidth >= 324 ? Math.min(420, this.controlWidth - 84) : this.controlWidth,
+      controlWidth: this.rightClickControlWidth(),
       controlHeight: 48,
       motionEnabled: true,
       onChange: (index: number) => this.selectRightClick(index),
@@ -185,25 +245,32 @@ export struct InputModeSheet {
 
   build(): void {
     Scroll() {
-      Column({ space: 10 }) {
-        LuminousSegmentedControl({
-          items: [
-            new LuminousSelectionItem('mouse', '鼠标模式'),
-            new LuminousSelectionItem('touch', '触控模式'),
-            new LuminousSelectionItem('relative', '相对鼠标', '', this.relativeModeSupported),
-          ],
-          selectedIndex: this.modeIndex(),
-          controlWidth: this.controlWidth,
-          controlHeight: 48,
-          motionEnabled: true,
-          onChange: (index: number) => this.selectMode(index),
-        })
+      if (this.useWideLayout()) {
+        Row({ space: 12 }) {
+          Column({ space: 10 }) {
+            this.ModeSelector()
+            this.ModeDescription()
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start);
 
-        this.ModeDescription()
-        this.RightClickMapping()
+          Column({ space: 10 }) {
+            this.RightClickMapping()
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start);
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Top);
+      } else {
+        Column({ space: 10 }) {
+          this.ModeSelector()
+          this.ModeDescription()
+          this.RightClickMapping()
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start);
       }
-      .width('100%')
-      .padding({ bottom: 8 });
     }
     .width('100%')
     .height('100%')
@@ -212,8 +279,24 @@ export struct InputModeSheet {
     .onAreaChange((_oldArea: Area, newArea: Area): void => {
       const width = Number(newArea.width);
       if (width > 0) {
-        this.controlWidth = Math.min(620, Math.max(180, width));
+        this.viewportWidth = Math.max(180, width);
       }
     });
+  }
+
+  @Builder
+  private ModeSelector() {
+    LuminousSegmentedControl({
+      items: [
+        new LuminousSelectionItem('mouse', '鼠标模式'),
+        new LuminousSelectionItem('touch', '触控模式'),
+        new LuminousSelectionItem('relative', '相对鼠标', '', this.relativeModeSupported),
+      ],
+      selectedIndex: this.modeIndex(),
+      controlWidth: this.modeControlWidth(),
+      controlHeight: 48,
+      motionEnabled: true,
+      onChange: (index: number) => this.selectMode(index),
+    })
   }
 }

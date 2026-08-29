@@ -27,7 +27,9 @@ import { InsecureConnectionDialog } from './rustdesk/components/InsecureConnecti
 import { SettingsTab } from './rustdesk/components/SettingsTab';
 import { ViewedHostPage } from './rustdesk/components/ViewedHostPage';
 import { SessionToolbar } from './rustdesk/components/SessionToolbar';
-import { RemoteSessionTabStrip } from './rustdesk/components/RemoteSessionTabStrip';
+import {
+  RemoteSessionResumeChip,
+} from './rustdesk/components/RemoteSessionWorkspace';
 import {
   ANDROID_NAVIGATION_BAR_HEIGHT,
   ANDROID_NAVIGATION_BAR_WIDTH,
@@ -189,11 +191,11 @@ const PREVIEW_MIN_USER_SCALE = 0.5;
 const PREVIEW_MAX_USER_SCALE = 4.0;
 const PREVIEW_SURFACE_WAIT_ATTEMPTS = 100;
 const PREVIEW_SURFACE_WAIT_INTERVAL_MS = 50;
-const NEW_REMOTE_SESSION_SWITCH_TARGET = '__new_remote_session__';
 const ANDROID_NAVIGATION_BOTTOM_OFFSET = 80;
 const ANDROID_NAVIGATION_EDGE_MARGIN = 12;
 const ANDROID_RECENT_PRESS_DURATION_MS = 500;
 const BACKGROUND_SESSION_POLL_INTERVAL_MS = 250;
+const NEW_REMOTE_SESSION_SWITCH_TARGET = '__new_remote_session__';
 
 type PrimarySessionKind = 'remote_control' | 'view_only' | 'view_camera';
 type PasswordSessionKind = 'primary' | 'file_transfer';
@@ -3274,9 +3276,28 @@ struct RustDeskIndex {
     this.sessionSwitchInFlight = true;
     try {
       await this.suspendActiveSessionForNewConnection();
-      this.restoreSessionReturnTab();
+      await this.applySessionFullscreen(false, true);
+      this.clearConnectionTimeout();
+      this.connectionUiPhase = 'idle';
+      this.connectionUiTarget = '';
+      this.connectionUiMessage = '';
+      this.connectionAttemptKind = 'primary';
+      this.errorText = '';
+      this.peerTarget = '';
+      this.sessionReturnTabIndex = 0;
+      this.currentTabIndex = 0;
+      if (!this.isWideMainLayout()) {
+        this.hdsTabsController.changeIndex(0);
+      }
     } finally {
       this.finishRemoteSessionSwitch();
+    }
+  }
+
+  private resumeRemoteSessionFromHome(): void {
+    const sessionId = this.remoteSessionTabsController.activeId();
+    if (sessionId.length > 0) {
+      void this.switchRemoteSessionTab(sessionId);
     }
   }
 
@@ -3504,7 +3525,8 @@ struct RustDeskIndex {
     this.supportedResolutions = [];
     this.currentDisplayIndex = 0;
     this.previewSurfaceVisible = false;
-    this.previewSurfaceGeneration = 0;
+    // This is a process-local Surface epoch. Never reset it: A→B→A must not
+    // accept a delayed callback from A's previous XComponent generation.
     this.previewSurfaceSetupInFlight = false;
     this.previewSurfaceSetupGeneration = -1;
     this.pendingPreviewPeerInfo = undefined;
@@ -5991,8 +6013,13 @@ struct RustDeskIndex {
   }
 
   private sessionOverlayContentHeight(): number {
-    const availableHeight = this.previewViewHeight - 160;
-    return Math.max(160, Math.min(560, availableHeight));
+    const tabChromeHeight = this.remoteSessionTabs.length > 0 ? 58 : 0;
+    const windowControlHeight = this.activeOverlayPanel !== 'home' && this.sessionWindowControlsAvailable() ? 56 : 0;
+    const availableHeight = this.previewViewHeight - 120 - tabChromeHeight - windowControlHeight;
+    if (this.activeOverlayPanel === 'input' && this.previewViewWidth >= 700) {
+      return Math.max(96, Math.min(300, availableHeight));
+    }
+    return Math.max(96, Math.min(560, availableHeight));
   }
 
   private resetPreviewViewTransform(animated: boolean = true): void {
@@ -7627,61 +7654,35 @@ struct RustDeskIndex {
     }
   }
 
-  private remoteSessionTabsWidth(): number {
-    const availableWidth = Math.max(
-      this.mainViewportWidth - this.windowCutoutLeftWidth - this.windowCutoutRightWidth,
-      0,
-    );
-    return Math.min(
-      Math.max(availableWidth - 24, Math.min(280, availableWidth)),
-      900,
-    );
-  }
-
-  private remoteSessionTabsX(): number {
-    const availableWidth = Math.max(
-      this.mainViewportWidth - this.windowCutoutLeftWidth - this.windowCutoutRightWidth,
-      0,
-    );
-    return this.windowCutoutLeftWidth
-      + Math.max((availableWidth - this.remoteSessionTabsWidth()) / 2, 0);
+  private activeRemoteSessionTab(): RemoteSessionTab | undefined {
+    const activeId = this.remoteSessionTabsController.activeId();
+    return this.remoteSessionTabs.find((tab: RemoteSessionTab): boolean => tab.sessionId === activeId)
+      ?? this.remoteSessionTabs[0];
   }
 
   @Builder
-  private remoteSessionTabsOverlay(inPreview: boolean) {
-    if (this.remoteSessionTabs.length > 0) {
+  private remoteSessionResumeOverlay() {
+    if (!this.showPreviewModal && !this.showTransferWorkspace && this.remoteSessionTabs.length > 0) {
       Row() {
-        RemoteSessionTabStrip({
-          tabs: this.remoteSessionTabs,
-          activeSessionId: this.remoteSessionTabsController.activeId(),
-          wideLayout: this.isWideMainLayout(),
-          canAdd: this.remoteSessionTabsController.canAdd(),
-          onSelect: (sessionId: string) => void this.switchRemoteSessionTab(sessionId),
-          onClose: (sessionId: string) => void this.closeRemoteSessionTab(sessionId),
-          onAdd: () => this.openNewRemoteSession(),
+        RemoteSessionResumeChip({
+          sessionCount: this.remoteSessionTabs.length,
+          label: this.activeRemoteSessionTab()?.label ?? '远程会话',
+          needsAttention: this.remoteSessionTabs.some(
+            (tab: RemoteSessionTab): boolean => tab.needsAttention || tab.unreadCount > 0,
+          ),
+          onResume: () => this.resumeRemoteSessionFromHome(),
         });
       }
-      .width(this.remoteSessionTabsWidth())
-      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .width(this.isWideMainLayout() ? 230 : 196)
       .position({
-        x: this.remoteSessionTabsX(),
-        y: inPreview
-          ? Math.max(this.windowTopAvoidInset + 6, 8)
-          : Math.max(
-            this.mainViewportHeight - this.windowBottomAvoidInset - (this.isWideMainLayout() ? 76 : 136),
-            this.windowTopAvoidInset + 8,
-          ),
+        x: Math.max(
+          this.windowCutoutLeftWidth + 8,
+          this.mainViewportWidth - this.windowCutoutRightWidth - (this.isWideMainLayout() ? 246 : 208),
+        ),
+        y: Math.max(this.windowTopAvoidInset + 12, 14),
       })
-      .backgroundColor($r('app.color.glass_surface'))
-      .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-        adaptiveColor: AdaptiveColor.DEFAULT,
-        scale: 0.66,
-      })
-      .border({ width: 1, color: $r('app.color.mica_border') })
-      .borderRadius($r('app.float.radius_18'))
-      .shadow(ShadowStyle.OUTER_DEFAULT_MD)
       .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY)
-      .zIndex(inPreview ? 36 : 140);
+      .zIndex(140);
     }
   }
 
@@ -7882,7 +7883,6 @@ struct RustDeskIndex {
         .backgroundColor($r('app.color.black'));
 
       this.androidNavigationOverlay();
-      this.remoteSessionTabsOverlay(true);
       this.previewMiniBar();
     }
     .width('100%')
@@ -7896,6 +7896,9 @@ struct RustDeskIndex {
       Row() {
         Column({ space: 10 }) {
           SessionToolbar({
+            tabs: this.remoteSessionTabs,
+            activeSessionId: this.remoteSessionTabsController.activeId(),
+            canAddSession: this.remoteSessionTabsController.canAdd(),
             touchMode: this.touchMode,
             relativeMouseMode: this.relativeMouseMode,
             metrics: this.sessionToolbarMetrics(),
@@ -7952,6 +7955,9 @@ struct RustDeskIndex {
             },
             onMinimizeWindow: () => this.minimizeSessionWindow(),
             onToggleWindowFullscreen: () => this.toggleSessionWindowFullscreen(),
+            onSelectSession: (sessionId: string) => void this.switchRemoteSessionTab(sessionId),
+            onCloseSession: (sessionId: string) => void this.closeRemoteSessionTab(sessionId),
+            onAddSession: () => this.openNewRemoteSession(),
             content: () => {
               if (this.isOverlayPanelOpen('input')) {
                 this.inputModeOverlayPanel();
@@ -7965,15 +7971,10 @@ struct RustDeskIndex {
             },
           });
         }
-        .width('92%')
-        .constraintSize({
-          maxWidth: this.activeSessionKind === 'view_camera' || this.activeSessionKind === 'view_only'
-            ? 420
-            : (this.previewViewWidth >= 700 ? 580 : 380),
-        })
+        .width('95%')
         .padding($r('app.float.space_12'))
         .margin({
-          top: Math.max(16, this.windowTopAvoidInset + (this.remoteSessionTabs.length > 0 ? 74 : 8)),
+          top: Math.max(16, this.windowTopAvoidInset + 8),
         })
         .backgroundColor($r('app.color.glass_surface'))
         .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
@@ -8261,6 +8262,7 @@ struct RustDeskIndex {
         selectedMode: this.currentPointerMode(),
         rightClickGesture: this.rightClickGesture,
         relativeModeSupported: this.relativeMouseModeSupported(),
+        wideLayout: this.previewViewWidth >= 700,
         onSelectMode: (mode: RustDeskInputMode) => this.setPointerMode(mode),
         onSelectRightClick: (gesture: RustDeskRightClickGesture) => this.setRightClickGesture(gesture),
       });
@@ -9286,9 +9288,7 @@ struct RustDeskIndex {
       .scale({ x: this.rotationTransitionScale, y: this.rotationTransitionScale })
       .zIndex(1)
 
-      if (!this.showPreviewModal && !this.showTransferWorkspace) {
-        this.remoteSessionTabsOverlay(false);
-      }
+      this.remoteSessionResumeOverlay();
 
       ConnectionAttemptOverlay({
         visible: this.connectionUiPhase !== 'idle' && !this.showPreviewModal && !this.passwordDialogVisible

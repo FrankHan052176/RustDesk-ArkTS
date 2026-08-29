@@ -1,5 +1,6 @@
 import { SessionOverlayPanel } from '../SessionOverlayState';
 import { SessionToolbarMetrics } from '../SessionToolbarMetrics';
+import { RemoteSessionTab } from '../RemoteSessionTabsController';
 
 const SOFT_KEYBOARD_TRANSITION_ID = 'rustdesk-session-soft-keyboard';
 const SYSTEM_IME_TRANSITION_ID = 'rustdesk-session-system-ime';
@@ -12,6 +13,9 @@ interface ToolbarActionOptions {
 }
 
 export interface SessionToolbarProps {
+  tabs: Array<RemoteSessionTab>;
+  activeSessionId: string;
+  canAddSession: boolean;
   touchMode: boolean;
   relativeMouseMode: boolean;
   metrics: SessionToolbarMetrics;
@@ -51,11 +55,17 @@ export interface SessionToolbarProps {
   onCollapse: () => void;
   onMinimizeWindow: () => void;
   onToggleWindowFullscreen: () => void;
+  onSelectSession: (sessionId: string) => void;
+  onCloseSession: (sessionId: string) => void;
+  onAddSession: () => void;
   content: () => void;
 }
 
 @ComponentV2
 export struct SessionToolbar {
+  @Param tabs: Array<RemoteSessionTab> = [];
+  @Param activeSessionId: string = '';
+  @Param canAddSession: boolean = true;
   @Param touchMode: boolean = true;
   @Local displayedTouchMode: boolean = true;
   @Param relativeMouseMode: boolean = false;
@@ -104,6 +114,11 @@ export struct SessionToolbar {
   @Event onCollapse: () => void = () => {};
   @Event onMinimizeWindow: () => void = () => {};
   @Event onToggleWindowFullscreen: () => void = () => {};
+  @Event onSelectSession: (sessionId: string) => void = (_sessionId: string) => {};
+  @Event onCloseSession: (sessionId: string) => void = (_sessionId: string) => {};
+  @Event onAddSession: () => void = () => {};
+  @Local toolbarWidth: number = 280;
+  private sessionScroller: Scroller = new Scroller();
 
   @BuilderParam content: () => void = this.Empty;
 
@@ -128,8 +143,201 @@ export struct SessionToolbar {
     this.displayedAndroidNavigationVisible = this.androidNavigationVisible;
   }
 
+  @Monitor('activeSessionId')
+  private onActiveSessionChanged(_monitor: IMonitor): void {
+    this.scheduleRevealActiveSession();
+  }
+
+  @Monitor('tabs')
+  private onSessionTabsChanged(_monitor: IMonitor): void {
+    this.scheduleRevealActiveSession();
+  }
+
   @Builder
   private Empty() {}
+
+  private sessionCardWidth(): number {
+    return this.wideLayout ? 196 : 154;
+  }
+
+  private addSessionButtonWidth(): number {
+    return this.wideLayout ? 92 : 68;
+  }
+
+  private sessionViewportWidth(): number {
+    const maxVisibleCards = this.wideLayout ? 2.5 : 1.5;
+    const preferredWidth = this.sessionCardWidth() * Math.min(Math.max(this.tabs.length, 1), maxVisibleCards);
+    const remainingWidth = Math.max(96, this.toolbarWidth - this.addSessionButtonWidth() - 6);
+    return Math.min(preferredWidth, remainingWidth);
+  }
+
+  private activeSessionIndex(): number {
+    for (let index = 0; index < this.tabs.length; index += 1) {
+      if (this.tabs[index].sessionId === this.activeSessionId) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  private scheduleRevealActiveSession(): void {
+    setTimeout((): void => this.revealActiveSession(), 0);
+  }
+
+  private revealActiveSession(): void {
+    const activeIndex = this.activeSessionIndex();
+    if (activeIndex < 0) {
+      return;
+    }
+    const viewportWidth = this.sessionViewportWidth();
+    const cardStep = this.sessionCardWidth() + 6;
+    const cardStart = activeIndex * cardStep;
+    const cardEnd = cardStart + this.sessionCardWidth();
+    try {
+      const currentOffset = this.sessionScroller.currentOffset().xOffset;
+      let targetOffset = currentOffset;
+      if (cardStart < currentOffset) {
+        targetOffset = cardStart;
+      } else if (cardEnd > currentOffset + viewportWidth) {
+        targetOffset = cardEnd - viewportWidth;
+      }
+      if (Math.abs(targetOffset - currentOffset) > 0.5) {
+        this.sessionScroller.scrollTo({
+          xOffset: Math.max(0, targetOffset),
+          yOffset: 0,
+          animation: true,
+        });
+      }
+    } catch (_) {
+    }
+  }
+
+  private sessionStatusColor(tab: RemoteSessionTab): ResourceColor {
+    if (tab.needsAttention || tab.phase === 'failed' || tab.phase === 'closed') {
+      return $r('app.color.error');
+    }
+    if (tab.connected) {
+      return $r('app.color.success');
+    }
+    return $r('app.color.warning');
+  }
+
+  @Builder
+  private SessionCard(tab: RemoteSessionTab) {
+    Row({ space: 2 }) {
+      Button({ type: ButtonType.Normal, stateEffect: true }) {
+        Row({ space: 7 }) {
+          Stack()
+            .width(9)
+            .height(9)
+            .borderRadius(5)
+            .backgroundColor(this.sessionStatusColor(tab));
+
+          Column({ space: 1 }) {
+            Text(tab.label)
+              .fontSize($r('app.float.font_label'))
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.neu_text_primary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis });
+            Text(tab.target)
+              .fontSize($r('app.float.font_caption'))
+              .fontColor($r('app.color.neu_text_secondary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis });
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start);
+        }
+        .width('100%')
+        .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_4') });
+      }
+      .layoutWeight(1)
+      .height(46)
+      .padding(0)
+      .backgroundColor($r('app.color.transparent'))
+      .hoverEffect(HoverEffect.Auto)
+      .accessibilityText(`${tab.label}，${tab.target}，点击切换`)
+      .accessibilitySelected(tab.sessionId === this.activeSessionId)
+      .onClick((): void => this.onSelectSession(tab.sessionId));
+
+      Button({ type: ButtonType.Circle, stateEffect: true }) {
+        Text($r('app.string.remote_session_tab_close_symbol'))
+          .fontSize(13)
+          .fontColor($r('app.color.neu_text_secondary'));
+      }
+      .width(44)
+      .height(44)
+      .padding(0)
+      .backgroundColor($r('app.color.transparent'))
+      .hoverEffect(HoverEffect.Auto)
+      .accessibilityText(`${tab.label}，断开并关闭此会话`)
+      .onClick((): void => this.onCloseSession(tab.sessionId));
+    }
+    .width(this.sessionCardWidth())
+    .height(48)
+    .padding({ left: 2, right: 2 })
+    .backgroundColor(tab.sessionId === this.activeSessionId
+      ? $r('app.color.brand_primary_soft')
+      : $r('app.color.mica_control'))
+    .border({
+      width: 1,
+      color: tab.sessionId === this.activeSessionId
+        ? $r('app.color.brand_primary')
+        : $r('app.color.mica_border'),
+    })
+    .borderRadius($r('app.float.radius_14'))
+    .clip(true);
+  }
+
+  @Builder
+  private SessionTabsBar() {
+    Row({ space: $r('app.float.space_6') }) {
+      Scroll(this.sessionScroller) {
+        Row({ space: $r('app.float.space_6') }) {
+          ForEach(this.tabs, (tab: RemoteSessionTab) => {
+            this.SessionCard(tab);
+          }, (tab: RemoteSessionTab): string => tab.sessionId);
+        }
+        .align(Alignment.Start);
+      }
+      .width(this.sessionViewportWidth())
+      .height(50)
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: this.tabs.length > 2 });
+
+      Button({ type: ButtonType.Normal, stateEffect: true }) {
+        Column({ space: 1 }) {
+          Text($r('app.string.remote_session_tab_add_symbol'))
+            .fontSize(18)
+            .fontColor(this.canAddSession
+              ? $r('app.color.neu_text_primary')
+              : $r('app.color.neu_text_disabled'));
+          Text('新建')
+            .fontSize($r('app.float.font_caption'))
+            .fontColor(this.canAddSession
+              ? $r('app.color.neu_text_secondary')
+              : $r('app.color.neu_text_disabled'));
+        }
+      }
+      .width(this.addSessionButtonWidth())
+      .height(48)
+      .padding(0)
+      .enabled(this.canAddSession)
+      .backgroundColor($r('app.color.mica_control'))
+      .border({ width: 1, color: $r('app.color.mica_border') })
+      .borderRadius($r('app.float.radius_14'))
+      .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+      .hoverEffect(HoverEffect.Auto)
+      .accessibilityText(this.canAddSession ? '新建远程会话' : '已达到六个会话上限')
+      .onClick((): void => this.onAddSession());
+
+      Blank();
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center);
+  }
 
   private actionHeight(): number {
     return this.wideLayout ? 46 : 42;
@@ -617,6 +825,10 @@ export struct SessionToolbar {
 
   build(): void {
     Column({ space: $r('app.float.space_8') }) {
+      if (this.tabs.length > 0) {
+        this.SessionTabsBar();
+      }
+
       Row({ space: $r('app.float.space_8') }) {
         Text(`${this.metrics.codec}`)
           .fontSize($r('app.float.font_caption'))
@@ -694,6 +906,13 @@ export struct SessionToolbar {
       }
     }
     .width('100%')
-    .clip(false);
+    .clip(false)
+    .onAreaChange((_oldArea: Area, newArea: Area): void => {
+      const width = Number(newArea.width);
+      if (width > 0 && Math.abs(width - this.toolbarWidth) > 0.5) {
+        this.toolbarWidth = width;
+        this.scheduleRevealActiveSession();
+      }
+    });
   }
 }
