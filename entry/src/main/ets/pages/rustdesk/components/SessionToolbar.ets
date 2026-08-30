@@ -708,38 +708,24 @@ export struct SessionToolbar {
 
   @Builder
   private NarrowToolbarUtilityActions() {
-    Column({ space: $r('app.float.space_6') }) {
-      Row({ space: $r('app.float.space_6') }) {
-        Row() {
-          this.TransformControls()
-        }
-        .layoutWeight(1);
-
-        if (!this.windowControlsAvailable) {
-          this.CompactAction('refresh-display', '刷新画面', false, false, this.refreshDisplayEnabled,
-            () => this.onRefreshDisplay())
-        }
-        this.CompactAction('collapse', '收起', false, false, true, () => this.onCollapse())
+    Row({ space: $r('app.float.space_6') }) {
+      Row() {
+        this.TransformControls()
       }
-      .width('100%')
-      .alignItems(VerticalAlign.Center);
+      .layoutWeight(1);
 
+      this.CompactAction('refresh-display', '刷新画面', false, false, this.refreshDisplayEnabled,
+        () => this.onRefreshDisplay())
       if (this.windowControlsAvailable) {
-        Row({ space: $r('app.float.space_6') }) {
-          this.CompactAction('refresh-display', '刷新画面', false, false, this.refreshDisplayEnabled,
-            () => this.onRefreshDisplay())
-          if (this.windowFullscreenAvailable) {
-            this.WindowUtilityAction('fullscreen')
-          }
-          this.WindowUtilityAction('minimize')
+        if (this.windowFullscreenAvailable) {
+          this.WindowUtilityAction('fullscreen')
         }
-        .width('100%')
-        .justifyContent(FlexAlign.End)
-        .alignItems(VerticalAlign.Center);
+        this.WindowUtilityAction('minimize')
       }
+      this.CompactAction('collapse', '收起', false, false, true, () => this.onCollapse())
     }
     .width('100%')
-    .alignItems(HorizontalAlign.End);
+    .alignItems(VerticalAlign.Center);
   }
 
   private useNarrowUtilityLayout(): boolean {
