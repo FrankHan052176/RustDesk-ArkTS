@@ -41,7 +41,7 @@ export interface SessionToolbarProps {
   canResetTransform: boolean;
   panelContentHeight: number;
   windowControlsAvailable: boolean;
-  windowResizeAvailable: boolean;
+  windowFullscreenAvailable: boolean;
   windowFullscreen: boolean;
   windowControlBusy: boolean;
   refreshDisplayEnabled: boolean;
@@ -103,7 +103,7 @@ export struct SessionToolbar {
   @Param canResetTransform: boolean = false;
   @Param panelContentHeight: number = 360;
   @Param windowControlsAvailable: boolean = false;
-  @Param windowResizeAvailable: boolean = false;
+  @Param windowFullscreenAvailable: boolean = false;
   @Param windowFullscreen: boolean = false;
   @Param windowControlBusy: boolean = false;
   @Param refreshDisplayEnabled: boolean = false;
@@ -618,7 +618,7 @@ export struct SessionToolbar {
 
   private windowUtilityLabel(kind: string): string {
     if (kind === 'fullscreen') {
-      return this.windowFullscreen ? '还原窗口' : '最大化';
+      return this.windowFullscreen ? '退出全屏' : '全屏';
     }
     return '最小化';
   }
@@ -696,7 +696,7 @@ export struct SessionToolbar {
       this.CompactAction('refresh-display', '刷新画面', false, false, this.refreshDisplayEnabled,
         () => this.onRefreshDisplay())
       if (this.windowControlsAvailable) {
-        if (this.windowResizeAvailable) {
+        if (this.windowFullscreenAvailable) {
           this.WindowUtilityAction('fullscreen')
         }
         this.WindowUtilityAction('minimize')
@@ -728,7 +728,7 @@ export struct SessionToolbar {
         Row({ space: $r('app.float.space_6') }) {
           this.CompactAction('refresh-display', '刷新画面', false, false, this.refreshDisplayEnabled,
             () => this.onRefreshDisplay())
-          if (this.windowResizeAvailable) {
+          if (this.windowFullscreenAvailable) {
             this.WindowUtilityAction('fullscreen')
           }
           this.WindowUtilityAction('minimize')

@@ -5070,8 +5070,9 @@ struct RustDeskIndex {
     return this.freeWindow !== undefined && this.sessionWindowControlCapable;
   }
 
-  private sessionWindowResizeAvailable(): boolean {
-    return this.sessionWindowControlsAvailable() && this.sessionWindowResizeCapable;
+  private sessionWindowFullscreenAvailable(): boolean {
+    return this.sessionWindowControlsAvailable()
+      && (this.isPcDevice() || this.sessionWindowResizeCapable || this.sessionWindowFullscreen);
   }
 
   private reportSessionWindowControlFailure(action: string, error: Error | BusinessError): void {
@@ -5123,7 +5124,7 @@ struct RustDeskIndex {
           this.refreshFreeWindowChrome();
         })
         .catch((error: BusinessError) => {
-          this.reportSessionWindowControlFailure('还原窗口', error);
+          this.reportSessionWindowControlFailure('退出全屏', error);
         })
         .finally((): void => {
           this.sessionWindowControlBusy = false;
@@ -7922,7 +7923,7 @@ struct RustDeskIndex {
             canResetTransform: this.hasPreviewViewTransform(),
             panelContentHeight: this.sessionOverlayContentHeight(),
             windowControlsAvailable: this.sessionWindowControlsAvailable(),
-            windowResizeAvailable: this.sessionWindowResizeAvailable(),
+            windowFullscreenAvailable: this.sessionWindowFullscreenAvailable(),
             windowFullscreen: this.sessionWindowFullscreen,
             windowControlBusy: this.sessionWindowControlBusy,
             refreshDisplayEnabled: this.sessionPhase === 'connected',
