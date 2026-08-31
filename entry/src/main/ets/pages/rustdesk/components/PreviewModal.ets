@@ -9,7 +9,6 @@ export interface PreviewModalProps {
   visible: boolean;
   qualitySummary: string;
   frameStatus: string;
-  renderFpsText: string;
   frameWidth: number;
   frameHeight: number;
   controller: XComponentController;
@@ -21,7 +20,6 @@ export struct PreviewModal {
   @Param visible: boolean = false;
   @Param qualitySummary: string = 'Remote fps --';
   @Param frameStatus: string = 'Surface not ready';
-  @Param renderFpsText: string = 'FPS --';
   @Param frameWidth: number = 0;
   @Param frameHeight: number = 0;
   @Param controller: XComponentController = new XComponentController();
@@ -54,7 +52,7 @@ export struct PreviewModal {
                   .fontSize($r('app.float.font_caption'))
                   .fontColor($r('app.color.neu_text_secondary'));
 
-                Text(`Surface size: ${this.frameWidth} x ${this.frameHeight} | ${this.renderFpsText}`)
+                Text(`Surface size: ${this.frameWidth} x ${this.frameHeight}`)
                   .fontSize($r('app.float.font_caption'))
                   .fontColor($r('app.color.neu_text_secondary'))
                   .maxLines(1)

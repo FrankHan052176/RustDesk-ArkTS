@@ -76,8 +76,6 @@ export struct SessionToolbar {
   @Local displayedRelativeMouseMode: boolean = false;
   @Param metrics: SessionToolbarMetrics = {
     fps: '--',
-    frames: '--',
-    decode: '--',
     delay: '--',
     codec: '--',
   };
@@ -899,16 +897,6 @@ export struct SessionToolbar {
           .fontSize($r('app.float.font_caption'))
           .fontColor($r('app.color.neu_text_secondary'))
           .maxLines(1);
-        if (this.wideLayout) {
-          Text(`解码 ${this.metrics.decode}`)
-            .fontSize($r('app.float.font_caption'))
-            .fontColor($r('app.color.neu_text_secondary'))
-            .maxLines(1);
-          Text(`帧 ${this.metrics.frames}`)
-            .fontSize($r('app.float.font_caption'))
-            .fontColor($r('app.color.neu_text_secondary'))
-            .maxLines(1);
-        }
         Blank()
         if (!this.useNarrowUtilityLayout()) {
           this.ToolbarUtilityActions()

@@ -154,8 +154,6 @@ import {
   NativeEvent,
   PASSWORD_TIMEOUT_MS,
   PeerDisplayInfo,
-  RENDER_STATS_POLL_INTERVAL_MS,
-  RenderStatsSnapshot,
   ResolutionInfo,
   SavedConnectionSettings,
   TAG,
@@ -166,8 +164,6 @@ const REMOTE_CURSOR_MIN_VISIBLE_SIZE = 12;
 const FALLBACK_CURSOR_BASE_WIDTH = 18;
 const FALLBACK_CURSOR_BASE_HEIGHT = 24;
 const REMOTE_CURSOR_OPTION_REAPPLY_MS = 1000;
-const RENDER_STALL_THRESHOLD_MS = 3500;
-const RENDER_STALL_RECOVERY_COOLDOWN_MS = 5000;
 const WAITING_FOR_IMAGE_TEXT = 'Connected, waiting for image...';
 const PREVIEW_INPUT_FOCUS_ID = 'rustdesk-preview-input-layer';
 const SYSTEM_IME_INPUT_FOCUS_ID = 'rustdesk-system-ime-input';
@@ -346,21 +342,10 @@ struct RustDeskIndex {
   @Local connectionUiTarget: string = '';
   @Local connectionUiMessage: string = '';
   @Local qualitySummary: string = 'Remote fps -- | delay -- | codec --';
-  @Local toolbarRenderStats: RenderStatsSnapshot = {
-    fps: 0,
-    totalFrames: 0,
-    lastFrameAgeMs: 0,
-    hasRenderedFrame: false,
-  };
   @Local isPolling: boolean = false;
   @Local frameStatus: string = 'Surface not ready';
   @Local frameWidth: number = 0;
   @Local frameHeight: number = 0;
-  @Local renderFpsText: string = 'FPS --';
-  private softwareRenderFps: number = 0;
-  private softwareRenderTotalFrames: number = 0;
-  private softwareFrameWindowStart: number = 0;
-  private softwareFrameWindowCount: number = 0;
   @Local showPreviewModal: boolean = false;
   @Local showTransferWorkspace: boolean = false;
   @Local previewSurfaceVisible: boolean = false;
@@ -402,11 +387,6 @@ struct RustDeskIndex {
   private eventPollInFlight: boolean = false;
   private previewFrameInFlight: boolean = false;
   private performanceTuningApplied: boolean = false;
-  private lastRenderStatsPollAt: number = 0;
-  private lastRenderTotalFrames: number = 0;
-  private renderStallFirstDetectedAt: number = 0;
-  private lastRenderRecoveryAt: number = 0;
-  private renderStallRecoveryAttempts: number = 0;
   private previewSurfaceId: string = '';
   private previewSurfaceSetupInFlight: boolean = false;
   private previewSurfaceSetupGeneration: number = -1;
@@ -3517,17 +3497,6 @@ struct RustDeskIndex {
     this.previewSurfaceSetupGeneration = -1;
     this.pendingPreviewPeerInfo = undefined;
     this.releasePreviewFramePixelMap();
-    this.renderFpsText = 'FPS --';
-    this.softwareRenderFps = 0;
-    this.softwareRenderTotalFrames = 0;
-    this.softwareFrameWindowStart = 0;
-    this.softwareFrameWindowCount = 0;
-    this.toolbarRenderStats = {
-      fps: 0,
-      totalFrames: 0,
-      lastFrameAgeMs: 0,
-      hasRenderedFrame: false,
-    };
     this.qualityTelemetry = {
       fps: '--',
       delay: '--',
@@ -3537,10 +3506,6 @@ struct RustDeskIndex {
       chroma: '--',
     };
     this.codecPreferenceApplied = false;
-    this.lastRenderTotalFrames = 0;
-    this.renderStallFirstDetectedAt = 0;
-    this.lastRenderRecoveryAt = 0;
-    this.renderStallRecoveryAttempts = 0;
     this.touchMode = this.activeSessionDefaults.touchMode;
     this.relativeMouseMode = !this.touchMode && this.activeSessionDefaults.relativeMouseMode;
     this.rightClickGesture = this.activeSessionDefaults.rightClickGesture;
@@ -6429,7 +6394,6 @@ struct RustDeskIndex {
       this.pollTimer = -1;
     }
     this.isPolling = false;
-    this.lastRenderStatsPollAt = 0;
   }
 
   private startPolling(): void {
@@ -6440,97 +6404,12 @@ struct RustDeskIndex {
     this.isPolling = true;
     this.pollTimer = setInterval(() => {
       this.pollSessionEvents();
-      const now = Date.now();
-      if (now - this.lastRenderStatsPollAt >= RENDER_STATS_POLL_INTERVAL_MS) {
-        this.lastRenderStatsPollAt = now;
-        this.pollRenderStats();
-      }
     }, EVENT_POLL_INTERVAL_MS);
-  }
-
-  private pollRenderStats(): void {
-    if (!this.activeSessionId) {
-      this.renderFpsText = 'FPS --';
-      this.toolbarRenderStats = {
-        fps: 0,
-        totalFrames: 0,
-        lastFrameAgeMs: 0,
-        hasRenderedFrame: false,
-      };
-      return;
-    }
-    if (this.rgbaFallbackActive) {
-      return;
-    }
-    const now = Date.now();
-    try {
-      const currentDisplay = this.viewportModel.getCurrentDisplayIndex();
-      const response = this.parseResponse(native.sessionGetRenderStats(this.activeSessionId, currentDisplay));
-      const snapshot = response.stats?.stats;
-      if (!snapshot || !snapshot.hasRenderedFrame) {
-        this.renderFpsText = 'FPS --';
-        this.toolbarRenderStats = snapshot ?? {
-          fps: 0,
-          totalFrames: 0,
-          lastFrameAgeMs: 0,
-          hasRenderedFrame: false,
-        };
-        this.handleRenderStall(now, 0, 0, false);
-        return;
-      }
-      this.toolbarRenderStats = snapshot;
-      const decodeLatencyMs = Number(snapshot.avgDecodeLatencyMs ?? snapshot.decodeLatencyMs ?? 0);
-      this.renderFpsText = decodeLatencyMs > 0
-        ? `FPS ${snapshot.fps.toFixed(1)} | Frames ${snapshot.totalFrames} | Dec ${decodeLatencyMs.toFixed(0)}ms`
-        : `FPS ${snapshot.fps.toFixed(1)} | Frames ${snapshot.totalFrames}`;
-      const totalFrames = Number(snapshot.totalFrames);
-      const lastFrameAgeMs = Number(snapshot.lastFrameAgeMs);
-      if (this.lastRenderTotalFrames === 0 || totalFrames > this.lastRenderTotalFrames) {
-        this.lastRenderTotalFrames = totalFrames;
-        this.renderStallFirstDetectedAt = 0;
-        this.renderStallRecoveryAttempts = 0;
-        return;
-      }
-      this.handleRenderStall(now, totalFrames, lastFrameAgeMs, true);
-    } catch (_) {
-    }
-  }
-
-  private handleRenderStall(now: number, totalFrames: number, lastFrameAgeMs: number, hasRenderedFrame: boolean): void {
-    if (!this.activeSessionId || !this.previewSurfaceVisible || this.previewSurfaceId.length === 0) {
-      this.renderStallFirstDetectedAt = 0;
-      return;
-    }
-    const staleByAge = hasRenderedFrame && lastFrameAgeMs >= RENDER_STALL_THRESHOLD_MS;
-    const staleByCounter = hasRenderedFrame && totalFrames > 0 && totalFrames === this.lastRenderTotalFrames;
-    const hasNoFrame = !hasRenderedFrame && this.lastAppliedVideoWidth > 0 && this.lastAppliedVideoHeight > 0;
-    if (!staleByAge && !staleByCounter && !hasNoFrame) {
-      this.renderStallFirstDetectedAt = 0;
-      return;
-    }
-    if (this.renderStallFirstDetectedAt === 0) {
-      this.renderStallFirstDetectedAt = now;
-      return;
-    }
-    if (now - this.renderStallFirstDetectedAt < RENDER_STALL_THRESHOLD_MS
-      || now - this.lastRenderRecoveryAt < RENDER_STALL_RECOVERY_COOLDOWN_MS) {
-      return;
-    }
-    this.lastRenderRecoveryAt = now;
-    this.renderStallRecoveryAttempts += 1;
-    this.logRelativeDebug(
-      'render_stall',
-      `frames=${totalFrames} lastAge=${lastFrameAgeMs} hasFrame=${hasRenderedFrame} recoveries=${this.renderStallRecoveryAttempts} display=${this.viewportModel.getCurrentDisplayIndex()} surface=${this.previewSurfaceId}`,
-    );
-    this.syncSurfaceBinding();
   }
 
   private sessionToolbarMetrics(): SessionToolbarMetrics {
     return formatSessionToolbarMetrics(
-      this.toolbarRenderStats.fps,
-      this.toolbarRenderStats.totalFrames,
-      this.toolbarRenderStats.avgDecodeLatencyMs ?? this.toolbarRenderStats.decodeLatencyMs,
-      this.toolbarRenderStats.hasRenderedFrame,
+      this.qualityTelemetry.fps,
       this.qualityTelemetry.delay,
       this.qualityTelemetry.codec,
     );
@@ -6553,10 +6432,6 @@ struct RustDeskIndex {
       const current = fpsMap[String(this.viewportModel.getCurrentDisplayIndex())];
       if (typeof current === 'number') {
         return String(current);
-      }
-      const first = Object.values(fpsMap)[0];
-      if (typeof first === 'number') {
-        return String(first);
       }
     } catch (_) {
       return raw;
@@ -7449,7 +7324,6 @@ struct RustDeskIndex {
     this.frameHeight = height;
     this.viewportModel.setSurfaceSize(width, height);
     this.frameStatus = `RGBA fallback ${width}x${height}`;
-    this.recordSoftwareFrame();
     if (previous && previous !== pixelMap) {
       previous.release().catch((_error: BusinessError) => {});
     }
@@ -7464,31 +7338,6 @@ struct RustDeskIndex {
       this.reprojectVirtualCursorOverlay();
     } else {
       this.applyDisplayConfiguration();
-    }
-  }
-
-  private recordSoftwareFrame(): void {
-    const now = Date.now();
-    this.softwareRenderTotalFrames += 1;
-    this.softwareFrameWindowCount += 1;
-    if (this.softwareFrameWindowStart === 0) {
-      this.softwareFrameWindowStart = now;
-      this.softwareRenderFps = 0;
-      return;
-    }
-    const elapsed = now - this.softwareFrameWindowStart;
-    if (elapsed >= 1000) {
-      this.softwareRenderFps = Number((this.softwareFrameWindowCount * 1000 / elapsed).toFixed(1));
-      this.softwareFrameWindowCount = 0;
-      this.softwareFrameWindowStart = now;
-      this.renderFpsText = `FPS ${this.softwareRenderFps.toFixed(1)} | Frames ${this.softwareRenderTotalFrames}`;
-      this.toolbarRenderStats = {
-        fps: this.softwareRenderFps,
-        totalFrames: this.softwareRenderTotalFrames,
-        decodeLatencyMs: 0,
-        lastFrameAgeMs: 0,
-        hasRenderedFrame: true,
-      };
     }
   }
 

@@ -10,7 +10,6 @@ export interface StatusPageProps {
   connectionSummary: string;
   sessionMessage: string;
   qualitySummary: string;
-  renderFpsText: string;
   frameStatus: string;
   buildMarker: string;
   onBack: () => void;
@@ -22,7 +21,6 @@ export struct StatusPage {
   @Param connectionSummary: string = '未连接';
   @Param sessionMessage: string = '未连接';
   @Param qualitySummary: string = 'Remote fps -- | delay -- | codec --';
-  @Param renderFpsText: string = 'FPS --';
   @Param frameStatus: string = 'Surface not ready';
   @Param buildMarker: string = '';
   @Event onBack: () => void = () => {};
@@ -45,9 +43,6 @@ export struct StatusPage {
             .fontSize($r('app.float.font_label'))
             .fontColor($r('app.color.text_secondary'));
           Text(this.qualitySummary)
-            .fontSize($r('app.float.font_label'))
-            .fontColor($r('app.color.text_secondary'));
-          Text(this.renderFpsText)
             .fontSize($r('app.float.font_label'))
             .fontColor($r('app.color.text_secondary'));
           Text(this.frameStatus)

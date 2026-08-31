@@ -44,7 +44,6 @@ import {
   sessionGetImageQuality as bridgeSessionGetImageQuality,
   sessionGetConnToken as bridgeSessionGetConnToken,
   sessionGetEnableTrustedDevices as bridgeSessionGetEnableTrustedDevices,
-  sessionGetRenderStats as bridgeSessionGetRenderStats,
   sessionGetRemoteAudioState as bridgeSessionGetRemoteAudioState,
   sessionGetRgbaSize as bridgeSessionGetRgbaSize,
   sessionGetToggleOption as bridgeSessionGetToggleOption,
@@ -263,10 +262,6 @@ export class RustDeskNativeApi {
 
   sessionGetEnableTrustedDevices(sessionId: string): boolean {
     return bridgeSessionGetEnableTrustedDevices(sessionId);
-  }
-
-  sessionGetRenderStats(sessionId: string, display: number): string {
-    return bridgeSessionGetRenderStats(sessionId, display);
   }
 
   sessionGetRemoteAudioState(sessionId: string): string {

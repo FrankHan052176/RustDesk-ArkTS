@@ -1,7 +1,6 @@
 export const DOMAIN = 0xFF01;
 export const TAG = 'RustDeskIndex';
 export const EVENT_POLL_INTERVAL_MS = 50;
-export const RENDER_STATS_POLL_INTERVAL_MS = 1000;
 export const MAX_PREVIEW_LONG_EDGE = 1280;
 export const PASSWORD_TIMEOUT_MS = 60000;
 
@@ -24,21 +23,6 @@ export interface ActionResponse {
   message?: string;
   session?: SessionSnapshot;
   events?: NativeEvent[];
-  stats?: RenderStatsResponse;
-}
-
-export interface RenderStatsResponse {
-  display: number;
-  stats: RenderStatsSnapshot;
-}
-
-export interface RenderStatsSnapshot {
-  fps: number;
-  totalFrames: number;
-  lastFrameAgeMs: number;
-  hasRenderedFrame: boolean;
-  decodeLatencyMs?: number;
-  avgDecodeLatencyMs?: number;
 }
 
 export interface NativeEvent {
