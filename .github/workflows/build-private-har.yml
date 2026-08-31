@@ -1,4 +1,4 @@
-name: ohos
+name: Build ArkTS HarmonyOS App
 
 on:
   push:
@@ -34,7 +34,7 @@ env:
   LUMINOUS_NEO_VERSION: 1.0.2
   SIGNING_REPOSITORY: ${{ vars.SIGNING_REPOSITORY || 'FrankHan052176/AppGallerySigning' }}
   SIGNING_REPOSITORY_REF: ${{ vars.SIGNING_REPOSITORY_REF || '70779bd9e42c8565772dd8c43c80b89a197c3369' }}
-  AGC_ENABLED: ${{ secrets.AGC_CLIENT_ID != '' && secrets.AGC_CLIENT_SECRET != '' && secrets.AGC_APP_ID != '' }}
+  AGC_ENABLED: ${{ (github.event_name == 'repository_dispatch' || github.event_name == 'workflow_dispatch') && secrets.AGC_CLIENT_ID != '' && secrets.AGC_CLIENT_SECRET != '' && secrets.AGC_APP_ID != '' }}
   AGC_API_DOMAIN: ${{ vars.AGC_API_DOMAIN || 'connect-api.cloud.huawei.com' }}
   AGC_TEST_DURATION_DAYS: ${{ vars.AGC_TEST_DURATION_DAYS || '14' }}
 
