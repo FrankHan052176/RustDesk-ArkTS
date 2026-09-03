@@ -13,9 +13,16 @@ on:
         default: rustdesk-ohrs
         type: string
       package_version:
-        description: Exact Core HAR version; latest when empty
-        required: false
-        default: ''
+        description: Exact immutable Core HAR version to release
+        required: true
+        type: string
+      core_sha:
+        description: Full Core commit SHA used to build the HAR
+        required: true
+        type: string
+      har_sha:
+        description: Full HAR adapter commit SHA used to publish the package
+        required: true
         type: string
 
 permissions:
@@ -23,13 +30,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-main
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && 'push-validation' || format('{0}-{1}', github.event_name, github.event.client_payload.package_version || inputs.package_version || github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 env:
   OHOS_COMMAND_LINE_TOOLS_VERSION: 6.1.1.280
   CORE_HAR_PACKAGE: ${{ github.event.client_payload.package_name || inputs.package_name || 'rustdesk-ohrs' }}
   CORE_HAR_VERSION: ${{ github.event.client_payload.package_version || inputs.package_version || '' }}
+  CORE_SHA: ${{ github.event.client_payload.core_sha || inputs.core_sha || '' }}
+  HAR_SHA: ${{ github.event.client_payload.har_sha || inputs.har_sha || '' }}
   CORE_HAR_REGISTRY: https://devrepo.devcloud.cn-north-4.huaweicloud.com/artgalaxy/api/ohpm/cn-north-4_c07b1b38744f424b8d87a86532d38003_ohpm_1/
   LUMINOUS_NEO_VERSION: 1.0.2
   SIGNING_REPOSITORY: ${{ vars.SIGNING_REPOSITORY || 'FrankHan052176/AppGallerySigning' }}
@@ -68,9 +77,27 @@ jobs:
         env:
           CODEARTS_PRIVATE_OHPM_READ: ${{ secrets.CODEARTS_PRIVATE_OHPM_READ }}
         run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" != "push" ]]; then
+            if [[ -z "$CORE_HAR_VERSION" ]]; then
+              echo "Release delivery requires an exact Core HAR version." >&2
+              exit 1
+            fi
+            if [[ ! "$CORE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "Release delivery requires a full 40-character Core SHA." >&2
+              exit 1
+            fi
+            if [[ ! "$HAR_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "Release delivery requires a full 40-character HAR SHA." >&2
+              exit 1
+            fi
+          fi
+
           private_config="$HOME/.ohpm/.ohpmrc"
+          umask 077
           mkdir -p "$HOME/.ohpm"
           printf '%s' "$CODEARTS_PRIVATE_OHPM_READ" > "$private_config"
+          chmod 0600 "$private_config"
 
           core_har_spec="${CORE_HAR_PACKAGE}@latest"
           if [[ -n "$CORE_HAR_VERSION" ]]; then
@@ -100,6 +127,10 @@ jobs:
           rm -f "$private_config"
 
           core_har_version="$(jq -er '.version' "oh_modules/${CORE_HAR_PACKAGE}/oh-package.json5")"
+          core_har_integrity="$(jq -er --arg package_name "$CORE_HAR_PACKAGE" \
+            '[.packages | to_entries[] | select(.value.name == $package_name) | .value.integrity // empty][0]' \
+            oh-package-lock.json5)"
+          core_har_provenance="oh_modules/${CORE_HAR_PACKAGE}/release-provenance.json"
           luminous_neo_version="$(jq -er '.version' "entry/oh_modules/luminous_neo/oh-package.json5")"
           if [[ -n "$CORE_HAR_VERSION" && "$core_har_version" != "$CORE_HAR_VERSION" ]]; then
             echo "Expected ${CORE_HAR_PACKAGE}@${CORE_HAR_VERSION}, got ${core_har_version}" >&2
@@ -109,11 +140,26 @@ jobs:
             echo "Expected luminous_neo@$LUMINOUS_NEO_VERSION, got $luminous_neo_version" >&2
             exit 1
           fi
+          if [[ "$GITHUB_EVENT_NAME" != "push" ]]; then
+            jq -e \
+              --arg core_sha "${CORE_SHA,,}" \
+              --arg har_sha "${HAR_SHA,,}" \
+              --arg package_name "$CORE_HAR_PACKAGE" \
+              --arg package_version "$CORE_HAR_VERSION" \
+              '.core_sha == $core_sha
+                and .har_sha == $har_sha
+                and .package_name == $package_name
+                and .package_version == $package_version' \
+              "$core_har_provenance" >/dev/null
+          fi
           echo "Core HAR version: $core_har_version"
+          echo "Core HAR integrity: $core_har_integrity"
           echo "Luminous Neo version: $luminous_neo_version"
           echo "core_har_version=$core_har_version" >> "$GITHUB_OUTPUT"
+          echo "core_har_integrity=$core_har_integrity" >> "$GITHUB_OUTPUT"
 
       - name: Sign
+        id: signing
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: ${{ env.SIGNING_REPOSITORY }}
@@ -193,7 +239,6 @@ jobs:
           done
 
           today=$(date -u +%F)
-          day_of_year=$(date -u +%j)
           version_build_number=$(jq -er --argjson start "$version_start_epoch" \
             '[.[] | select((.created_at | fromdateiso8601) >= $start) | (.run_attempt // 1)] | add' \
             <<<"$workflow_runs")
@@ -209,10 +254,18 @@ jobs:
             exit 1
           fi
 
-          version_code_prefix=${base_version_name//./}
           app_version_name="${base_version_name}.${version_build_number}"
-          app_version_code="${version_code_prefix}${day_of_year}$(printf '%02d' "$daily_build_number")"
-          app_version_code=$((10#$app_version_code))
+          # versionCode must increase for every AppGallery upgrade. Day-of-year resets every
+          # January, so use UTC days since a fixed epoch plus the daily run sequence instead.
+          # The offset keeps this scheme above every previously published 10xxxxxx code.
+          version_code_epoch=$(date -u -d '2020-01-01T00:00:00Z' +%s)
+          current_epoch=$(date -u +%s)
+          version_code_day=$(((current_epoch - version_code_epoch) / 86400))
+          app_version_code=$((100000000 + version_code_day * 100 + daily_build_number))
+          if (( app_version_code > 2147483647 )); then
+            echo "App versionCode exceeds the HarmonyOS limit: $app_version_code" >&2
+            exit 1
+          fi
           app_json=$(mktemp)
           jq --arg version_name "$app_version_name" --argjson version_code "$app_version_code" \
             '.app.versionName = $version_name | .app.versionCode = $version_code' \
@@ -240,7 +293,10 @@ jobs:
         id: app
         shell: bash
         env:
+          CORE_HAR_INTEGRITY: ${{ steps.ohpm.outputs.core_har_integrity }}
           CORE_HAR_VERSION: ${{ steps.ohpm.outputs.core_har_version }}
+          APP_VERSION_NAME: ${{ steps.version.outputs.app_version_name }}
+          APP_VERSION_CODE: ${{ steps.version.outputs.app_version_code }}
         run: |
           set -euo pipefail
 
@@ -253,13 +309,69 @@ jobs:
           mkdir -p ci-output
           output_app="ci-output/RustDesk-${CORE_HAR_VERSION}.app"
           cp "$signed_app" "$output_app"
+          app_sha256="$(sha256sum "$output_app" | awk '{print $1}')"
+          hap_entry="$(unzip -Z1 "$output_app" | awk '/\.hap$/ { print; exit }')"
+          if [[ -z "$hap_entry" ]]; then
+            echo "Signed App contains no HAP package." >&2
+            exit 1
+          fi
+          hap_sha256="$(unzip -p "$output_app" "$hap_entry" | sha256sum | awk '{print $1}')"
+          signing_sha="$(git -C .ci-signing-repo rev-parse HEAD)"
+          jq -n \
+            --argjson provenance_version 1 \
+            --arg arkts_sha "$GITHUB_SHA" \
+            --arg har_sha "$HAR_SHA" \
+            --arg core_sha "$CORE_SHA" \
+            --arg signing_sha "$signing_sha" \
+            --arg package_name "$CORE_HAR_PACKAGE" \
+            --arg package_version "$CORE_HAR_VERSION" \
+            --arg package_integrity "$CORE_HAR_INTEGRITY" \
+            --arg app_sha256 "$app_sha256" \
+            --arg hap_entry "$hap_entry" \
+            --arg hap_sha256 "$hap_sha256" \
+            --arg app_version_name "$APP_VERSION_NAME" \
+            --argjson app_version_code "$APP_VERSION_CODE" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            '{
+              provenance_version: $provenance_version,
+              arkts_sha: $arkts_sha,
+              har_sha: $har_sha,
+              core_sha: $core_sha,
+              signing: {
+                repository_sha: $signing_sha,
+                configuration: "publish"
+              },
+              har_package: {
+                name: $package_name,
+                version: $package_version,
+                integrity: $package_integrity
+              },
+              app: {
+                sha256: $app_sha256,
+                version_name: $app_version_name,
+                version_code: $app_version_code,
+                hap: {
+                  entry: $hap_entry,
+                  sha256: $hap_sha256
+                }
+              },
+              ci: {
+                run_id: $run_id,
+                run_attempt: $run_attempt
+              }
+            }' > ci-output/release-provenance.json
+          echo "App SHA-256: $app_sha256"
+          echo "HAP SHA-256: $hap_sha256"
           echo "path=$output_app" >> "$GITHUB_OUTPUT"
 
       - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: RustDesk-${{ steps.ohpm.outputs.core_har_version }}.app
-          path: ${{ steps.app.outputs.path }}
+          path: |
+            ${{ steps.app.outputs.path }}
+            ci-output/release-provenance.json
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

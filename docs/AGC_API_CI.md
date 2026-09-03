@@ -1,6 +1,6 @@
 # AGC API CI
 
-The `ohos` workflow uploads the signed `publish/release` App and submits an AGC test version through the AppGallery Connect API Client flow.
+The `Build ArkTS HarmonyOS App` workflow uploads the signed `publish/release` App and submits an AGC test version through the AppGallery Connect API Client flow.
 
 Configure these repository Secrets:
 
@@ -25,10 +25,12 @@ Before the signed `publish/release` App is built, CI counts Action build attempt
 
 ```text
 versionName = <base major.minor.patch>.<current-version build count>
-versionCode = <base major/minor/patch digits><UTC day-of-year><two-digit UTC daily build count>
+versionCode = 100000000 + (<UTC days since 2020-01-01> × 100) + <UTC daily build count>
 ```
 
-For example, the seventh `1.0.3` build and the fourth build on UTC day 215 produce `1.0.3.7 / 10321504`. A rerun increments both counters through `run_attempt`, and the UTC daily count supports `01..99`. Local builds continue to use the committed `AppScope/app.json5` values.
+The fixed epoch keeps `versionCode` monotonic across year boundaries, and the offset keeps the new scheme above every previously published `10xxxxxx` code. A rerun increments both counters through `run_attempt`, and the UTC daily count supports `01..99`. Local builds continue to use the static committed `AppScope/app.json5` baseline.
+
+Repository and manual release dispatches must supply an exact HAR package version plus the full Core and HAR commit SHAs. The workflow verifies those inputs, records the installed HAR integrity, and uploads `release-provenance.json` beside the signed App with the ArkTS/Core/HAR revisions, exact signing-repository revision, package version/integrity, dynamic App version, App SHA-256, embedded HAP SHA-256, and CI run identity. Push builds may still use `@latest` for non-AGC validation only.
 
 The same web-configurable test description is used when creating and updating a test version, and is truncated to 30 characters: `同步上游 <HAR version>` for a Core dispatch, the push commit message for a push, and the current SHA for a manual run. The script does not print the Client Secret or access token. When the three required Secrets are absent, the AGC step is skipped and the signed GitHub artifact is still produced.
 

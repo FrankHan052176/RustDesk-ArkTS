@@ -1,6 +1,6 @@
 # RustDesk HAR → ArkTS GitHub Actions 链路
 
-这套链路只负责 HarmonyOS 主控客户端的 Core HAR 与签名 App 构建，不包含 2in1 被控端、录屏或本地输入注入能力。
+这套链路负责 HarmonyOS RustDesk Core HAR、完整 ArkTS 应用和签名 App 的构建与测试发布。
 
 ```mermaid
 flowchart LR
@@ -15,18 +15,21 @@ flowchart LR
 
 ## ArkTS 构建流程
 
-ArkTS workflow 只接受 `rustdesk-har-published` dispatch，并保留手动恢复入口。dispatch 只需要携带包名，不携带版本：
+ArkTS workflow 接受 `rustdesk-har-published` dispatch，并保留要求填写精确来源的手动恢复入口。发布事件必须携带不可变包版本以及完整 Core/HAR SHA：
 
 ```json
 {
-  "package_name": "rustdesk-ohrs"
+  "package_name": "rustdesk-ohrs",
+  "package_version": "1.4.9-r1234-567-1-g01234567",
+  "core_sha": "0123456789abcdef0123456789abcdef01234567",
+  "har_sha": "89abcdef0123456789abcdef0123456789abcdef"
 }
 ```
 
 构建步骤固定为：
 
 1. Checkout ArkTS，安装 Java 17 与 HarmonyOS 命令行工具。
-2. 从 CodeArts 私仓安装 `rustdesk-ohrs@latest` 与固定版本 `luminous_neo@1.0.2`，并校验实际解包版本。
+2. 发布事件从 CodeArts 私仓安装精确的 `rustdesk-ohrs@<version>`；普通 push 仅用于非 AGC 验证，可安装 `@latest`。同时安装固定版本 `luminous_neo@1.0.2`，并校验实际解包版本和 HAR integrity。
 3. 删除私仓认证，再在根目录与 `entry` 执行普通 `ohpm install`。
 4. Checkout 私有签名仓并调用 `.github/scripts/prepare-signing-config.sh` 准备签名配置。
 5. 执行 App 级构建：
@@ -35,7 +38,9 @@ ArkTS workflow 只接受 `rustdesk-har-published` dispatch，并保留手动恢�
    hvigorw assembleApp -p product=publish -p buildMode=release
    ```
 
-6. 找到并上传名为 `RustDesk-${完整 HAR 版本}.app` 的签名 artifact。
+6. 找到并上传名为 `RustDesk-${完整 HAR 版本}.app` 的签名 artifact，同时附带 `release-provenance.json`，记录 ArkTS/Core/HAR SHA、签名仓精确 SHA、HAR 版本与 integrity、App 动态版本、App/HAP SHA-256 和 CI run 标识。
+
+HAR workflow 的手动入口提供 `dispatch_downstream` 开关。滚动升级 HAR/ArkTS 接口时，可先以 `false` 发布同时兼容旧、新 ArkTS 的过渡 HAR，待 ArkTS `main` 更新并通过 push 构建后，再从 ArkTS 手动入口使用该精确包版本及完整 Core/HAR SHA 生成发布候选；常规自动链路保持 `true`。
 
 ## GitHub 配置
 
