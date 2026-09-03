@@ -21,14 +21,16 @@ The update request refuses to proceed without at least one group. It writes ever
 
 After AGC finishes processing the uploaded package, the workflow updates the app file information and attaches the SVID introduction video for `ohos.permission.INTERCEPT_INPUT_EVENT` on phone (`deviceType=4`), tablet (`deviceType=5`), and PC/2-in-1 (`deviceType=19`). It passes the same three records to the invitation-test version. The PC/2-in-1 value follows the Publishing API's `PackagePermissionIntroVideo` contract and matches the app manifest's supported device types.
 
-Before the signed `publish/release` App is built, CI counts Action build attempts since the commit that introduced the current base version and counts Action build attempts created on the current UTC date. It rewrites only the runner checkout using these formulas:
+Before the signed `publish/release` App is built, CI combines the UTC day and immutable GitHub workflow run identity. It rewrites only the runner checkout using these formulas:
 
 ```text
-versionName = <base major.minor.patch>.<current-version build count>
-versionCode = 100000000 + (<UTC days since 2020-01-01> × 100) + <UTC daily build count>
+runSequence = (<GitHub workflow run number> × 100) + <run attempt>
+versionSuffix = (<UTC days since 2020-01-01> × 100000) + runSequence
+versionName = <base major.minor.patch>.<versionSuffix>
+versionCode = 100000000 + versionSuffix
 ```
 
-The fixed epoch keeps `versionCode` monotonic across year boundaries, and the offset keeps the new scheme above every previously published `10xxxxxx` code. A rerun increments both counters through `run_attempt`, and the UTC daily count supports `01..99`. Local builds continue to use the static committed `AppScope/app.json5` baseline.
+The fixed epoch keeps `versionCode` monotonic across year boundaries, the run identity prevents concurrent builds from receiving the same value, and the offset keeps the scheme above every previously published `10xxxxxx` code. Reintroducing the same base `versionName` in source history cannot reset the visible build suffix. A rerun increments through `run_attempt` (supported range `01..99`). Local builds continue to use the static committed `AppScope/app.json5` baseline.
 
 Repository and manual release dispatches must supply an exact HAR package version plus the full Core and HAR commit SHAs. Push validation reads the same immutable values from `.github/native-har-lock.json`; it never relies on the private registry's eventually consistent `@latest` tag. The workflow verifies the package-internal provenance and installed integrity, then uploads `release-provenance.json` beside the signed App with the ArkTS/Core/HAR revisions, exact signing-repository revision, package version/integrity, dynamic App version, App SHA-256, embedded HAP SHA-256, and CI run identity.
 

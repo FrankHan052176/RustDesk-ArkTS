@@ -187,8 +187,6 @@ jobs:
       - name: Version
         id: version
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -200,73 +198,26 @@ jobs:
             exit 1
           fi
 
-          version_start_sha=''
-          while IFS= read -r candidate; do
-            if git show --format= --unified=0 "$candidate" -- AppScope/app.json5 \
-              | grep -E '^\+.*"versionName"[[:space:]]*:[[:space:]]*"'"$base_version_name"'"' \
-              >/dev/null; then
-              version_start_sha="$candidate"
-              break
-            fi
-          done < <(git log \
-            -S "\"versionName\": \"$base_version_name\"" \
-            --format=%H \
-            -- AppScope/app.json5)
-          if [[ -z "$version_start_sha" ]]; then
-            echo "Unable to locate the commit that introduced base versionName $base_version_name." >&2
+          run_number=$((10#$GITHUB_RUN_NUMBER))
+          run_attempt=$((10#$GITHUB_RUN_ATTEMPT))
+          if (( run_number < 1 )); then
+            echo "GitHub workflow run number must be positive: $run_number" >&2
             exit 1
           fi
-          version_start_epoch=$(git show -s --format=%ct "$version_start_sha")
-
-          workflow_runs='[]'
-          page=1
-          while :; do
-            runs_response=$(curl --fail --silent --show-error --location \
-              --header "Authorization: Bearer $GH_TOKEN" \
-              --header 'X-GitHub-Api-Version: 2022-11-28' \
-              "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/build-private-har.yml/runs?per_page=100&page=$page")
-            page_runs=$(jq -c \
-              '[.workflow_runs[] | {created_at, run_attempt}]' \
-              <<<"$runs_response")
-            workflow_runs=$(jq -cn \
-              --argjson accumulated "$workflow_runs" \
-              --argjson current "$page_runs" \
-              '$accumulated + $current')
-            page_count=$(jq -r 'length' <<<"$page_runs")
-            if (( page_count < 100 )); then
-              break
-            fi
-            oldest_epoch=$(jq -er '.[-1].created_at | fromdateiso8601' <<<"$page_runs")
-            if (( oldest_epoch < version_start_epoch )); then
-              break
-            fi
-            ((page += 1))
-          done
-
-          today=$(date -u +%F)
-          version_build_number=$(jq -er --argjson start "$version_start_epoch" \
-            '[.[] | select((.created_at | fromdateiso8601) >= $start) | (.run_attempt // 1)] | add' \
-            <<<"$workflow_runs")
-          daily_build_number=$(jq -er --arg today "$today" \
-            '[.[] | select(.created_at | startswith($today)) | (.run_attempt // 1)] | add' \
-            <<<"$workflow_runs")
-          if (( version_build_number < 1 )); then
-            echo "Current-version build number must be positive: $version_build_number" >&2
-            exit 1
-          fi
-          if (( daily_build_number < 1 || daily_build_number > 99 )); then
-            echo "Daily build number is outside the supported range: $daily_build_number" >&2
+          if (( run_attempt < 1 || run_attempt > 99 )); then
+            echo "GitHub workflow run attempt is outside the supported range: $run_attempt" >&2
             exit 1
           fi
 
-          app_version_name="${base_version_name}.${version_build_number}"
-          # versionCode must increase for every AppGallery upgrade. Day-of-year resets every
-          # January, so use UTC days since a fixed epoch plus the daily run sequence instead.
-          # The offset keeps this scheme above every previously published 10xxxxxx code.
+          # Use immutable GitHub run identity rather than commit-history counting. Reintroducing
+          # the same base version in AppScope must never reset the visible build suffix.
           version_code_epoch=$(date -u -d '2020-01-01T00:00:00Z' +%s)
           current_epoch=$(date -u +%s)
           version_code_day=$(((current_epoch - version_code_epoch) / 86400))
-          app_version_code=$((100000000 + version_code_day * 100 + daily_build_number))
+          version_sequence=$((run_number * 100 + run_attempt))
+          version_suffix=$((version_code_day * 100000 + version_sequence))
+          app_version_name="${base_version_name}.${version_suffix}"
+          app_version_code=$((100000000 + version_suffix))
           if (( app_version_code > 2147483647 )); then
             echo "App versionCode exceeds the HarmonyOS limit: $app_version_code" >&2
             exit 1
@@ -277,11 +228,11 @@ jobs:
             AppScope/app.json5 > "$app_json"
           mv "$app_json" AppScope/app.json5
 
-          echo "App version: $app_version_name ($app_version_code), version build: $version_build_number, UTC daily build: $daily_build_number"
+          echo "App version: $app_version_name ($app_version_code), workflow run: $run_number, attempt: $run_attempt"
           echo "app_version_name=$app_version_name" >> "$GITHUB_OUTPUT"
           echo "app_version_code=$app_version_code" >> "$GITHUB_OUTPUT"
-          echo "build_number=$version_build_number" >> "$GITHUB_OUTPUT"
-          echo "daily_build_number=$daily_build_number" >> "$GITHUB_OUTPUT"
+          echo "run_number=$run_number" >> "$GITHUB_OUTPUT"
+          echo "run_attempt=$run_attempt" >> "$GITHUB_OUTPUT"
 
       - name: Build
         shell: bash
