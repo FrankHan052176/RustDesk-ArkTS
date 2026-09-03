@@ -29,7 +29,7 @@ ArkTS workflow 接受 `rustdesk-har-published` dispatch，并保留要求填写�
 构建步骤固定为：
 
 1. Checkout ArkTS，安装 Java 17 与 HarmonyOS 命令行工具。
-2. 发布事件从 CodeArts 私仓安装精确的 `rustdesk-ohrs@<version>`；普通 push 仅用于非 AGC 验证，可安装 `@latest`。同时安装固定版本 `luminous_neo@1.0.2`，并校验实际解包版本和 HAR integrity。
+2. 发布事件从 CodeArts 私仓安装 payload 指定的 `rustdesk-ohrs@<version>`；普通 push 从 `.github/native-har-lock.json` 安装精确版本，避免依赖私仓最终一致的 `@latest`。同时安装固定版本 `luminous_neo@1.0.2`，并校验实际解包版本、HAR 内嵌来源和 lockfile integrity。
 3. 删除私仓认证，再在根目录与 `entry` 执行普通 `ohpm install`。
 4. Checkout 私有签名仓并调用 `.github/scripts/prepare-signing-config.sh` 准备签名配置。
 5. 执行 App 级构建：

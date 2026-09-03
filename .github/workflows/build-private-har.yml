@@ -78,19 +78,23 @@ jobs:
           CODEARTS_PRIVATE_OHPM_READ: ${{ secrets.CODEARTS_PRIVATE_OHPM_READ }}
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" != "push" ]]; then
-            if [[ -z "$CORE_HAR_VERSION" ]]; then
-              echo "Release delivery requires an exact Core HAR version." >&2
-              exit 1
-            fi
-            if [[ ! "$CORE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
-              echo "Release delivery requires a full 40-character Core SHA." >&2
-              exit 1
-            fi
-            if [[ ! "$HAR_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
-              echo "Release delivery requires a full 40-character HAR SHA." >&2
-              exit 1
-            fi
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            CORE_HAR_PACKAGE="$(jq -er '.package_name' .github/native-har-lock.json)"
+            CORE_HAR_VERSION="$(jq -er '.package_version' .github/native-har-lock.json)"
+            CORE_SHA="$(jq -er '.core_sha' .github/native-har-lock.json)"
+            HAR_SHA="$(jq -er '.har_sha' .github/native-har-lock.json)"
+          fi
+          if [[ -z "$CORE_HAR_VERSION" ]]; then
+            echo "Build delivery requires an exact Core HAR version." >&2
+            exit 1
+          fi
+          if [[ ! "$CORE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Build delivery requires a full 40-character Core SHA." >&2
+            exit 1
+          fi
+          if [[ ! "$HAR_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Build delivery requires a full 40-character HAR SHA." >&2
+            exit 1
           fi
 
           private_config="$HOME/.ohpm/.ohpmrc"
@@ -99,10 +103,7 @@ jobs:
           printf '%s' "$CODEARTS_PRIVATE_OHPM_READ" > "$private_config"
           chmod 0600 "$private_config"
 
-          core_har_spec="${CORE_HAR_PACKAGE}@latest"
-          if [[ -n "$CORE_HAR_VERSION" ]]; then
-            core_har_spec="${CORE_HAR_PACKAGE}@${CORE_HAR_VERSION}"
-          fi
+          core_har_spec="${CORE_HAR_PACKAGE}@${CORE_HAR_VERSION}"
           ohpm uninstall "$CORE_HAR_PACKAGE" >/dev/null 2>&1 || true
           rm -rf "oh_modules/${CORE_HAR_PACKAGE}"
           echo "Installing Core HAR: $core_har_spec"
@@ -140,21 +141,25 @@ jobs:
             echo "Expected luminous_neo@$LUMINOUS_NEO_VERSION, got $luminous_neo_version" >&2
             exit 1
           fi
-          if [[ "$GITHUB_EVENT_NAME" != "push" ]]; then
-            jq -e \
-              --arg core_sha "${CORE_SHA,,}" \
-              --arg har_sha "${HAR_SHA,,}" \
-              --arg package_name "$CORE_HAR_PACKAGE" \
-              --arg package_version "$CORE_HAR_VERSION" \
-              '.core_sha == $core_sha
-                and .har_sha == $har_sha
-                and .package_name == $package_name
-                and .package_version == $package_version' \
-              "$core_har_provenance" >/dev/null
-          fi
+          jq -e \
+            --arg core_sha "${CORE_SHA,,}" \
+            --arg har_sha "${HAR_SHA,,}" \
+            --arg package_name "$CORE_HAR_PACKAGE" \
+            --arg package_version "$CORE_HAR_VERSION" \
+            '.core_sha == $core_sha
+              and .har_sha == $har_sha
+              and .package_name == $package_name
+              and .package_version == $package_version' \
+            "$core_har_provenance" >/dev/null
           echo "Core HAR version: $core_har_version"
           echo "Core HAR integrity: $core_har_integrity"
           echo "Luminous Neo version: $luminous_neo_version"
+          {
+            echo "CORE_HAR_PACKAGE=$CORE_HAR_PACKAGE"
+            echo "CORE_HAR_VERSION=$CORE_HAR_VERSION"
+            echo "CORE_SHA=${CORE_SHA,,}"
+            echo "HAR_SHA=${HAR_SHA,,}"
+          } >> "$GITHUB_ENV"
           echo "core_har_version=$core_har_version" >> "$GITHUB_OUTPUT"
           echo "core_har_integrity=$core_har_integrity" >> "$GITHUB_OUTPUT"
 
