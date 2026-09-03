@@ -18,6 +18,8 @@ export const TOUCH_TAP_MAX_DISTANCE: number = 18;
 export const TOUCH_LONG_PRESS_MS: number = 500;
 export const TOUCH_LONG_PRESS_MAX_DISTANCE: number = 5;
 export const TOUCH_DOUBLE_TAP_MAX_MS: number = 300;
+// Flutter's between-tap kDoubleTapSlop is wider than its 18 px per-tap movement slop.
+export const TOUCH_DOUBLE_TAP_SLOP: number = 100;
 export const TOUCH_TWO_FINGER_TAP_MAX_MS: number = 350;
 export const TOUCH_TRANSFORM_PAN_SLOP: number = 8;
 export const TOUCH_TRANSFORM_SCALE_SLOP: number = 0.02;
@@ -47,6 +49,8 @@ export class RustDeskTouchGestureState {
   private pendingTap: boolean = false;
   private pendingTapX: number = 0;
   private pendingTapY: number = 0;
+  private pendingTapDownX: number = 0;
+  private pendingTapDownY: number = 0;
   private pendingTapAt: number = 0;
 
   onDown(
@@ -74,7 +78,7 @@ export class RustDeskTouchGestureState {
     this.longPressDragArmed = false;
     this.secondTapDown = this.pendingTap
       && at - this.pendingTapAt <= TOUCH_DOUBLE_TAP_MAX_MS
-      && !this.distanceExceedsTapRange(x, y, this.pendingTapX, this.pendingTapY);
+      && !this.distanceExceedsDoubleTapRange(x, y, this.pendingTapDownX, this.pendingTapDownY);
     if (this.pendingTap && !this.secondTapDown) {
       actions.push({ type: 'click_left', x: this.pendingTapX, y: this.pendingTapY });
       this.clearPendingTap();
@@ -195,6 +199,8 @@ export class RustDeskTouchGestureState {
     this.pendingTap = true;
     this.pendingTapX = x;
     this.pendingTapY = y;
+    this.pendingTapDownX = this.downX;
+    this.pendingTapDownY = this.downY;
     this.pendingTapAt = at;
     this.clearDownState();
     return actions;
@@ -249,6 +255,13 @@ export class RustDeskTouchGestureState {
     return deltaX * deltaX + deltaY * deltaY > TOUCH_TAP_MAX_DISTANCE * TOUCH_TAP_MAX_DISTANCE;
   }
 
+  private distanceExceedsDoubleTapRange(x: number, y: number, referenceX: number, referenceY: number): boolean {
+    const deltaX = x - referenceX;
+    const deltaY = y - referenceY;
+    return deltaX * deltaX + deltaY * deltaY
+      > TOUCH_DOUBLE_TAP_SLOP * TOUCH_DOUBLE_TAP_SLOP;
+  }
+
   private distanceReachesLongPressRange(x: number, y: number, referenceX: number, referenceY: number): boolean {
     const deltaX = x - referenceX;
     const deltaY = y - referenceY;
@@ -275,6 +288,8 @@ export class RustDeskTouchGestureState {
     this.pendingTap = false;
     this.pendingTapX = 0;
     this.pendingTapY = 0;
+    this.pendingTapDownX = 0;
+    this.pendingTapDownY = 0;
     this.pendingTapAt = 0;
   }
 }

@@ -1,6 +1,7 @@
 export type ServerMode = 'official' | 'custom';
 export type ServerEndpointTestState = 'untested' | 'success' | 'error';
 export type PeerSource = 'recent' | 'addressBook' | 'lan';
+export type PeerViewSource = 'recent' | 'favorite' | 'lan' | 'addressBook';
 export type RustDeskInputMode = 'touch' | 'mouse' | 'relative';
 export type RustDeskRightClickGesture = 'double_tap' | 'two_finger_tap' | 'long_press';
 
@@ -27,23 +28,28 @@ export class ServerConfig {
 @ObservedV2
 export class PeerRecord {
   id: string = '';
-  targetId: string = '';
   username: string = '';
   hostname: string = '';
   platform: string = '';
   alias: string = '';
-  lanIp: string = '';
+  forceAlwaysRelay: boolean = false;
+  rdpPort: string = '';
+  rdpUsername: string = '';
+  loginName: string = '';
+  deviceGroupName: string = '';
+  note: string = '';
+  sameServer: boolean | undefined = undefined;
   source: PeerSource = 'recent';
   addressBookName: string = '';
   tags: string[] = [];
   @Trace online: boolean = false;
-  @Trace onlineKnown: boolean = false;
   @Trace favorite: boolean = false;
 }
 
 export class DirectorySnapshot {
   revision: number = 0;
   recent: PeerRecord[] = [];
+  favorite: PeerRecord[] = [];
   addressBook: PeerRecord[] = [];
   lan: PeerRecord[] = [];
   favorites: string[] = [];
@@ -55,13 +61,7 @@ export class PeerOnlineStatusResult {
   ok: boolean = false;
   onlines: string[] = [];
   offlines: string[] = [];
-  unknowns: string[] = [];
   message: string = '';
-}
-
-export class PeerDirectProbeTarget {
-  key: string = '';
-  target: string = '';
 }
 
 export class SessionDefaults {

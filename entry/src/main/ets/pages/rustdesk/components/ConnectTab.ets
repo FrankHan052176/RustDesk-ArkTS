@@ -12,6 +12,7 @@ import {
 import { EasyTierInstanceSummary } from '../../../services/EasyTierApiService';
 import { DirectorySnapshot, PeerRecord } from '../RustDeskDirectoryTypes';
 import { RustDeskLayoutTokens } from '../RustDeskLayoutTokens';
+import { peerDisplaySubtitle, peerDisplayTitle } from '../RustDeskPeerDirectoryModel';
 import { FloatingActionSurface } from './FloatingSurface';
 
 export interface ConnectTabProps {
@@ -280,7 +281,7 @@ export struct ConnectTab {
   }
 
   private recentPeerRenderKey(peer: PeerRecord): string {
-    return `${peer.id}|${peer.targetId}|${peer.lanIp}`;
+    return peer.id;
   }
 
   private recentRowRenderKey(start: number): string {
@@ -291,48 +292,25 @@ export struct ConnectTab {
   }
 
   private recentPeerName(peer: PeerRecord): string {
-    if (peer.alias.trim().length > 0) {
-      return peer.alias.trim();
-    }
-    if (peer.hostname.trim().length > 0) {
-      return peer.hostname.trim();
-    }
-    if (peer.username.trim().length > 0) {
-      return peer.username.trim();
-    }
-    const targetId = peer.targetId.trim();
-    return targetId.length > 0 ? targetId : peer.id;
+    return peerDisplayTitle(peer);
   }
 
   private recentPeerTarget(peer: PeerRecord): string {
-    const targetId = peer.targetId.trim();
-    if (targetId.length > 0) {
-      return targetId;
-    }
-    const lanIp = peer.lanIp.trim();
-    return lanIp.length > 0 ? lanIp : peer.id.trim();
+    return peer.id.trim();
   }
 
   private recentPeerSubtitle(peer: PeerRecord): string {
-    const lanIp = peer.lanIp.trim();
-    if (lanIp.length > 0) {
-      return lanIp;
-    }
-    const targetId = peer.targetId.trim();
-    return targetId.length > 0 ? targetId : peer.id.trim();
+    return peerDisplaySubtitle(peer);
   }
 
   private recentPeerStatus(peer: PeerRecord): ResourceStr {
-    if (!peer.onlineKnown) {
-      return $r('app.string.device_status_checking');
-    }
     return peer.online
       ? $r('app.string.device_status_online')
       : $r('app.string.device_status_offline');
   }
 
   private recentPeerStatusColor(peer: PeerRecord): ResourceColor {
-    return peer.onlineKnown && peer.online
+    return peer.online
       ? $r('app.color.success')
       : $r('app.color.neu_text_secondary');
   }

@@ -1,13 +1,16 @@
-import { PeerRecord } from '../RustDeskDirectoryTypes';
+import { PeerRecord, PeerViewSource } from '../RustDeskDirectoryTypes';
+import { peerDisplaySubtitle, peerDisplayTitle } from '../RustDeskPeerDirectoryModel';
 import { FloatingActionSurface, FloatingGlassSurface } from './FloatingSurface';
 
 export interface PeerCardProps {
   peer: PeerRecord;
+  viewSource: PeerViewSource;
   compact: boolean;
   cardWidth: number;
   transferActive: boolean;
   onSetFavorite: (peerId: string, favorite: boolean) => void;
   onRemoveRecent: (peerId: string) => void;
+  onRemoveLan: (peerId: string) => void;
   onConnectRemote: (peerId: string) => void;
   onViewOnly: (peerId: string) => void;
   onViewCamera: (peerId: string) => void;
@@ -17,60 +20,28 @@ export interface PeerCardProps {
 @ComponentV2
 export struct PeerCard {
   @Param peer: PeerRecord = new PeerRecord();
+  @Param viewSource: PeerViewSource = 'recent';
   @Param compact: boolean = false;
   @Param cardWidth: number = 0;
   @Param transferActive: boolean = false;
-  @Local favoriteActive: boolean = false;
   @Event onSetFavorite: (peerId: string, favorite: boolean) => void = (_peerId: string, _favorite: boolean) => {};
   @Event onRemoveRecent: (peerId: string) => void = (_peerId: string) => {};
+  @Event onRemoveLan: (peerId: string) => void = (_peerId: string) => {};
   @Event onConnectRemote: (peerId: string) => void = (_peerId: string) => {};
   @Event onViewOnly: (peerId: string) => void = (_peerId: string) => {};
   @Event onViewCamera: (peerId: string) => void = (_peerId: string) => {};
   @Event onOpenTransfer: (peerId: string) => void = (_peerId: string) => {};
 
-  aboutToAppear(): void {
-    this.favoriteActive = this.peer.favorite;
-  }
-
-  @Monitor('peer')
-  private onPeerChanged(_monitor: IMonitor): void {
-    this.favoriteActive = this.peer.favorite;
-  }
-
-  private targetIdText(): string {
-    const targetId = this.peer.targetId.trim();
-    return targetId.length > 0 ? targetId : this.peer.id.trim();
-  }
-
   private displayName(): string {
-    if (this.peer.alias.trim().length > 0) {
-      return this.peer.alias.trim();
-    }
-    if (this.peer.hostname.trim().length > 0) {
-      return this.peer.hostname.trim();
-    }
-    if (this.peer.username.trim().length > 0) {
-      return this.peer.username.trim();
-    }
-    return this.targetIdText();
+    return peerDisplayTitle(this.peer);
   }
 
   private identityDetail(): string {
-    if (this.peer.lanIp.trim().length > 0) {
-      return this.peer.lanIp.trim();
-    }
-    return this.targetIdText();
+    return peerDisplaySubtitle(this.peer);
   }
 
   private connectionTarget(): string {
-    if (this.peer.source === 'lan') {
-      const lanIp = this.peer.lanIp.trim();
-      if (lanIp.length > 0) {
-        return lanIp;
-      }
-    }
-    const targetId = this.peer.targetId.trim();
-    return targetId.length > 0 ? targetId : this.peer.id;
+    return this.peer.id.trim();
   }
 
   private sourceAccent(): ResourceColor {
@@ -94,49 +65,43 @@ export struct PeerCard {
   }
 
   private avatarAccent(): ResourceColor {
-    return this.peer.onlineKnown && this.peer.online
+    return this.peer.online
       ? this.sourceAccent()
       : $r('app.color.neu_text_disabled');
   }
 
   private avatarBackground(): ResourceColor {
-    return this.peer.onlineKnown && this.peer.online
+    return this.peer.online
       ? this.sourceBackground()
       : $r('app.color.surface_tertiary');
   }
 
   private onlineStatusText(): ResourceStr {
-    if (!this.peer.onlineKnown) {
-      return $r('app.string.device_status_checking');
-    }
     return this.peer.online
       ? $r('app.string.device_status_online')
       : $r('app.string.device_status_offline');
   }
 
   private onlineStatusColor(): ResourceColor {
-    return this.peer.onlineKnown && this.peer.online
+    return this.peer.online
       ? $r('app.color.success')
       : $r('app.color.neu_text_secondary');
   }
 
-  private sourceText(): ResourceStr {
-    if (this.peer.source === 'addressBook' && this.peer.addressBookName.trim().length > 0) {
-      return this.peer.addressBookName.trim();
-    }
-    if (this.peer.source === 'addressBook') {
-      return $r('app.string.device_source_address_book');
-    }
-    if (this.peer.source === 'lan') {
-      return $r('app.string.device_source_lan');
-    }
-    return $r('app.string.device_source_recent');
+  private toggleFavorite(): void {
+    this.onSetFavorite(this.peer.id, !this.peer.favorite);
   }
 
-  private toggleFavorite(): void {
-    const next = !this.favoriteActive;
-    this.favoriteActive = next;
-    this.onSetFavorite(this.peer.id, next);
+  private canRemoveFromCurrentView(): boolean {
+    return this.viewSource === 'recent' || this.viewSource === 'lan';
+  }
+
+  private removeFromCurrentView(): void {
+    if (this.viewSource === 'lan') {
+      this.onRemoveLan(this.peer.id);
+    } else if (this.viewSource === 'recent') {
+      this.onRemoveRecent(this.peer.id);
+    }
   }
 
   private cardHeight(): number {
@@ -155,13 +120,13 @@ export struct PeerCard {
           compact: true,
           subtleDepth: true,
           actionEnabled: false,
-          accessibilityLabel: this.favoriteActive ? '取消收藏设备' : '收藏设备',
+          accessibilityLabel: this.peer.favorite ? '取消收藏设备' : '收藏设备',
           onActivate: (): void => {},
         }) {
           Stack({ alignContent: Alignment.Center }) {
-            SymbolGlyph(this.favoriteActive ? $r('sys.symbol.star_fill') : $r('sys.symbol.star'))
+            SymbolGlyph(this.peer.favorite ? $r('sys.symbol.star_fill') : $r('sys.symbol.star'))
               .fontSize(18)
-              .fontColor([this.favoriteActive
+              .fontColor([this.peer.favorite
                 ? $r('app.color.warning')
                 : $r('app.color.neu_text_secondary')]);
           }
@@ -185,7 +150,7 @@ export struct PeerCard {
         .borderRadius(0)
         .hitTestBehavior(HitTestMode.Block)
         .zIndex(10)
-        .accessibilityText(this.favoriteActive ? '取消收藏设备' : '收藏设备')
+        .accessibilityText(this.peer.favorite ? '取消收藏设备' : '收藏设备')
         .onClick((): void => this.toggleFavorite());
     }
     .width(48)
@@ -201,7 +166,7 @@ export struct PeerCard {
           compact: true,
           subtleDepth: true,
           actionEnabled: false,
-          accessibilityLabel: '从最近设备中移除',
+          accessibilityLabel: this.viewSource === 'lan' ? '从局域网设备中移除' : '从最近设备中移除',
           onActivate: (): void => {},
         }) {
           Stack({ alignContent: Alignment.Center }) {
@@ -229,8 +194,8 @@ export struct PeerCard {
         .borderRadius(0)
         .hitTestBehavior(HitTestMode.Block)
         .zIndex(10)
-        .accessibilityText('从最近设备中移除')
-        .onClick((): void => this.onRemoveRecent(this.peer.id));
+        .accessibilityText(this.viewSource === 'lan' ? '从局域网设备中移除' : '从最近设备中移除')
+        .onClick((): void => this.removeFromCurrentView());
     }
     .width(48)
     .height(48)
@@ -241,7 +206,7 @@ export struct PeerCard {
   private IdentityRow() {
     Row({ space: 12 }) {
       Stack({ alignContent: Alignment.Center }) {
-        SymbolGlyph($r('sys.symbol.person_crop_circle_fill'))
+        SymbolGlyph($r('sys.symbol.display'))
           .fontSize(22)
           .fontColor([this.avatarAccent()]);
       }
@@ -271,7 +236,7 @@ export struct PeerCard {
       Row({ space: 16 }) {
         this.FavoriteButton();
 
-        if (this.peer.source === 'recent') {
+        if (this.canRemoveFromCurrentView()) {
           this.RemoveButton();
         }
       }
@@ -288,17 +253,14 @@ export struct PeerCard {
         .width(8)
         .height(8)
         .borderRadius(4)
-        .backgroundColor(this.peer.onlineKnown && this.peer.online
+        .backgroundColor(this.peer.online
           ? $r('app.color.success')
           : $r('app.color.neu_text_disabled'));
       Text(this.onlineStatusText())
         .fontSize(11)
         .fontWeight(FontWeight.Medium)
         .fontColor(this.onlineStatusColor());
-      Text(this.sourceText())
-        .fontSize(11)
-        .fontColor(this.sourceAccent());
-      Text(`ID ${this.targetIdText()}`)
+      Text(this.peer.platform.trim())
         .layoutWeight(1)
         .fontSize(11)
         .fontColor($r('app.color.neu_text_secondary'))

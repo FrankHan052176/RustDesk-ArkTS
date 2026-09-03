@@ -34,10 +34,14 @@ export class RustDeskViewportModel {
   private viewRotation: number = 0;
 
   reset(): void {
-    this.displays = [];
-    this.currentDisplay = 0;
+    this.resetSessionGeometry();
     this.viewportWidth = 0;
     this.viewportHeight = 0;
+  }
+
+  resetSessionGeometry(): void {
+    this.displays = [];
+    this.currentDisplay = 0;
     this.surfaceWidth = 0;
     this.surfaceHeight = 0;
     this.rotation = 0;

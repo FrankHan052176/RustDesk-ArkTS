@@ -32,8 +32,10 @@ export class RustDeskCursorModel {
   private hasRemotePosition: boolean = false;
   private currentBitmap?: RustDeskCursorBitmap = undefined;
   private cache: Map<string, RustDeskCursorBitmap> = new Map();
+  private generation: number = 0;
 
   reset(): void {
+    this.generation += 1;
     this.hasRemotePosition = false;
     this.remoteX = -10000;
     this.remoteY = -10000;
@@ -58,11 +60,11 @@ export class RustDeskCursorModel {
     return this.applyCurrentBitmap();
   }
 
-  updateCursorData(
+  async updateCursorData(
     event: NativeEvent,
     log: (message: string) => void,
     onChanged: () => void,
-  ): void {
+  ): Promise<void> {
     const id = String(event.id ?? '');
     const width = Number(event.width ?? '0');
     const height = Number(event.height ?? '0');
@@ -97,30 +99,34 @@ export class RustDeskCursorModel {
       size: { width, height },
       alphaType: image.AlphaType.UNPREMUL,
     };
-    image.createPixelMap(buffer, options)
-      .then((pixelMap: image.PixelMap) => {
-        const previous = this.cache.get(id);
-        const cursor: RustDeskCursorBitmap = {
-          id,
-          pixelMap,
-          hotX,
-          hotY,
-          width,
-          height,
-        };
-        this.cache.set(id, cursor);
-        if (this.currentId === id) {
-          this.currentBitmap = cursor;
-        }
-        if (previous && previous !== this.currentBitmap) {
-          previous.pixelMap.release().catch((_error: BusinessError) => {});
-        }
-        log(`id=${id} size=${width}x${height} hot=(${hotX},${hotY})`);
-        onChanged();
-      })
-      .catch((error: BusinessError) => {
-        log(`create_failed id=${id} error=${JSON.stringify(error) ?? String(error)}`);
-      });
+    const generation = this.generation;
+    try {
+      const pixelMap = await image.createPixelMap(buffer, options);
+      if (generation !== this.generation) {
+        pixelMap.release().catch((_error: BusinessError) => {});
+        return;
+      }
+      const previous = this.cache.get(id);
+      const cursor: RustDeskCursorBitmap = {
+        id,
+        pixelMap,
+        hotX,
+        hotY,
+        width,
+        height,
+      };
+      this.cache.set(id, cursor);
+      if (this.currentId === id) {
+        this.currentBitmap = cursor;
+      }
+      if (previous && previous !== this.currentBitmap) {
+        previous.pixelMap.release().catch((_error: BusinessError) => {});
+      }
+      log(`id=${id} size=${width}x${height} hot=(${hotX},${hotY})`);
+      onChanged();
+    } catch (error) {
+      log(`create_failed id=${id} error=${JSON.stringify(error) ?? String(error)}`);
+    }
   }
 
   getSnapshot(): RustDeskCursorSnapshot {

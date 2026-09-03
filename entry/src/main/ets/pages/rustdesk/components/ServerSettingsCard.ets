@@ -254,10 +254,11 @@ export struct ServerSettingsCard {
   @Builder
   private ResultBanner() {
     Row({ space: $r('app.float.space_12') }) {
-      Circle()
+      Row()
         .width($r('app.float.space_12'))
         .height($r('app.float.space_12'))
-        .fill(this.resultIsSuccess() ? $r('app.color.success') : $r('app.color.error'));
+        .borderRadius(999)
+        .backgroundColor(this.resultIsSuccess() ? $r('app.color.success') : $r('app.color.error'));
       Column({ space: 2 }) {
         Text(this.resultTitle())
           .width('100%')
@@ -434,10 +435,11 @@ export struct ServerSettingsCard {
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.brand_primary'));
       } else {
-        Circle()
+        Row()
           .width($r('app.float.space_8'))
           .height($r('app.float.space_8'))
-          .fill(this.endpointStatusColor(value, this.endpointDisplayState(controlId, value, state)));
+          .borderRadius(999)
+          .backgroundColor(this.endpointStatusColor(value, this.endpointDisplayState(controlId, value, state)));
         Text(this.endpointStatusText(value, this.endpointDisplayState(controlId, value, state)))
           .fontSize($r('app.float.font_label'))
           .fontWeight(FontWeight.Medium)
@@ -514,10 +516,11 @@ export struct ServerSettingsCard {
   @Builder
   private CapabilityRow(label: ResourceStr, value: ResourceStr, available: boolean, isLast: boolean) {
     Row({ space: $r('app.float.space_12') }) {
-      Circle()
+      Row()
         .width($r('app.float.space_8'))
         .height($r('app.float.space_8'))
-        .fill(available ? $r('app.color.success') : $r('app.color.outline'));
+        .borderRadius(999)
+        .backgroundColor(available ? $r('app.color.success') : $r('app.color.outline'));
 
       Text(label)
         .fontSize($r('app.float.font_body'))
@@ -689,10 +692,11 @@ export struct ServerSettingsCard {
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Start);
 
-          Circle()
+          Row()
             .width($r('app.float.space_12'))
             .height($r('app.float.space_12'))
-            .fill(this.config.remoteReachable ? $r('app.color.success') : $r('app.color.outline'));
+            .borderRadius(999)
+            .backgroundColor(this.config.remoteReachable ? $r('app.color.success') : $r('app.color.outline'));
         }
         .width('100%')
         .alignItems(VerticalAlign.Center);

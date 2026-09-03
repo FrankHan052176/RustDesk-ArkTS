@@ -72,6 +72,22 @@ export default function remoteSessionTabsControllerTest(): void {
       expect(events[2].name).assertEqual('chat_client_mode');
     });
 
+    it('caches cursor bitmaps and the active cursor id per session', 0, () => {
+      const controller = new RemoteSessionTabsController();
+      controller.add('session-1', 'one', 'remote_control');
+      controller.add('session-2', 'two', 'remote_control');
+      controller.cacheCursorEvent('session-1', { name: 'cursor_data', id: 'arrow', colors: '[1]' });
+      controller.cacheCursorEvent('session-1', { name: 'cursor_data', id: 'text', colors: '[2]' });
+      controller.cacheCursorEvent('session-1', { name: 'cursor_data', id: 'arrow', colors: '[3]' });
+      controller.cacheCursorEvent('session-1', { name: 'cursor_id', id: 'arrow' });
+
+      const cursorData = controller.cursorDataSnapshot('session-1');
+      expect(cursorData.length).assertEqual(2);
+      expect(cursorData[0].colors ?? '').assertEqual('[3]');
+      expect(controller.lastCursorId('session-1')).assertEqual('arrow');
+      expect(controller.cursorDataSnapshot('session-2').length).assertEqual(0);
+    });
+
     it('keeps protected actions when replaceable background events overflow', 0, () => {
       const controller = new RemoteSessionTabsController();
       controller.add('session-1', 'one', 'remote_control');

@@ -4,7 +4,6 @@ import {
   AccountLoginOptionsResult,
   AccountLoginProvider,
   AccountState,
-  PeerDirectProbeTarget,
   PeerOnlineStatusResult,
   PeerRecord,
   PeerSource,
@@ -192,14 +191,14 @@ export class RustDeskMainBridge {
     return this.parseAccountAction((): string => native.runtimePollAddressBookSync());
   }
 
-  listRecentPeers(): PeerRecord[] {
+  listRecentPeers(favorites: string[] = []): PeerRecord[] {
     try {
       const response: ESObject = JSON.parse(native.runtimeListRecentPeers());
       if (!Boolean(response.ok)) {
         this.recordDirectoryError('最近设备', String(response.message ?? '读取失败'));
         return [];
       }
-      return this.copyPeerRows(response.peers, 'recent', '', this.listFavorites());
+      return this.copyPeerRows(response.peers, 'recent', '', favorites);
     } catch (error) {
       this.recordDirectoryError('最近设备', String(error));
       return [];
@@ -216,24 +215,6 @@ export class RustDeskMainBridge {
       result.message = String(response.message ?? '');
       result.onlines = this.copyStringArray(response.onlines);
       result.offlines = this.copyStringArray(response.offlines);
-      result.unknowns = this.copyStringArray(response.unknowns);
-    } catch (error) {
-      result.message = String(error);
-    }
-    return result;
-  }
-
-  async probePeerDirectStates(targets: PeerDirectProbeTarget[]): Promise<PeerOnlineStatusResult> {
-    const result = new PeerOnlineStatusResult();
-    try {
-      const response: ESObject = JSON.parse(
-        await native.runtimeProbePeerDirectStates(JSON.stringify(targets)),
-      );
-      result.ok = Boolean(response.ok);
-      result.message = String(response.message ?? '');
-      result.onlines = this.copyStringArray(response.onlines);
-      result.offlines = this.copyStringArray(response.offlines);
-      result.unknowns = this.copyStringArray(response.unknowns);
     } catch (error) {
       result.message = String(error);
     }
@@ -243,6 +224,15 @@ export class RustDeskMainBridge {
   removeRecentPeer(peerId: string): boolean {
     try {
       const response: ESObject = JSON.parse(native.runtimeRemoveRecentPeer(peerId.trim()));
+      return Boolean(response.ok) && Boolean(response.removed);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  removeDiscoveredPeer(peerId: string): boolean {
+    try {
+      const response: ESObject = JSON.parse(native.runtimeRemoveDiscoveredPeer(peerId.trim()));
       return Boolean(response.ok) && Boolean(response.removed);
     } catch (_) {
       return false;
@@ -283,28 +273,27 @@ export class RustDeskMainBridge {
     }
   }
 
-  listLanPeers(): PeerRecord[] {
+  listLanPeers(favorites: string[] = []): PeerRecord[] {
     try {
       const response: ESObject = JSON.parse(native.runtimeListLanPeers());
       if (!Boolean(response.ok)) {
         this.recordDirectoryError('局域网设备', String(response.message ?? '读取失败'));
         return [];
       }
-      return this.copyPeerRows(response.peers, 'lan', '', this.listFavorites());
+      return this.copyPeerRows(response.peers, 'lan', '', favorites);
     } catch (error) {
       this.recordDirectoryError('局域网设备', String(error));
       return [];
     }
   }
 
-  listAddressBookPeers(): PeerRecord[] {
+  listAddressBookPeers(favorites: string[] = []): PeerRecord[] {
     try {
       const response: ESObject = JSON.parse(native.runtimeListAddressBookPeers());
       if (!Boolean(response.ok)) {
         this.recordDirectoryError('通讯簿', String(response.message ?? '读取失败'));
         return [];
       }
-      const favorites = this.listFavorites();
       const records: PeerRecord[] = [];
       let addressBooks: ESObject = response.addressBooks;
       if (addressBooks === undefined || addressBooks === null) {
@@ -525,17 +514,21 @@ export class RustDeskMainBridge {
       if (record.id.length === 0) {
         continue;
       }
-      record.targetId = String(row.targetId ?? '').trim();
       record.username = String(row.username ?? '').trim();
       record.hostname = String(row.hostname ?? '').trim();
       record.platform = String(row.platform ?? '').trim();
       record.alias = String(row.alias ?? '').trim();
-      record.lanIp = String(row.ip ?? '').trim();
+      record.forceAlwaysRelay = String(row.forceAlwaysRelay ?? '').toLowerCase() === 'true';
+      record.rdpPort = String(row.rdpPort ?? '').trim();
+      record.rdpUsername = String(row.rdpUsername ?? '').trim();
+      record.loginName = String(row.loginName ?? '').trim();
+      record.deviceGroupName = String(row.device_group_name ?? '').trim();
+      record.note = typeof row.note === 'string' ? String(row.note) : '';
+      record.sameServer = row.same_server === undefined ? undefined : Boolean(row.same_server);
       record.source = peerSource;
       record.addressBookName = addressBookName;
       record.tags = this.copyStringArray(row.tags);
-      record.onlineKnown = row.online !== undefined;
-      record.online = record.onlineKnown && Boolean(row.online);
+      record.online = Boolean(row.online ?? false);
       record.favorite = this.containsString(favorites, record.id);
       records.push(record);
     }

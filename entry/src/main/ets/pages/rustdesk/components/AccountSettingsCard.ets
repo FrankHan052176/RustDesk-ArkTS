@@ -309,10 +309,11 @@ export struct AccountSettingsCard {
       .alignItems(HorizontalAlign.Start);
 
       Row({ space: $r('app.float.space_8') }) {
-        Circle()
+        Row()
           .width($r('app.float.space_8'))
           .height($r('app.float.space_8'))
-          .fill(this.statusColor());
+          .borderRadius(999)
+          .backgroundColor(this.statusColor());
 
         Text(this.statusText())
           .fontSize($r('app.float.font_caption'))
@@ -542,10 +543,11 @@ export struct AccountSettingsCard {
         motionEnabled: true,
       }) {
         Row({ space: 10 }) {
-          Circle()
+          Row()
             .width(8)
             .height(8)
-            .fill(this.statusColor());
+            .borderRadius(999)
+            .backgroundColor(this.statusColor());
           Column({ space: 2 }) {
             Text(this.statusText())
               .width('100%')
@@ -765,10 +767,11 @@ export struct AccountSettingsCard {
     Stack() {
       Row({ space: $r('app.float.space_16') }) {
         Stack() {
-          Circle()
+          Row()
             .width($r('app.float.control_regular'))
             .height($r('app.float.control_regular'))
-            .fill($r('app.color.brand_primary'));
+            .borderRadius(999)
+            .backgroundColor($r('app.color.brand_primary'));
 
           Text('R')
             .fontSize($r('app.float.font_title'))
@@ -919,10 +922,11 @@ export struct AccountSettingsCard {
   private MessageBanner() {
     if (this.accountState.message.trim().length > 0) {
       Row({ space: $r('app.float.space_12') }) {
-        Circle()
+        Row()
           .width($r('app.float.space_8'))
           .height($r('app.float.space_8'))
-          .fill(this.messageColor());
+          .borderRadius(999)
+          .backgroundColor(this.messageColor());
 
         Text(this.accountState.message.trim())
           .layoutWeight(1)

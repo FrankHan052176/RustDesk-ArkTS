@@ -1,6 +1,8 @@
 import { SessionOverlayPanel } from '../SessionOverlayState';
 import { SessionToolbarMetrics } from '../SessionToolbarMetrics';
 import { RemoteSessionTab } from '../RemoteSessionTabsController';
+import { RustDeskInputMode, RustDeskRightClickGesture } from '../RustDeskDirectoryTypes';
+import { SessionInputControls } from './SessionInputControls';
 
 const SOFT_KEYBOARD_TRANSITION_ID = 'rustdesk-session-soft-keyboard';
 const SYSTEM_IME_TRANSITION_ID = 'rustdesk-session-system-ime';
@@ -19,9 +21,10 @@ export interface SessionToolbarProps {
   canAddSession: boolean;
   touchMode: boolean;
   relativeMouseMode: boolean;
+  relativeModeSupported: boolean;
+  rightClickGesture: RustDeskRightClickGesture;
   metrics: SessionToolbarMetrics;
   activeOverlayPanel: SessionOverlayPanel;
-  inputTransitionId: string;
   chatTransitionId: string;
   displayTransitionId: string;
   qualityTransitionId: string;
@@ -45,7 +48,8 @@ export interface SessionToolbarProps {
   windowFullscreen: boolean;
   windowControlBusy: boolean;
   refreshDisplayEnabled: boolean;
-  onOpenInput: () => void;
+  onSelectInputMode: (mode: RustDeskInputMode) => void;
+  onSelectRightClick: (gesture: RustDeskRightClickGesture) => void;
   onResetTransform: () => void;
   onOpenChat: () => void;
   onOpenDisplay: () => void;
@@ -71,16 +75,15 @@ export struct SessionToolbar {
   @Param activeSessionId: string = '';
   @Param canAddSession: boolean = true;
   @Param touchMode: boolean = true;
-  @Local displayedTouchMode: boolean = true;
   @Param relativeMouseMode: boolean = false;
-  @Local displayedRelativeMouseMode: boolean = false;
+  @Param relativeModeSupported: boolean = false;
+  @Param rightClickGesture: RustDeskRightClickGesture = 'two_finger_tap';
   @Param metrics: SessionToolbarMetrics = {
     fps: '--',
     delay: '--',
     codec: '--',
   };
   @Param activeOverlayPanel: SessionOverlayPanel = 'home';
-  @Param inputTransitionId: string = '';
   @Param chatTransitionId: string = '';
   @Param displayTransitionId: string = '';
   @Param qualityTransitionId: string = '';
@@ -105,7 +108,10 @@ export struct SessionToolbar {
   @Param windowFullscreen: boolean = false;
   @Param windowControlBusy: boolean = false;
   @Param refreshDisplayEnabled: boolean = false;
-  @Event onOpenInput: () => void = () => {};
+  @Event onSelectInputMode: (mode: RustDeskInputMode) => void = (_mode: RustDeskInputMode) => {};
+  @Event onSelectRightClick: (gesture: RustDeskRightClickGesture) => void = (
+    _gesture: RustDeskRightClickGesture,
+  ) => {};
   @Event onResetTransform: () => void = () => {};
   @Event onOpenChat: () => void = () => {};
   @Event onOpenDisplay: () => void = () => {};
@@ -129,19 +135,7 @@ export struct SessionToolbar {
   @BuilderParam content: () => void = this.Empty;
 
   aboutToAppear(): void {
-    this.displayedTouchMode = this.touchMode;
-    this.displayedRelativeMouseMode = this.relativeMouseMode;
     this.displayedAndroidNavigationVisible = this.androidNavigationVisible;
-  }
-
-  @Monitor('touchMode')
-  private onTouchModeChanged(_monitor: IMonitor): void {
-    this.displayedTouchMode = this.touchMode;
-  }
-
-  @Monitor('relativeMouseMode')
-  private onRelativeMouseModeChanged(_monitor: IMonitor): void {
-    this.displayedRelativeMouseMode = this.relativeMouseMode;
   }
 
   @Monitor('androidNavigationVisible')
@@ -360,12 +354,16 @@ export struct SessionToolbar {
   }
 
   private actionHeight(): number {
-    return 38;
+    return 36;
+  }
+
+  private toolbarHeaderRightAligned(): boolean {
+    return this.activeOverlayPanel !== 'home' || this.toolbarWidth < 680;
   }
 
   private actionColumnCount(): number {
-    if (this.toolbarWidth >= 1000) {
-      return 8;
+    if (this.toolbarWidth >= 680) {
+      return 7;
     }
     return this.toolbarWidth >= 620 ? 4 : 2;
   }
@@ -381,13 +379,6 @@ export struct SessionToolbar {
 
   private toolbarActionEnabled(options: ToolbarActionOptions): boolean {
     return options.enabled !== false;
-  }
-
-  private pointerModeLabel(): string {
-    if (this.displayedTouchMode) {
-      return '触控模式';
-    }
-    return this.displayedRelativeMouseMode ? '相对鼠标' : '鼠标模式';
   }
 
   @Builder
@@ -424,46 +415,6 @@ export struct SessionToolbar {
     .transition(TransitionEffect.OPACITY)
     .onClick((): void => {
       options.onClick();
-    });
-  }
-
-  @Builder
-  private PointerModeAction() {
-    Button({ type: ButtonType.Normal, stateEffect: true }) {
-      Text(`输入 · ${this.pointerModeLabel()}`)
-        .fontSize($r('app.float.font_label'))
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.activeOverlayPanel === 'input'
-          ? $r('app.color.white')
-          : $r('app.color.neu_text_primary'))
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis });
-    }
-    .width(this.actionButtonWidth())
-    .height(this.actionHeight())
-    .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_8') })
-    .backgroundColor(this.activeOverlayPanel === 'input'
-      ? $r('app.color.brand_primary')
-      : $r('app.color.mica_control'))
-    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.56,
-    })
-    .border({
-      width: 1,
-      color: this.activeOverlayPanel === 'input'
-        ? $r('app.color.brand_primary')
-        : $r('app.color.mica_border'),
-    })
-    .borderRadius($r('app.float.radius_14'))
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-    .hoverEffect(HoverEffect.Auto)
-    .accessibilityText(`打开输入模式设置，当前${this.pointerModeLabel()}`)
-    .accessibilitySelected(this.activeOverlayPanel === 'input')
-    .geometryTransition(this.inputTransitionId)
-    .transition(TransitionEffect.OPACITY)
-    .onClick((): void => {
-      this.onOpenInput();
     });
   }
 
@@ -814,9 +765,8 @@ export struct SessionToolbar {
       }
       .width(this.actionGridWidth())
       .justifyContent(FlexAlign.Center);
-    } else if (this.actionColumnCount() === 8) {
+    } else if (this.actionColumnCount() === 7) {
       Row({ space: $r('app.float.space_8') }) {
-        this.PointerModeAction()
         this.SystemImeAction()
         this.SoftKeyboardAction()
         this.ChatAction()
@@ -830,92 +780,109 @@ export struct SessionToolbar {
     } else if (this.actionColumnCount() === 4) {
       Column({ space: $r('app.float.space_8') }) {
         Row({ space: $r('app.float.space_8') }) {
-          this.PointerModeAction()
           this.SystemImeAction()
           this.SoftKeyboardAction()
           this.ChatAction()
+          this.AudioToggle()
         }
         .width(this.actionGridWidth());
 
         Row({ space: $r('app.float.space_8') }) {
-          this.AudioToggle()
           this.DisplayAction()
           this.QualityAction()
           this.DangerAction('断开')
         }
         .width(this.actionGridWidth())
-        .alignItems(VerticalAlign.Center);
+        .alignItems(VerticalAlign.Center)
+        .justifyContent(FlexAlign.Center);
       }
       .width(this.actionGridWidth());
     } else {
       Column({ space: $r('app.float.space_8') }) {
         Row({ space: $r('app.float.space_8') }) {
-          this.PointerModeAction()
           this.SystemImeAction()
-        }
-        .width(this.actionGridWidth());
-
-        Row({ space: $r('app.float.space_8') }) {
           this.SoftKeyboardAction()
+        }
+        .width(this.actionGridWidth());
+
+        Row({ space: $r('app.float.space_8') }) {
           this.ChatAction()
-        }
-        .width(this.actionGridWidth());
-
-        Row({ space: $r('app.float.space_8') }) {
           this.AudioToggle()
-          this.DisplayAction()
         }
         .width(this.actionGridWidth());
 
         Row({ space: $r('app.float.space_8') }) {
+          this.DisplayAction()
           this.QualityAction()
+        }
+        .width(this.actionGridWidth());
+
+        Row({ space: $r('app.float.space_8') }) {
           this.DangerAction('断开')
         }
-        .width(this.actionGridWidth());
+        .width(this.actionGridWidth())
+        .justifyContent(FlexAlign.Center);
       }
       .width(this.actionGridWidth());
     }
   }
 
   build(): void {
-    Column({ space: $r('app.float.space_8') }) {
-      if (this.tabs.length > 0) {
-        this.SessionTabsBar();
-      }
-
-      Row({ space: $r('app.float.space_8') }) {
-        Text(`${this.metrics.codec}`)
-          .fontSize($r('app.float.font_caption'))
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.neu_accent'))
-          .maxLines(1);
-        Text(`${this.metrics.fps} FPS`)
-          .fontSize($r('app.float.font_caption'))
-          .fontColor($r('app.color.neu_text_secondary'))
-          .maxLines(1);
-        Text(`${this.metrics.delay} ms`)
-          .fontSize($r('app.float.font_caption'))
-          .fontColor($r('app.color.neu_text_secondary'))
-          .maxLines(1);
-        Blank()
-        if (!this.useNarrowUtilityLayout()) {
+    Column({ space: $r('app.float.space_6') }) {
+      Scroll() {
+        Row({ space: $r('app.float.space_8') }) {
+          Text(`${this.metrics.codec}`)
+            .fontSize($r('app.float.font_caption'))
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.neu_accent'))
+            .maxLines(1);
+          Text(`${this.metrics.fps} FPS`)
+            .fontSize($r('app.float.font_caption'))
+            .fontColor($r('app.color.neu_text_secondary'))
+            .maxLines(1);
+          Text(`${this.metrics.delay} ms`)
+            .fontSize($r('app.float.font_caption'))
+            .fontColor($r('app.color.neu_text_secondary'))
+            .maxLines(1);
           this.ToolbarUtilityActions()
-        }
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Center);
-
-      if (this.useNarrowUtilityLayout()) {
-        Row() {
-          this.NarrowToolbarUtilityActions();
+          if (this.activeOverlayPanel === 'home'
+            && !this.cameraSession && !this.viewOnlySession
+            && this.toolbarWidth >= 680) {
+            SessionInputControls({
+              touchMode: this.touchMode,
+              relativeMouseMode: this.relativeMouseMode,
+              relativeModeSupported: this.relativeModeSupported,
+              rightClickGesture: this.rightClickGesture,
+              wideLayout: true,
+              onSelectMode: (mode: RustDeskInputMode): void => this.onSelectInputMode(mode),
+              onSelectRightClick: (gesture: RustDeskRightClickGesture): void =>
+                this.onSelectRightClick(gesture),
+            });
+          }
         }
         .width('100%')
-        .justifyContent(FlexAlign.End);
-
+        .alignItems(VerticalAlign.Center)
+        .justifyContent(this.toolbarHeaderRightAligned() ? FlexAlign.End : FlexAlign.Center);
       }
+      .width('100%')
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true });
 
       if (this.activeOverlayPanel === 'home') {
         Column({ space: $r('app.float.space_8') }) {
+          if (!this.cameraSession && !this.viewOnlySession && this.toolbarWidth < 680) {
+            SessionInputControls({
+              touchMode: this.touchMode,
+              relativeMouseMode: this.relativeMouseMode,
+              relativeModeSupported: this.relativeModeSupported,
+              rightClickGesture: this.rightClickGesture,
+              wideLayout: false,
+              onSelectMode: (mode: RustDeskInputMode): void => this.onSelectInputMode(mode),
+              onSelectRightClick: (gesture: RustDeskRightClickGesture): void =>
+                this.onSelectRightClick(gesture),
+            });
+          }
           this.FunctionHome();
 
           if (this.androidNavigationAvailable) {
@@ -939,6 +906,10 @@ export struct SessionToolbar {
           bottom: $r('app.float.space_8'),
         })
         .clip(false);
+      }
+
+      if (this.tabs.length > 0) {
+        this.SessionTabsBar();
       }
     }
     .width('100%')

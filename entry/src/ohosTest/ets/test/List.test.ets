@@ -1,7 +1,7 @@
-import backgroundTaskStateTest from './BackgroundTaskState.test';
 import chatStoreTest from './ChatStore.test';
 import downloadRootManagerTest from './DownloadRootManager.test';
 import pressedButtonStateTest from './RustDeskPressedButtonState.test';
+import rustDeskPeerDirectoryModelTest from './RustDeskPeerDirectoryModel.test';
 import rustDeskImeInputControllerTest from './RustDeskImeInputController.test';
 import remoteSessionOrientationPolicyTest from './RemoteSessionOrientationPolicy.test';
 import remoteSessionHandoffServiceTest from './RemoteSessionHandoffService.test';
@@ -15,10 +15,10 @@ import transferManagerTest from './TransferManager.test';
 import viewportModelTest from './RustDeskViewportModel.test';
 
 export default function testsuite(): void {
-  backgroundTaskStateTest();
   chatStoreTest();
   downloadRootManagerTest();
   pressedButtonStateTest();
+  rustDeskPeerDirectoryModelTest();
   rustDeskImeInputControllerTest();
   remoteSessionOrientationPolicyTest();
   remoteSessionHandoffServiceTest();

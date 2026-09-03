@@ -28,8 +28,8 @@ import {
   runtimeListLanPeers as bridgeRuntimeListLanPeers,
   runtimeListLocalDir as bridgeRuntimeListLocalDir,
   runtimeListRecentPeers as bridgeRuntimeListRecentPeers,
-  runtimeProbePeerDirectStates as bridgeRuntimeProbePeerDirectStates,
   runtimeQueryPeerOnlineStates as bridgeRuntimeQueryPeerOnlineStates,
+  runtimeRemoveDiscoveredPeer as bridgeRuntimeRemoveDiscoveredPeer,
   runtimeRemoveRecentPeer as bridgeRuntimeRemoveRecentPeer,
   runtimeScanLanPeers as bridgeRuntimeScanLanPeers,
   runtimeSetFavorite as bridgeRuntimeSetFavorite,
@@ -204,8 +204,8 @@ export class RustDeskNativeApi {
     return bridgeRuntimeQueryPeerOnlineStates(peerIdsJson);
   }
 
-  runtimeProbePeerDirectStates(targetsJson: string): Promise<string> {
-    return bridgeRuntimeProbePeerDirectStates(targetsJson);
+  runtimeRemoveDiscoveredPeer(peerId: string): string {
+    return bridgeRuntimeRemoveDiscoveredPeer(peerId);
   }
 
   runtimeRemoveRecentPeer(peerId: string): string {

@@ -77,6 +77,58 @@ export default function touchGestureStateTest(): void {
       expect(end[0].type).assertEqual('drag_end');
     });
 
+    it('uses Flutter double-tap slop when the held second tap moves', 0, () => {
+      const state = new RustDeskTouchGestureState();
+      state.onDown(20, 20, 0, 'mouse');
+      state.onRelease(20, 20, 90, false);
+
+      const secondDown = state.onDown(70, 20, 160, 'mouse');
+      expect(secondDown.length).assertEqual(0);
+
+      const start = state.onMove(92, 20);
+      expect(start.length).assertEqual(1);
+      expect(start[0].type).assertEqual('drag_start');
+      expect(start[0].x).assertEqual(70);
+
+      const end = state.onRelease(92, 20, 260, false);
+      expect(end.length).assertEqual(1);
+      expect(end[0].type).assertEqual('drag_end');
+    });
+
+    it('keeps Flutter double-tap acquisition boundary separate from movement slop', 0, () => {
+      const accepted = new RustDeskTouchGestureState();
+      accepted.onDown(0, 0, 0, 'mouse');
+      accepted.onRelease(0, 0, 80, false);
+      expect(accepted.onDown(100, 0, 160, 'mouse').length).assertEqual(0);
+
+      const rejected = new RustDeskTouchGestureState();
+      rejected.onDown(0, 0, 0, 'mouse');
+      rejected.onRelease(0, 0, 80, false);
+      const actions = rejected.onDown(101, 0, 160, 'mouse');
+      expect(actions.length).assertEqual(1);
+      expect(actions[0].type).assertEqual('click_left');
+    });
+
+    it('compares the second tap with the first down instead of the first release', 0, () => {
+      const state = new RustDeskTouchGestureState();
+      state.onDown(0, 0, 0, 'mouse');
+      state.onRelease(18, 0, 80, false);
+
+      expect(state.onDown(-90, 0, 160, 'mouse').length).assertEqual(0);
+    });
+
+    it('starts held double-tap drag only after movement exceeds 18 vp', 0, () => {
+      const state = new RustDeskTouchGestureState();
+      state.onDown(0, 0, 0, 'mouse');
+      state.onRelease(0, 0, 80, false);
+      state.onDown(50, 0, 160, 'mouse');
+
+      expect(state.onMove(68, 0).length).assertEqual(0);
+      const actions = state.onMove(68.01, 0);
+      expect(actions.length).assertEqual(1);
+      expect(actions[0].type).assertEqual('drag_start');
+    });
+
     it('starts Flutter mouse-mode hold drag after the second-tap hold timeout', 0, () => {
       const state = new RustDeskTouchGestureState();
       state.onDown(20, 20, 0, 'mouse');

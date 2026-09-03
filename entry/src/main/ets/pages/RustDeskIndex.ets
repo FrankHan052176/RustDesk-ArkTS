@@ -44,7 +44,6 @@ import {
 import { ChatDrawer } from './rustdesk/components/ChatDrawer';
 import { DisplaySelectorSheet } from './rustdesk/components/DisplaySelectorSheet';
 import { QualityControlSheet, QualityPreset } from './rustdesk/components/QualityControlSheet';
-import { InputModeSheet } from './rustdesk/components/InputModeSheet';
 import { SessionPanelFrame } from './rustdesk/components/SessionPanelFrame';
 import { TransferDrawer } from './rustdesk/components/TransferDrawer';
 import { ChatStore } from './rustdesk/ChatStore';
@@ -56,13 +55,19 @@ import {
   AccountLoginProvider,
   AccountState,
   DirectorySnapshot,
-  PeerDirectProbeTarget,
   PeerRecord,
   RustDeskInputMode,
   RustDeskRightClickGesture,
   ServerConfig,
   SessionDefaults,
 } from './rustdesk/RustDeskDirectoryTypes';
+import {
+  applyPeerOnlineStates,
+  buildFavoritePeers,
+  collectPeerOnlineIds,
+  peerProjectionListsEqual,
+  preservePeerOnlineStates,
+} from './rustdesk/RustDeskPeerDirectoryModel';
 import { RustDeskSurfaceController } from './rustdesk/RustDeskSurfaceController';
 import { RustDeskInputController } from './rustdesk/RustDeskInputController';
 import {
@@ -168,7 +173,6 @@ const WAITING_FOR_IMAGE_TEXT = 'Connected, waiting for image...';
 const PREVIEW_INPUT_FOCUS_ID = 'rustdesk-preview-input-layer';
 const SYSTEM_IME_INPUT_FOCUS_ID = 'rustdesk-system-ime-input';
 const SESSION_OVERLAY_TRANSITION_CHAT = 'rustdesk-session-overlay-chat';
-const SESSION_OVERLAY_TRANSITION_INPUT = 'rustdesk-session-overlay-input';
 const SESSION_OVERLAY_TRANSITION_DISPLAY = 'rustdesk-session-overlay-display';
 const SESSION_OVERLAY_TRANSITION_QUALITY = 'rustdesk-session-overlay-quality';
 const MAIN_PAGE_TRANSITION_DURATION_MS = 280;
@@ -250,8 +254,9 @@ struct RustDeskIndex {
   private preferences?: RustDeskPreferences;
   private connectScroller: Scroller = new Scroller();
   private deviceRecentScroller: Scroller = new Scroller();
-  private deviceAddressBookScroller: Scroller = new Scroller();
+  private deviceFavoriteScroller: Scroller = new Scroller();
   private deviceLanScroller: Scroller = new Scroller();
+  private deviceAddressBookScroller: Scroller = new Scroller();
   private settingsScroller: Scroller = new Scroller();
   private viewedHostScroller: Scroller = new Scroller();
   private transferScroller: Scroller = new Scroller();
@@ -281,6 +286,7 @@ struct RustDeskIndex {
   private softKeyboardCommandActive: boolean = false;
   private lanScanGeneration: number = 0;
   private lanScanActive: boolean = false;
+  private lanScanPollTimer: number = -1;
   private serverTestTimer: number = -1;
   private serverTestGeneration: number = 0;
   private systemImeCaretTimer: number = -1;
@@ -290,6 +296,7 @@ struct RustDeskIndex {
   private peerOnlinePollTimer: number = -1;
   private peerOnlinePollGeneration: number = 0;
   private peerOnlinePollInFlight: boolean = false;
+  private peerOnlineQueryCount: number = 0;
   private accountOidcActive: boolean = false;
   private accountOidcOpenedUrl: string = '';
   private sessionReturnTabIndex: number = 0;
@@ -546,6 +553,7 @@ struct RustDeskIndex {
   private onRemoteSessionAppState = (foreground: boolean): void => {
     this.appForeground = foreground;
     if (foreground && this.pageVisible) {
+      this.peerOnlineQueryCount = 0;
       this.schedulePeerOnlineProbe(0);
     } else {
       this.stopPeerOnlinePolling();
@@ -641,6 +649,7 @@ struct RustDeskIndex {
     if (this.accountOidcActive) {
       this.scheduleAccountPoll(200);
     }
+    this.peerOnlineQueryCount = 0;
     this.schedulePeerOnlineProbe(0);
     this.scheduleFirstLaunchTutorial();
     this.syncRemoteSessionSharing();
@@ -1809,144 +1818,25 @@ struct RustDeskIndex {
       this.mainBridge.resetDirectoryMessage();
     }
     snapshot.favorites = this.mainBridge.listFavorites();
-    snapshot.recent = this.mainBridge.listRecentPeers();
-    snapshot.addressBook = this.mainBridge.listAddressBookPeers();
-    snapshot.lan = this.lanScanActive ? [] : this.mainBridge.listLanPeers();
-    this.preserveKnownPeerStatuses(snapshot.recent);
-    this.preserveKnownPeerStatuses(snapshot.addressBook);
-    this.preserveKnownPeerStatuses(snapshot.lan);
+    snapshot.recent = this.mainBridge.listRecentPeers(snapshot.favorites);
+    snapshot.lan = this.mainBridge.listLanPeers(snapshot.favorites);
+    snapshot.addressBook = this.mainBridge.listAddressBookPeers(snapshot.favorites);
+    const previousLists: PeerRecord[][] = [
+      this.directorySnapshot.recent,
+      this.directorySnapshot.lan,
+      this.directorySnapshot.addressBook,
+    ];
+    preservePeerOnlineStates(snapshot.recent, previousLists);
+    preservePeerOnlineStates(snapshot.lan, previousLists);
+    preservePeerOnlineStates(snapshot.addressBook, previousLists);
+    snapshot.favorite = buildFavoritePeers(snapshot.recent, snapshot.lan, snapshot.favorites);
     snapshot.lanScanning = this.lanScanActive;
     snapshot.message = this.lanScanActive
       ? '正在扫描局域网设备'
       : this.mainBridge.getDirectoryMessage();
     this.directorySnapshot = snapshot;
+    this.peerOnlineQueryCount = 0;
     this.schedulePeerOnlineProbe(120);
-  }
-
-  private preserveKnownPeerStatuses(peers: PeerRecord[]): void {
-    const previousLists: PeerRecord[][] = [
-      this.directorySnapshot.recent,
-      this.directorySnapshot.addressBook,
-      this.directorySnapshot.lan,
-    ];
-    for (let index = 0; index < peers.length; index += 1) {
-      const targetId = this.peerTargetId(peers[index]);
-      if (targetId.length === 0) {
-        peers[index].online = false;
-        peers[index].onlineKnown = false;
-        continue;
-      }
-      if (peers[index].onlineKnown) {
-        continue;
-      }
-      for (let listIndex = 0; listIndex < previousLists.length; listIndex += 1) {
-        const previous = previousLists[listIndex];
-        for (let peerIndex = 0; peerIndex < previous.length; peerIndex += 1) {
-          if (this.peerTargetId(previous[peerIndex]) === targetId && previous[peerIndex].onlineKnown) {
-            peers[index].onlineKnown = true;
-            peers[index].online = previous[peerIndex].online;
-            listIndex = previousLists.length;
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  private collectPeerOnlineIds(): string[] {
-    const ids: string[] = [];
-    const lists: PeerRecord[][] = [
-      this.directorySnapshot.recent,
-      this.directorySnapshot.addressBook,
-      this.directorySnapshot.lan,
-    ];
-    for (let listIndex = 0; listIndex < lists.length; listIndex += 1) {
-      for (let peerIndex = 0; peerIndex < lists[listIndex].length; peerIndex += 1) {
-        const id = this.peerOnlineQueryId(lists[listIndex][peerIndex]);
-        if (id.length > 0 && ids.indexOf(id) < 0) {
-          ids.push(id);
-        }
-      }
-    }
-    return ids;
-  }
-
-  private isDirectIpAddress(value: string): boolean {
-    const normalized = value.trim();
-    let host = normalized;
-    if (normalized.startsWith('[')) {
-      const closingBracket = normalized.indexOf(']');
-      if (closingBracket <= 1) {
-        return false;
-      }
-      host = normalized.substring(1, closingBracket);
-    } else {
-      const firstColon = normalized.indexOf(':');
-      const lastColon = normalized.lastIndexOf(':');
-      if (firstColon > 0 && firstColon === lastColon) {
-        const portText = normalized.substring(lastColon + 1);
-        const port = Number(portText);
-        if (portText.length > 0 && Number.isInteger(port) && port > 0 && port <= 65535) {
-          host = normalized.substring(0, lastColon);
-        }
-      }
-    }
-    const parts = host.split('.');
-    if (parts.length === 4) {
-      for (let index = 0; index < parts.length; index += 1) {
-        if (parts[index].length === 0) {
-          return false;
-        }
-        const octet = Number(parts[index]);
-        if (!Number.isInteger(octet) || octet < 0 || octet > 255) {
-          return false;
-        }
-      }
-      return true;
-    }
-    return host.indexOf(':') >= 0 && host.indexOf('@') < 0;
-  }
-
-  private collectPeerDirectProbeTargets(): PeerDirectProbeTarget[] {
-    const targets: PeerDirectProbeTarget[] = [];
-    const keys: string[] = [];
-    const lists: PeerRecord[][] = [
-      this.directorySnapshot.lan,
-      this.directorySnapshot.recent,
-      this.directorySnapshot.addressBook,
-    ];
-    for (let listIndex = 0; listIndex < lists.length; listIndex += 1) {
-      for (let peerIndex = 0; peerIndex < lists[listIndex].length; peerIndex += 1) {
-        const peer = lists[listIndex][peerIndex];
-        if (this.peerTargetId(peer).length > 0) {
-          continue;
-        }
-        const target = peer.lanIp.trim();
-        const routeKey = this.peerDirectProbeKey(peer);
-        if (routeKey.length === 0 || keys.indexOf(routeKey) >= 0) {
-          continue;
-        }
-        const probeTarget = new PeerDirectProbeTarget();
-        probeTarget.key = routeKey;
-        probeTarget.target = target;
-        targets.push(probeTarget);
-        keys.push(routeKey);
-      }
-    }
-    return targets;
-  }
-
-  private peerTargetId(source: PeerRecord): string {
-    return source.targetId.trim();
-  }
-
-  private peerOnlineQueryId(source: PeerRecord): string {
-    return this.peerTargetId(source);
-  }
-
-  private peerDirectProbeKey(source: PeerRecord): string {
-    const target = source.lanIp.trim();
-    return this.isDirectIpAddress(target) ? `route:${target}` : '';
   }
 
   private schedulePeerOnlineProbe(delayMs: number): void {
@@ -1980,189 +1870,134 @@ struct RustDeskIndex {
       this.schedulePeerOnlineProbe(1000);
       return;
     }
-    const ids = this.collectPeerOnlineIds();
-    const directTargets = this.collectPeerDirectProbeTargets();
-    if (ids.length === 0 && directTargets.length === 0) {
-      this.schedulePeerOnlineProbe(20000);
+    const publicServer = this.serverConfig.usingPublicServer;
+    if (publicServer && this.peerOnlineQueryCount >= 3) {
+      return;
+    }
+    const ids = collectPeerOnlineIds([
+      this.directorySnapshot.recent,
+      this.directorySnapshot.favorite,
+      this.directorySnapshot.lan,
+      this.directorySnapshot.addressBook,
+    ]);
+    if (ids.length === 0) {
       return;
     }
     this.peerOnlinePollInFlight = true;
     try {
-      if (ids.length > 0) {
-        const result = await this.mainBridge.queryPeerOnlineStates(ids);
-        if (generation === this.peerOnlinePollGeneration && result.ok) {
-          this.applyTargetPeerOnlineStates(result.onlines, result.offlines);
-        }
-      }
-      if (directTargets.length > 0) {
-        const result = await this.mainBridge.probePeerDirectStates(directTargets);
-        if (generation === this.peerOnlinePollGeneration && result.ok) {
-          this.applyRoutePeerOnlineStates(result.onlines, result.offlines);
-        }
+      const result = await this.mainBridge.queryPeerOnlineStates(ids);
+      if (generation === this.peerOnlinePollGeneration && result.ok) {
+        const snapshot = this.directoryScanSnapshot(this.lanScanActive, this.directorySnapshot.message);
+        applyPeerOnlineStates([
+          snapshot.recent,
+          snapshot.lan,
+          snapshot.addressBook,
+        ], result.onlines, result.offlines);
+        snapshot.favorite = buildFavoritePeers(snapshot.recent, snapshot.lan, snapshot.favorites);
+        this.directorySnapshot = snapshot;
       }
     } finally {
       if (generation === this.peerOnlinePollGeneration) {
+        this.peerOnlineQueryCount += 1;
         this.peerOnlinePollInFlight = false;
-        this.schedulePeerOnlineProbe(20000);
+        if (!publicServer || this.peerOnlineQueryCount < 3) {
+          this.schedulePeerOnlineProbe(publicServer ? 20000 : 6000);
+        }
       }
     }
-  }
-
-  private updateTargetPeerOnlineState(peer: PeerRecord, onlines: string[], offlines: string[]): void {
-    const queryId = this.peerOnlineQueryId(peer);
-    if (queryId.length === 0) {
-      return;
-    }
-    if (onlines.indexOf(queryId) >= 0) {
-      peer.online = true;
-      peer.onlineKnown = true;
-    } else if (offlines.indexOf(queryId) >= 0) {
-      peer.online = false;
-      peer.onlineKnown = true;
-    }
-  }
-
-  private updateRoutePeerOnlineState(peer: PeerRecord, onlines: string[], offlines: string[]): void {
-    // Direct reachability is only a fallback for IP-only history. Canonical
-    // peers are keyed strictly by Target ID and never consume route results.
-    if (this.peerTargetId(peer).length > 0) {
-      return;
-    }
-    const routeKey = this.peerDirectProbeKey(peer);
-    if (routeKey.length > 0 && onlines.indexOf(routeKey) >= 0) {
-      peer.online = true;
-      peer.onlineKnown = true;
-    } else if (routeKey.length > 0 && offlines.indexOf(routeKey) >= 0) {
-      peer.online = false;
-      peer.onlineKnown = true;
-    } else {
-      peer.online = false;
-      peer.onlineKnown = false;
-    }
-  }
-
-  private updateTargetPeerListOnlineStates(peers: PeerRecord[], onlines: string[], offlines: string[]): void {
-    for (let index = 0; index < peers.length; index += 1) {
-      this.updateTargetPeerOnlineState(peers[index], onlines, offlines);
-    }
-  }
-
-  private applyTargetPeerOnlineStates(onlines: string[], offlines: string[]): void {
-    this.updateTargetPeerListOnlineStates(this.directorySnapshot.recent, onlines, offlines);
-    this.updateTargetPeerListOnlineStates(this.directorySnapshot.addressBook, onlines, offlines);
-    this.updateTargetPeerListOnlineStates(this.directorySnapshot.lan, onlines, offlines);
-  }
-
-  private updateRoutePeerListOnlineStates(peers: PeerRecord[], onlines: string[], offlines: string[]): void {
-    for (let index = 0; index < peers.length; index += 1) {
-      this.updateRoutePeerOnlineState(peers[index], onlines, offlines);
-    }
-  }
-
-  private applyRoutePeerOnlineStates(onlines: string[], offlines: string[]): void {
-    this.updateRoutePeerListOnlineStates(this.directorySnapshot.recent, onlines, offlines);
-    this.updateRoutePeerListOnlineStates(this.directorySnapshot.addressBook, onlines, offlines);
-    this.updateRoutePeerListOnlineStates(this.directorySnapshot.lan, onlines, offlines);
   }
 
   private directoryScanSnapshot(scanning: boolean, message: string): DirectorySnapshot {
     const snapshot = new DirectorySnapshot();
     snapshot.revision = ++this.directoryRevision;
     snapshot.recent = this.directorySnapshot.recent.slice();
-    snapshot.addressBook = this.directorySnapshot.addressBook.slice();
+    snapshot.favorite = this.directorySnapshot.favorite.slice();
     snapshot.lan = this.directorySnapshot.lan.slice();
+    snapshot.addressBook = this.directorySnapshot.addressBook.slice();
     snapshot.favorites = this.directorySnapshot.favorites.slice();
     snapshot.lanScanning = scanning;
     snapshot.message = message;
     return snapshot;
   }
 
+  private clearLanScanPollTimer(): void {
+    if (this.lanScanPollTimer >= 0) {
+      clearTimeout(this.lanScanPollTimer);
+      this.lanScanPollTimer = -1;
+    }
+  }
+
+  private pollLanScanSnapshot(scanGeneration: number): void {
+    if (!this.lanScanActive || scanGeneration !== this.lanScanGeneration) {
+      return;
+    }
+    const lanPeers = this.mainBridge.listLanPeers(this.directorySnapshot.favorites);
+    preservePeerOnlineStates(lanPeers, [
+      this.directorySnapshot.recent,
+      this.directorySnapshot.lan,
+      this.directorySnapshot.addressBook,
+    ]);
+    if (!peerProjectionListsEqual(lanPeers, this.directorySnapshot.lan)) {
+      const snapshot = this.directoryScanSnapshot(true, '正在扫描局域网设备');
+      snapshot.lan = lanPeers;
+      snapshot.favorite = buildFavoritePeers(snapshot.recent, snapshot.lan, snapshot.favorites);
+      this.directorySnapshot = snapshot;
+    }
+    this.lanScanPollTimer = setTimeout(() => {
+      this.lanScanPollTimer = -1;
+      this.pollLanScanSnapshot(scanGeneration);
+    }, 350) as number;
+  }
+
   private async scanLanPeers(): Promise<void> {
     this.cancelLanScan();
     const scanGeneration = ++this.lanScanGeneration;
     this.lanScanActive = true;
-    const scanningSnapshot = this.directoryScanSnapshot(true, '正在扫描局域网设备');
-    scanningSnapshot.lan = [];
-    this.directorySnapshot = scanningSnapshot;
-    const started = await this.mainBridge.scanLan();
+    this.directorySnapshot = this.directoryScanSnapshot(true, '正在扫描局域网设备');
+    this.pollLanScanSnapshot(scanGeneration);
+    const completed = await this.mainBridge.scanLan();
     if (scanGeneration !== this.lanScanGeneration) {
       return;
     }
+    const nativeMessage = this.mainBridge.getDirectoryMessage().trim();
+    this.clearLanScanPollTimer();
     this.lanScanActive = false;
-    if (!started) {
-      const nativeMessage = this.mainBridge.getDirectoryMessage().trim();
+    this.refreshDirectorySnapshot();
+    if (!completed) {
       this.directorySnapshot = this.directoryScanSnapshot(
         false,
-        nativeMessage.length > 0 ? nativeMessage : '无法启动局域网扫描',
+        nativeMessage.length > 0 ? nativeMessage : '局域网扫描失败',
       );
       return;
     }
-    // The native Promise resolves only after Core's Flutter discovery window
-    // and route selection have completed, so one coherent refresh is enough.
-    this.refreshDirectorySnapshot();
     this.directorySnapshot = this.directoryScanSnapshot(false, '局域网扫描完成');
   }
 
   private cancelLanScan(): void {
     this.lanScanGeneration += 1;
     this.lanScanActive = false;
+    this.clearLanScanPollTimer();
   }
 
   private setPeerFavorite(peerId: string, favorite: boolean): void {
-    const previous = this.directorySnapshot;
-    this.directorySnapshot = this.directorySnapshotWithFavorite(peerId, favorite);
     if (!this.mainBridge.setFavorite(peerId, favorite)) {
-      this.directorySnapshot = previous;
       this.errorText = '无法更新收藏状态';
       return;
     }
     this.refreshDirectorySnapshot();
   }
 
-  private copyPeerWithFavorite(source: PeerRecord, peerId: string, favorite: boolean): PeerRecord {
-    const peer = new PeerRecord();
-    peer.id = source.id;
-    peer.targetId = source.targetId;
-    peer.username = source.username;
-    peer.hostname = source.hostname;
-    peer.platform = source.platform;
-    peer.alias = source.alias;
-    peer.lanIp = source.lanIp;
-    peer.source = source.source;
-    peer.addressBookName = source.addressBookName;
-    peer.tags = source.tags.slice();
-    peer.online = source.online;
-    peer.onlineKnown = source.onlineKnown;
-    peer.favorite = source.id === peerId ? favorite : source.favorite;
-    return peer;
-  }
-
-  private copyPeerListWithFavorite(source: PeerRecord[], peerId: string, favorite: boolean): PeerRecord[] {
-    const peers: PeerRecord[] = [];
-    for (let index = 0; index < source.length; index += 1) {
-      peers.push(this.copyPeerWithFavorite(source[index], peerId, favorite));
-    }
-    return peers;
-  }
-
-  private directorySnapshotWithFavorite(peerId: string, favorite: boolean): DirectorySnapshot {
-    const snapshot = new DirectorySnapshot();
-    snapshot.revision = ++this.directoryRevision;
-    snapshot.recent = this.copyPeerListWithFavorite(this.directorySnapshot.recent, peerId, favorite);
-    snapshot.addressBook = this.copyPeerListWithFavorite(this.directorySnapshot.addressBook, peerId, favorite);
-    snapshot.lan = this.copyPeerListWithFavorite(this.directorySnapshot.lan, peerId, favorite);
-    snapshot.favorites = this.directorySnapshot.favorites.filter((item: string) => item !== peerId);
-    if (favorite) {
-      snapshot.favorites.push(peerId);
-    }
-    snapshot.lanScanning = this.directorySnapshot.lanScanning;
-    snapshot.message = this.directorySnapshot.message;
-    return snapshot;
-  }
-
   private removeRecentPeer(peerId: string): void {
     if (!this.mainBridge.removeRecentPeer(peerId)) {
       this.errorText = '无法移除最近设备';
+      return;
+    }
+    this.refreshDirectorySnapshot();
+  }
+
+  private removeDiscoveredPeer(peerId: string): void {
+    if (!this.mainBridge.removeDiscoveredPeer(peerId)) {
+      this.errorText = '无法移除局域网设备';
       return;
     }
     this.refreshDirectorySnapshot();
@@ -3212,6 +3047,7 @@ struct RustDeskIndex {
         this.currentDisplayIndex = this.viewportModel.getCurrentDisplayIndex();
       }
     }
+    await this.restoreRemoteCursorState(nextTab.sessionId);
     const pendingEvents = this.remoteSessionTabsController.takePendingEvents(sessionId);
     for (const event of pendingEvents) {
       this.handleSessionEvent(event);
@@ -3455,14 +3291,15 @@ struct RustDeskIndex {
   }
 
   private resetPreviewState(): void {
-    this.viewportModel.reset();
+    // The preview's measured viewport belongs to the ArkUI container, not to
+    // any remote session. Preserve it across A -> B tab switches because an
+    // unchanged layout does not emit another onAreaChange callback.
+    this.viewportModel.resetSessionGeometry();
     this.inputController?.reset();
     this.keyboardEnteredSessionId = '';
     this.frameStatus = 'Surface not ready';
     this.frameWidth = 0;
     this.frameHeight = 0;
-    this.previewViewWidth = 0;
-    this.previewViewHeight = 0;
     this.previewUserScale = 1;
     this.previewUserOffsetX = 0;
     this.previewUserOffsetY = 0;
@@ -3583,13 +3420,6 @@ struct RustDeskIndex {
     }
     this.refreshChatState();
     this.openOverlayPanel('chat');
-  }
-
-  private openInputModePanel(): void {
-    if (!this.isRemoteControlSessionActive()) {
-      return;
-    }
-    this.openOverlayPanel('input');
   }
 
   private unavailableRemoteAudioState(): RemoteAudioState {
@@ -4858,14 +4688,19 @@ struct RustDeskIndex {
     return deviceInfo.deviceType === '2in1';
   }
 
+  private isImmersiveFullscreenStatus(status: window.WindowStatusType): boolean {
+    // HarmonyOS distinguishes ordinary MAXIMIZE (title/Dock retained) from
+    // FULL_SCREEN entered through ENTER_IMMERSIVE_DISABLE_TITLE_AND_DOCK_HOVER.
+    return status === window.WindowStatusType.FULL_SCREEN;
+  }
+
   private applyFreeMultiWindowChrome(status: window.WindowStatusType): void {
     const currentWindow = this.freeWindow;
     if (!currentWindow) {
       this.freeMultiWindow = false;
       return;
     }
-    this.sessionWindowFullscreen = status === window.WindowStatusType.FULL_SCREEN
-      || status === window.WindowStatusType.MAXIMIZE;
+    this.sessionWindowFullscreen = this.isImmersiveFullscreenStatus(status);
     const isFreeMultiWindow = status === window.WindowStatusType.FLOATING;
     if (isFreeMultiWindow) {
       this.sessionWindowResizeCapable = true;
@@ -5075,9 +4910,7 @@ struct RustDeskIndex {
       return;
     }
     this.sessionWindowControlBusy = true;
-    const shouldRecover = this.sessionWindowFullscreen
-      || status === window.WindowStatusType.FULL_SCREEN
-      || status === window.WindowStatusType.MAXIMIZE;
+    const shouldRecover = this.isImmersiveFullscreenStatus(status);
     if (shouldRecover) {
       currentWindow.recover()
         .then((): void => {
@@ -5122,7 +4955,7 @@ struct RustDeskIndex {
     }
     try {
       const status = currentWindow.getWindowStatus();
-      if (status === window.WindowStatusType.FULL_SCREEN || status === window.WindowStatusType.MAXIMIZE) {
+      if (this.isImmersiveFullscreenStatus(status)) {
         await currentWindow.recover();
       }
     } catch (error) {
@@ -5502,23 +5335,32 @@ struct RustDeskIndex {
     const hostContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
     return window.getLastWindow(hostContext)
       .then(async (currentWindow: window.Window) => {
-        if (landscapeMultiWindowChanged) {
+        const isPcDevice = this.isPcDevice();
+        if (landscapeMultiWindowChanged && !isPcDevice) {
           await this.applyLandscapeMultiWindow(currentWindow, landscapeMultiWindowEnabled, force);
+        } else if (isPcDevice) {
+          this.landscapeMultiWindowEnabled = false;
         }
         if (orientationChanged) {
-          await currentWindow.setPreferredOrientation(this.toWindowOrientation(orientationMode));
+          if (!isPcDevice) {
+            await currentWindow.setPreferredOrientation(this.toWindowOrientation(orientationMode));
+          }
           this.sessionOrientationMode = orientationMode;
         }
         if (fullscreenChanged) {
           if (active) {
             await this.applyPcSessionImmersive(currentWindow, true);
-            await currentWindow.setWindowLayoutFullScreen(true);
-            await currentWindow.setSpecificSystemBarEnabled('status', false, true);
-            await currentWindow.setSpecificSystemBarEnabled('navigationIndicator', false, true);
+            if (!isPcDevice) {
+              await currentWindow.setWindowLayoutFullScreen(true);
+              await currentWindow.setSpecificSystemBarEnabled('status', false, true);
+              await currentWindow.setSpecificSystemBarEnabled('navigationIndicator', false, true);
+            }
           } else {
-            await currentWindow.setSpecificSystemBarEnabled('status', true, true);
-            await currentWindow.setSpecificSystemBarEnabled('navigationIndicator', true, true);
-            await currentWindow.setWindowLayoutFullScreen(true);
+            if (!isPcDevice) {
+              await currentWindow.setSpecificSystemBarEnabled('status', true, true);
+              await currentWindow.setSpecificSystemBarEnabled('navigationIndicator', true, true);
+              await currentWindow.setWindowLayoutFullScreen(true);
+            }
             await this.restoreManualSessionWindow(currentWindow);
             await this.applyPcSessionImmersive(currentWindow, false);
           }
@@ -6279,7 +6121,7 @@ struct RustDeskIndex {
 
   private updateRemoteCursorData(event: NativeEvent): void {
     this.remoteCursorOptionApplied = true;
-    this.cursorModel.updateCursorData(
+    void this.cursorModel.updateCursorData(
       event,
       (message: string) => this.logRelativeDebug('cursor_data', message),
       () => {
@@ -6287,6 +6129,23 @@ struct RustDeskIndex {
         this.reprojectVirtualCursorOverlay();
       },
     );
+  }
+
+  private async restoreRemoteCursorState(sessionId: string): Promise<void> {
+    const cachedData = this.remoteSessionTabsController.cursorDataSnapshot(sessionId);
+    for (const event of cachedData) {
+      await this.cursorModel.updateCursorData(
+        event,
+        (message: string) => this.logRelativeDebug('cursor_restore', message),
+        () => {},
+      );
+    }
+    const lastCursorId = this.remoteSessionTabsController.lastCursorId(sessionId);
+    if (lastCursorId.length > 0) {
+      this.cursorModel.updateCursorId(lastCursorId);
+    }
+    this.applyCursorSnapshotToVisualState();
+    this.reprojectVirtualCursorOverlay();
   }
 
   private handlePreviewTouchEvent(event: TouchEvent): void {
@@ -6924,8 +6783,11 @@ struct RustDeskIndex {
         }
         continue;
       }
+      if (event.name === 'cursor_data' || event.name === 'cursor_id') {
+        this.remoteSessionTabsController.cacheCursorEvent(tab.sessionId, event);
+        continue;
+      }
       if (event.name === 'clipboard' || event.name === 'clipboard_files'
-        || event.name === 'cursor_data' || event.name === 'cursor_id'
         || event.name === 'cursor_position' || event.name === 'update_quality_status') {
         continue;
       }
@@ -7100,10 +6962,12 @@ struct RustDeskIndex {
       return;
     }
     if (event.name === 'cursor_data') {
+      this.remoteSessionTabsController.cacheCursorEvent(this.activeSessionId, event);
       this.updateRemoteCursorData(event);
       return;
     }
     if (event.name === 'cursor_id') {
+      this.remoteSessionTabsController.cacheCursorEvent(this.activeSessionId, event);
       this.updateRemoteCursorId(event);
       return;
     }
@@ -7750,9 +7614,10 @@ struct RustDeskIndex {
             canAddSession: this.remoteSessionTabsController.canAdd(),
             touchMode: this.touchMode,
             relativeMouseMode: this.relativeMouseMode,
+            relativeModeSupported: this.relativeMouseModeSupported(),
+            rightClickGesture: this.rightClickGesture,
             metrics: this.sessionToolbarMetrics(),
             activeOverlayPanel: this.activeOverlayPanel,
-            inputTransitionId: SESSION_OVERLAY_TRANSITION_INPUT,
             chatTransitionId: SESSION_OVERLAY_TRANSITION_CHAT,
             displayTransitionId: SESSION_OVERLAY_TRANSITION_DISPLAY,
             qualityTransitionId: SESSION_OVERLAY_TRANSITION_QUALITY,
@@ -7776,7 +7641,8 @@ struct RustDeskIndex {
             windowFullscreen: this.sessionWindowFullscreen,
             windowControlBusy: this.sessionWindowControlBusy,
             refreshDisplayEnabled: this.sessionPhase === 'connected',
-            onOpenInput: () => this.openInputModePanel(),
+            onSelectInputMode: (mode: RustDeskInputMode) => this.setPointerMode(mode),
+            onSelectRightClick: (gesture: RustDeskRightClickGesture) => this.setRightClickGesture(gesture),
             onResetTransform: () => this.resetPreviewViewTransform(),
             onOpenChat: () => this.openChatDrawer(),
             onAudioChange: (enabled: boolean) => this.setRemoteAudioEnabled(enabled),
@@ -7811,9 +7677,7 @@ struct RustDeskIndex {
             onCloseSession: (sessionId: string) => void this.closeRemoteSessionTab(sessionId),
             onAddSession: () => this.openNewRemoteSession(),
             content: () => {
-              if (this.isOverlayPanelOpen('input')) {
-                this.inputModeOverlayPanel();
-              } else if (this.isOverlayPanelOpen('chat')) {
+              if (this.isOverlayPanelOpen('chat')) {
                 this.chatOverlayPanel();
               } else if (this.isOverlayPanelOpen('display')) {
                 this.displayOverlayPanel();
@@ -7824,7 +7688,7 @@ struct RustDeskIndex {
           });
         }
         .width('95%')
-        .padding($r('app.float.space_12'))
+        .padding(10)
         .margin({
           top: Math.max(16, this.windowTopAvoidInset + 8),
         })
@@ -8101,24 +7965,6 @@ struct RustDeskIndex {
     .focusable(true)
     .focusOnTouch(true)
     .onKeyEvent((event: KeyEvent) => this.handlePreviewRootKeyEvent(event));
-  }
-
-  @Builder
-  private inputModeOverlayPanel() {
-    SessionPanelFrame({
-      title: '输入模式',
-      transitionId: SESSION_OVERLAY_TRANSITION_INPUT,
-      onBack: () => this.closeOverlayPanel(),
-    }) {
-      InputModeSheet({
-        selectedMode: this.currentPointerMode(),
-        rightClickGesture: this.rightClickGesture,
-        relativeModeSupported: this.relativeMouseModeSupported(),
-        wideLayout: this.previewViewWidth >= 700,
-        onSelectMode: (mode: RustDeskInputMode) => this.setPointerMode(mode),
-        onSelectRightClick: (gesture: RustDeskRightClickGesture) => this.setRightClickGesture(gesture),
-      });
-    }
   }
 
   @Builder
@@ -8454,7 +8300,7 @@ struct RustDeskIndex {
       return $r('app.string.navigation_home_subtitle');
     }
     if (this.currentTabIndex === 1) {
-      return '最近、通讯簿与局域网';
+      return '最近、收藏、局域网与通讯簿';
     }
     if (this.currentTabIndex === 2) {
       return '连接、安全与体验';
@@ -8467,7 +8313,12 @@ struct RustDeskIndex {
       return [this.connectScroller];
     }
     if (this.currentTabIndex === 1) {
-      return [this.deviceRecentScroller, this.deviceAddressBookScroller, this.deviceLanScroller];
+      return [
+        this.deviceRecentScroller,
+        this.deviceFavoriteScroller,
+        this.deviceLanScroller,
+        this.deviceAddressBookScroller,
+      ];
     }
     if (this.currentTabIndex === 2) {
       return [this.settingsScroller];
@@ -8539,8 +8390,9 @@ struct RustDeskIndex {
       wideLayout: this.isWideMainLayout(),
       activeTransferPeerId: this.transferManager.isReady() ? this.transferSessionTarget : '',
       recentScroller: this.deviceRecentScroller,
-      addressBookScroller: this.deviceAddressBookScroller,
+      favoriteScroller: this.deviceFavoriteScroller,
       lanScroller: this.deviceLanScroller,
+      addressBookScroller: this.deviceAddressBookScroller,
       titleSpacerHeight: this.mainTitleSpacerHeight(),
       bottomAvoidInset: this.windowBottomAvoidInset,
       onRefresh: () => this.refreshDirectorySnapshot(),
@@ -8549,6 +8401,7 @@ struct RustDeskIndex {
       },
       onSetFavorite: (peerId: string, favorite: boolean) => this.setPeerFavorite(peerId, favorite),
       onRemoveRecent: (peerId: string) => this.removeRecentPeer(peerId),
+      onRemoveLan: (peerId: string) => this.removeDiscoveredPeer(peerId),
       onConnectRemote: (peerId: string) => this.launchPeer(peerId, 'remote_control'),
       onViewOnly: (peerId: string) => this.launchPeer(peerId, 'view_only'),
       onViewCamera: (peerId: string) => this.launchPeer(peerId, 'view_camera'),

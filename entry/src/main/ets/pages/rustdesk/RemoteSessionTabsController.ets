@@ -43,6 +43,8 @@ export class RemoteSessionTab {
   shareTargetKind: string = 'target';
   forceRelay: boolean = false;
   peerInfo?: NativeEvent = undefined;
+  cursorDataEvents: Array<NativeEvent> = [];
+  lastCursorId: string = '';
   pendingEvents: Array<NativeEvent> = [];
   omittedChatEvents: number = 0;
   omittedProtectedEvents: number = 0;
@@ -165,6 +167,36 @@ export class RemoteSessionTabsController {
     if (event.hostname !== undefined && event.hostname.trim().length > 0) {
       tab.label = event.hostname.trim();
     }
+  }
+
+  cacheCursorEvent(sessionId: string, event: NativeEvent): void {
+    const tab = this.get(sessionId);
+    if (tab === undefined) {
+      return;
+    }
+    const id = String(event.id ?? '');
+    if (id.length === 0) {
+      return;
+    }
+    tab.lastCursorId = id;
+    if (event.name !== 'cursor_data') {
+      return;
+    }
+    const existingIndex = tab.cursorDataEvents.findIndex((item: NativeEvent) =>
+      String(item.id ?? '') === id);
+    if (existingIndex >= 0) {
+      tab.cursorDataEvents[existingIndex] = event;
+      return;
+    }
+    tab.cursorDataEvents.push(event);
+  }
+
+  cursorDataSnapshot(sessionId: string): Array<NativeEvent> {
+    return this.get(sessionId)?.cursorDataEvents.slice() ?? [];
+  }
+
+  lastCursorId(sessionId: string): string {
+    return this.get(sessionId)?.lastCursorId ?? '';
   }
 
   markPhase(sessionId: string, phase: string, message: string = ''): void {
