@@ -1,6 +1,6 @@
 {
   "package_name": "rustdesk-ohrs",
-  "package_version": "1.4.9-r000137-000000936-01-gb546d00c",
-  "core_sha": "b546d00cddc59a59ac4a5f59007b696f2268e3ef",
-  "har_sha": "3f8e4fb47bd7641b315985d944b12fe13fa8b0db"
+  "package_version": "1.4.9-r000141-000000942-01-g4014999b",
+  "core_sha": "4014999b954a5e4c0e8d4b7633c59551d850d537",
+  "har_sha": "64d39a853e1f0e017d81f915834a6d5c6e5d17fd"
 }
