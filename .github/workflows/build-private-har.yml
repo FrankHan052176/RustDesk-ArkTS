@@ -1,29 +1,30 @@
-name: Build ArkTS HarmonyOS App
+name: Build Resk HarmonyOS App
 
 on:
   push:
     branches: [main]
   repository_dispatch:
-    types: [rustdesk-har-published]
+    types: [rd-engine-har-published]
   workflow_dispatch:
     inputs:
       package_name:
-        description: Core HAR package published by RustDeskHar
+        description: HAR package produced by rd-engine/native/ohos_napi
         required: true
         default: rustdesk-ohrs
         type: string
       package_version:
-        description: Exact immutable Core HAR version to release
+        description: Exact immutable rd-engine HAR version to build
         required: true
         type: string
-      core_sha:
-        description: Full Core commit SHA used to build the HAR
+      engine_sha:
+        description: Full rd-engine commit SHA used to build the HAR
         required: true
         type: string
-      har_sha:
-        description: Full HAR adapter commit SHA used to publish the package
+      publish_test:
+        description: Explicitly upload and submit an AGC invitation test version
         required: true
-        type: string
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -35,15 +36,13 @@ concurrency:
 
 env:
   OHOS_COMMAND_LINE_TOOLS_VERSION: 6.1.1.280
-  CORE_HAR_PACKAGE: ${{ github.event.client_payload.package_name || inputs.package_name || 'rustdesk-ohrs' }}
-  CORE_HAR_VERSION: ${{ github.event.client_payload.package_version || inputs.package_version || '' }}
-  CORE_SHA: ${{ github.event.client_payload.core_sha || inputs.core_sha || '' }}
-  HAR_SHA: ${{ github.event.client_payload.har_sha || inputs.har_sha || '' }}
-  CORE_HAR_REGISTRY: https://devrepo.devcloud.cn-north-4.huaweicloud.com/artgalaxy/api/ohpm/cn-north-4_c07b1b38744f424b8d87a86532d38003_ohpm_1/
+  RD_ENGINE_HAR_PACKAGE: rustdesk-ohrs
+  RD_ENGINE_HAR_REGISTRY: https://devrepo.devcloud.cn-north-4.huaweicloud.com/artgalaxy/api/ohpm/cn-north-4_c07b1b38744f424b8d87a86532d38003_ohpm_1/
   LUMINOUS_NEO_VERSION: 1.0.2
   SIGNING_REPOSITORY: ${{ vars.SIGNING_REPOSITORY || 'FrankHan052176/AppGallerySigning' }}
   SIGNING_REPOSITORY_REF: ${{ vars.SIGNING_REPOSITORY_REF || '70779bd9e42c8565772dd8c43c80b89a197c3369' }}
-  AGC_ENABLED: ${{ (github.event_name == 'repository_dispatch' || github.event_name == 'workflow_dispatch') && secrets.AGC_CLIENT_ID != '' && secrets.AGC_CLIENT_SECRET != '' && secrets.AGC_APP_ID != '' }}
+  # No client_payload field can enable AGC. Push and repository_dispatch only build artifacts.
+  AGC_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_test == true && secrets.AGC_CLIENT_ID != '' && secrets.AGC_CLIENT_SECRET != '' && secrets.AGC_APP_ID != '' }}
   AGC_API_DOMAIN: ${{ vars.AGC_API_DOMAIN || 'connect-api.cloud.huawei.com' }}
   AGC_TEST_DURATION_DAYS: ${{ vars.AGC_TEST_DURATION_DAYS || '14' }}
 
@@ -59,6 +58,58 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Select immutable rd-engine HAR
+        shell: bash
+        env:
+          DISPATCH_PACKAGE_NAME: ${{ github.event.client_payload.package_name }}
+          DISPATCH_PACKAGE_VERSION: ${{ github.event.client_payload.package_version }}
+          DISPATCH_ENGINE_SHA: ${{ github.event.client_payload.engine_sha }}
+          MANUAL_PACKAGE_NAME: ${{ inputs.package_name }}
+          MANUAL_PACKAGE_VERSION: ${{ inputs.package_version }}
+          MANUAL_ENGINE_SHA: ${{ inputs.engine_sha }}
+          PUSH_PACKAGE_VERSION: ${{ vars.RD_ENGINE_HAR_VERSION }}
+          PUSH_ENGINE_SHA: ${{ vars.RD_ENGINE_SHA }}
+        run: |
+          set -euo pipefail
+          case "$GITHUB_EVENT_NAME" in
+            repository_dispatch)
+              package_name="$DISPATCH_PACKAGE_NAME"
+              package_version="$DISPATCH_PACKAGE_VERSION"
+              engine_sha="$DISPATCH_ENGINE_SHA"
+              ;;
+            workflow_dispatch)
+              package_name="$MANUAL_PACKAGE_NAME"
+              package_version="$MANUAL_PACKAGE_VERSION"
+              engine_sha="$MANUAL_ENGINE_SHA"
+              ;;
+            push)
+              package_name="$RD_ENGINE_HAR_PACKAGE"
+              package_version="$PUSH_PACKAGE_VERSION"
+              engine_sha="$PUSH_ENGINE_SHA"
+              ;;
+            *) echo 'Unsupported build event.' >&2; exit 1 ;;
+          esac
+          if [[ "$package_name" != "$RD_ENGINE_HAR_PACKAGE" ]]; then
+            echo 'Only the rd-engine rustdesk-ohrs package is accepted.' >&2
+            exit 1
+          fi
+          if [[ ! "$package_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo 'An exact HAR semantic version is required; for push set RD_ENGINE_HAR_VERSION.' >&2
+            exit 1
+          fi
+          if [[ ! "$engine_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo 'A full rd-engine SHA is required; for push set RD_ENGINE_SHA.' >&2
+            exit 1
+          fi
+          if [[ ! "$SIGNING_REPOSITORY_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo 'SIGNING_REPOSITORY_REF must pin a full commit, not a moving branch or tag.' >&2
+            exit 1
+          fi
+          {
+            echo "RD_ENGINE_HAR_VERSION=$package_version"
+            echo "RD_ENGINE_SHA=${engine_sha,,}"
+          } >> "$GITHUB_ENV"
+
       - name: Setup Java
         uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
@@ -71,97 +122,100 @@ jobs:
           version: ${{ env.OHOS_COMMAND_LINE_TOOLS_VERSION }}
           cache: true
 
-      - name: ohpm
+      - name: Install and verify rd-engine HAR
         id: ohpm
         shell: bash
         env:
           CODEARTS_PRIVATE_OHPM_READ: ${{ secrets.CODEARTS_PRIVATE_OHPM_READ }}
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
-            CORE_HAR_PACKAGE="$(jq -er '.package_name' .github/native-har-lock.json)"
-            CORE_HAR_VERSION="$(jq -er '.package_version' .github/native-har-lock.json)"
-            CORE_SHA="$(jq -er '.core_sha' .github/native-har-lock.json)"
-            HAR_SHA="$(jq -er '.har_sha' .github/native-har-lock.json)"
-          fi
-          if [[ -z "$CORE_HAR_VERSION" ]]; then
-            echo "Build delivery requires an exact Core HAR version." >&2
-            exit 1
-          fi
-          if [[ ! "$CORE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "Build delivery requires a full 40-character Core SHA." >&2
-            exit 1
-          fi
-          if [[ ! "$HAR_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "Build delivery requires a full 40-character HAR SHA." >&2
-            exit 1
-          fi
-
           private_config="$HOME/.ohpm/.ohpmrc"
+          private_log="$RUNNER_TEMP/resk-ohpm-private.log"
+          trap 'rm -f "$private_config" "$private_log"' EXIT
           umask 077
-          mkdir -p "$HOME/.ohpm"
-          printf '%s' "$CODEARTS_PRIVATE_OHPM_READ" > "$private_config"
-          chmod 0600 "$private_config"
+          # Keep only this registry's read credential. Never inherit a global private registry
+          # or strict_ssl=false from a supplied config, and never echo its contents.
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from urllib.parse import urlsplit
 
-          core_har_spec="${CORE_HAR_PACKAGE}@${CORE_HAR_VERSION}"
-          ohpm uninstall "$CORE_HAR_PACKAGE" >/dev/null 2>&1 || true
-          rm -rf "oh_modules/${CORE_HAR_PACKAGE}"
-          echo "Installing Core HAR: $core_har_spec"
-          ohpm install "$core_har_spec" \
-            --registry "$CORE_HAR_REGISTRY" \
-            --retry_times 5 \
-            --retry_interval 3000
-          (
+          registry = urlsplit(os.environ['RD_ENGINE_HAR_REGISTRY'])
+          auth_key = '//' + registry.netloc + registry.path + ':_read_auth'
+          values = []
+          for line in os.environ.get('CODEARTS_PRIVATE_OHPM_READ', '').splitlines():
+              key, separator, value = line.partition('=')
+              if separator and key.strip() == auth_key:
+                  values.append(value.strip())
+          if len(values) != 1 or not values[0]:
+              raise SystemExit('CodeArts config requires one scoped read credential')
+          config = Path.home() / '.ohpm/.ohpmrc'
+          config.parent.mkdir(parents=True, exist_ok=True)
+          descriptor = os.open(config, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+          with os.fdopen(descriptor, 'w') as output:
+              os.fchmod(output.fileno(), 0o600)
+              output.write(auth_key + '=' + values[0] + '\nstrict_ssl=true\n')
+          PY
+          unset CODEARTS_PRIVATE_OHPM_READ
+
+          # Replace only the HAR dependency in this disposable checkout. Ordinary public
+          # dependencies and the committed local-development manifests/locks are not repinned.
+          package_json=$(mktemp)
+          jq --arg version "$RD_ENGINE_HAR_VERSION" \
+            '.dependencies["rustdesk-ohrs"] = $version' oh-package.json5 > "$package_json"
+          mv "$package_json" oh-package.json5
+          rm -rf "oh_modules/$RD_ENGINE_HAR_PACKAGE"
+          echo "Installing rd-engine HAR: $RD_ENGINE_HAR_PACKAGE@$RD_ENGINE_HAR_VERSION"
+          if ! ohpm install "$RD_ENGINE_HAR_PACKAGE@$RD_ENGINE_HAR_VERSION" \
+            --registry "$RD_ENGINE_HAR_REGISTRY" \
+            --retry_times 5 --retry_interval 3000 > "$private_log" 2>&1; then
+            echo 'Private HAR installation failed; authenticated CLI output is not published.' >&2
+            exit 1
+          fi
+          if ! (
             cd entry
-            echo "Installing Luminous Neo: luminous_neo@$LUMINOUS_NEO_VERSION"
             ohpm install "luminous_neo@$LUMINOUS_NEO_VERSION" \
-              --registry "$CORE_HAR_REGISTRY" \
-              --retry_times 5 \
-              --retry_interval 3000
-          )
+              --registry "$RD_ENGINE_HAR_REGISTRY" \
+              --retry_times 5 --retry_interval 3000
+          ) > "$private_log" 2>&1; then
+            echo 'Private luminous_neo installation failed; authenticated CLI output is not published.' >&2
+            exit 1
+          fi
+          rm -f "$private_config" "$private_log"
+          trap - EXIT
 
+          # No private auth or global private registry for normal public dependency resolution.
           ohpm install
           (
             cd entry
             ohpm install
           )
-          rm -f "$private_config"
 
-          core_har_version="$(jq -er '.version' "oh_modules/${CORE_HAR_PACKAGE}/oh-package.json5")"
-          core_har_integrity="$(jq -er --arg package_name "$CORE_HAR_PACKAGE" \
-            '[.packages | to_entries[] | select(.value.name == $package_name) | .value.integrity // empty][0]' \
+          mkdir -p ci-output
+          # OHPM supplies the installed package, not the producer's adjacent archive sidecar.
+          # Validate real installed metadata, schema 2, source, both AArch64 ELFs and hashes.
+          python3 scripts/verify-native-har.py \
+            --installed "oh_modules/$RD_ENGINE_HAR_PACKAGE" \
+            --expected-engine-sha "$RD_ENGINE_SHA" \
+            --expected-package-version "$RD_ENGINE_HAR_VERSION" \
+            --require-clean > ci-output/har-provenance.json
+          har_integrity="$(jq -er --arg name "$RD_ENGINE_HAR_PACKAGE" --arg version "$RD_ENGINE_HAR_VERSION" \
+            '[.packages[] | select(.name == $name and .version == $version) | .integrity // empty] | unique | if length == 1 then .[0] else error("missing or ambiguous HAR integrity") end' \
             oh-package-lock.json5)"
-          core_har_provenance="oh_modules/${CORE_HAR_PACKAGE}/release-provenance.json"
-          luminous_neo_version="$(jq -er '.version' "entry/oh_modules/luminous_neo/oh-package.json5")"
-          if [[ -n "$CORE_HAR_VERSION" && "$core_har_version" != "$CORE_HAR_VERSION" ]]; then
-            echo "Expected ${CORE_HAR_PACKAGE}@${CORE_HAR_VERSION}, got ${core_har_version}" >&2
+          if [[ ! "$har_integrity" =~ ^sha(256|512)-[A-Za-z0-9+/]+=*$ ]]; then
+            echo 'OHPM lock carries no supported HAR integrity.' >&2
             exit 1
           fi
+          luminous_neo_version="$(jq -er '.version' entry/oh_modules/luminous_neo/oh-package.json5)"
           if [[ "$luminous_neo_version" != "$LUMINOUS_NEO_VERSION" ]]; then
             echo "Expected luminous_neo@$LUMINOUS_NEO_VERSION, got $luminous_neo_version" >&2
             exit 1
           fi
-          jq -e \
-            --arg core_sha "${CORE_SHA,,}" \
-            --arg har_sha "${HAR_SHA,,}" \
-            --arg package_name "$CORE_HAR_PACKAGE" \
-            --arg package_version "$CORE_HAR_VERSION" \
-            '.core_sha == $core_sha
-              and .har_sha == $har_sha
-              and .package_name == $package_name
-              and .package_version == $package_version' \
-            "$core_har_provenance" >/dev/null
-          echo "Core HAR version: $core_har_version"
-          echo "Core HAR integrity: $core_har_integrity"
+          echo "HAR package: $RD_ENGINE_HAR_PACKAGE@$RD_ENGINE_HAR_VERSION"
+          echo "HAR lock integrity: $har_integrity"
           echo "Luminous Neo version: $luminous_neo_version"
-          {
-            echo "CORE_HAR_PACKAGE=$CORE_HAR_PACKAGE"
-            echo "CORE_HAR_VERSION=$CORE_HAR_VERSION"
-            echo "CORE_SHA=${CORE_SHA,,}"
-            echo "HAR_SHA=${HAR_SHA,,}"
-          } >> "$GITHUB_ENV"
-          echo "core_har_version=$core_har_version" >> "$GITHUB_OUTPUT"
-          echo "core_har_integrity=$core_har_integrity" >> "$GITHUB_OUTPUT"
+          echo "har_version=$RD_ENGINE_HAR_VERSION" >> "$GITHUB_OUTPUT"
+          echo "har_integrity=$har_integrity" >> "$GITHUB_OUTPUT"
 
       - name: Sign
         id: signing
@@ -209,8 +263,7 @@ jobs:
             exit 1
           fi
 
-          # Use immutable GitHub run identity rather than commit-history counting. Reintroducing
-          # the same base version in AppScope must never reset the visible build suffix.
+          # Preserve the existing version identity derived from the immutable workflow run.
           version_code_epoch=$(date -u -d '2020-01-01T00:00:00Z' +%s)
           current_epoch=$(date -u +%s)
           version_code_day=$(((current_epoch - version_code_epoch) / 86400))
@@ -249,8 +302,7 @@ jobs:
         id: app
         shell: bash
         env:
-          CORE_HAR_INTEGRITY: ${{ steps.ohpm.outputs.core_har_integrity }}
-          CORE_HAR_VERSION: ${{ steps.ohpm.outputs.core_har_version }}
+          HAR_INTEGRITY: ${{ steps.ohpm.outputs.har_integrity }}
           APP_VERSION_NAME: ${{ steps.version.outputs.app_version_name }}
           APP_VERSION_CODE: ${{ steps.version.outputs.app_version_code }}
         run: |
@@ -258,30 +310,26 @@ jobs:
 
           signed_app="$(find build -type f -name '*-signed.app' -print -quit 2>/dev/null || true)"
           if [[ -z "$signed_app" ]]; then
-            echo "Signed App was not produced." >&2
+            echo 'Signed App was not produced.' >&2
             exit 1
           fi
 
-          mkdir -p ci-output
-          output_app="ci-output/RustDesk-${CORE_HAR_VERSION}.app"
+          output_app="ci-output/RustDesk-${RD_ENGINE_HAR_VERSION}.app"
           cp "$signed_app" "$output_app"
           app_sha256="$(sha256sum "$output_app" | awk '{print $1}')"
           hap_entry="$(unzip -Z1 "$output_app" | awk '/\.hap$/ { print; exit }')"
           if [[ -z "$hap_entry" ]]; then
-            echo "Signed App contains no HAP package." >&2
+            echo 'Signed App contains no HAP package.' >&2
             exit 1
           fi
           hap_sha256="$(unzip -p "$output_app" "$hap_entry" | sha256sum | awk '{print $1}')"
           signing_sha="$(git -C .ci-signing-repo rev-parse HEAD)"
           jq -n \
-            --argjson provenance_version 1 \
+            --argjson provenance_version 3 \
             --arg arkts_sha "$GITHUB_SHA" \
-            --arg har_sha "$HAR_SHA" \
-            --arg core_sha "$CORE_SHA" \
             --arg signing_sha "$signing_sha" \
-            --arg package_name "$CORE_HAR_PACKAGE" \
-            --arg package_version "$CORE_HAR_VERSION" \
-            --arg package_integrity "$CORE_HAR_INTEGRITY" \
+            --arg package_integrity "$HAR_INTEGRITY" \
+            --slurpfile har ci-output/har-provenance.json \
             --arg app_sha256 "$app_sha256" \
             --arg hap_entry "$hap_entry" \
             --arg hap_sha256 "$hap_sha256" \
@@ -292,17 +340,24 @@ jobs:
             '{
               provenance_version: $provenance_version,
               arkts_sha: $arkts_sha,
-              har_sha: $har_sha,
-              core_sha: $core_sha,
+              engine_repository: $har[0].engine_repository,
+              engine_sha: $har[0].engine_sha,
               signing: {
                 repository_sha: $signing_sha,
                 configuration: "publish"
               },
               har_package: {
-                name: $package_name,
-                version: $package_version,
-                integrity: $package_integrity
+                name: $har[0].package_name,
+                version: $har[0].package_version,
+                integrity: $package_integrity,
+                provenance_version: $har[0].provenance_version,
+                target: $har[0].target,
+                source_dirty: $har[0].source_dirty,
+                library_sha256: $har[0].library_sha256,
+                libcxx_sha256: $har[0].libcxx_sha256,
+                verification_scope: "installed-package-static"
               },
+              runtime_verified: false,
               app: {
                 sha256: $app_sha256,
                 version_name: $app_version_name,
@@ -324,10 +379,11 @@ jobs:
       - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: RustDesk-${{ steps.ohpm.outputs.core_har_version }}.app
+          name: RustDesk-${{ steps.ohpm.outputs.har_version }}.app
           path: |
             ${{ steps.app.outputs.path }}
             ci-output/release-provenance.json
+            ci-output/har-provenance.json
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -344,7 +400,7 @@ jobs:
           AGC_RESULT_FILE: ${{ github.workspace }}/ci-output/agc-release.json
           AGC_EVENT_NAME: ${{ github.event_name }}
           AGC_RUN_ATTEMPT: ${{ github.run_attempt }}
-          AGC_CORE_HAR_VERSION: ${{ steps.ohpm.outputs.core_har_version }}
+          AGC_CORE_HAR_VERSION: ${{ steps.ohpm.outputs.har_version }}
           AGC_PUSH_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
           AGC_WORKFLOW_SHA: ${{ github.sha }}
         run: .github/scripts/agc-test-release.sh "$AGC_APP_FILE"
@@ -353,7 +409,7 @@ jobs:
         if: ${{ always() && env.AGC_ENABLED == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: RustDesk-${{ steps.ohpm.outputs.core_har_version }}-agc-ids
+          name: RustDesk-${{ steps.ohpm.outputs.har_version }}-agc-ids
           path: ci-output/agc-release.json
           if-no-files-found: ignore
           retention-days: 14
@@ -362,6 +418,6 @@ jobs:
         if: always()
         shell: bash
         run: |
-          rm -f "$HOME/.ohpm/.ohpmrc"
+          rm -f "$HOME/.ohpm/.ohpmrc" "$RUNNER_TEMP/resk-ohpm-private.log"
           rm -rf "$RUNNER_TEMP/rustdesk-signing"
           rm -rf "$GITHUB_WORKSPACE/.ci-signing-repo"

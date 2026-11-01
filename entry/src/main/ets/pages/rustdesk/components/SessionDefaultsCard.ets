@@ -4,7 +4,9 @@ import {
   LuminousSlider,
   LuminousSwitch,
 } from 'luminous_neo';
+import { FALLBACK_REFRESH_RATE } from '../RustDeskRefreshRate';
 import { RustDeskRightClickGesture, SessionDefaults } from '../RustDeskDirectoryTypes';
+import { copySessionDefaults } from '../DirectSessionSettings';
 
 export type SessionDefaultsSection = 'all' | 'input' | 'quality' | 'other';
 
@@ -12,6 +14,8 @@ export interface SessionDefaultsCardProps {
   showHeader: boolean;
   section: SessionDefaultsSection;
   defaults: SessionDefaults;
+  /** Rates this device can show, ascending. Owned by the page, not the card. */
+  refreshRateChoices: number[];
   onDefaultsChange: (defaults: SessionDefaults) => void;
 }
 
@@ -20,6 +24,7 @@ export struct SessionDefaultsCard {
   @Param showHeader: boolean = true;
   @Param section: SessionDefaultsSection = 'all';
   @Param defaults: SessionDefaults = new SessionDefaults();
+  @Param refreshRateChoices: number[] = [FALLBACK_REFRESH_RATE];
   @Local viewportWidth: number = 390;
   @Local displayedAudioEnabled: boolean = true;
   @Local displayedClipboardEnabled: boolean = true;
@@ -50,20 +55,7 @@ export struct SessionDefaultsCard {
   }
 
   private copyDefaults(): SessionDefaults {
-    const next = new SessionDefaults();
-    next.touchMode = this.defaults.touchMode;
-    next.relativeMouseMode = this.defaults.relativeMouseMode;
-    next.rightClickGesture = this.defaults.rightClickGesture;
-    next.audioEnabled = this.defaults.audioEnabled;
-    next.clipboardEnabled = this.defaults.clipboardEnabled;
-    next.qualityPreset = this.defaults.qualityPreset;
-    next.customQuality = this.defaults.customQuality;
-    next.customFps = this.defaults.customFps;
-    next.preferredCodec = this.defaults.preferredCodec;
-    next.gesturesEnabled = this.defaults.gesturesEnabled;
-    next.toolbarExpanded = this.defaults.toolbarExpanded;
-    next.sessionSharingEnabled = this.defaults.sessionSharingEnabled;
-    return next;
+    return copySessionDefaults(this.defaults);
   }
 
   private emit(next: SessionDefaults): void {
@@ -135,9 +127,9 @@ export struct SessionDefaultsCard {
     this.emit(next);
   }
 
-  private updateQuality(preset: string): void {
+  private updateRefreshRate(value: number): void {
     const next = this.copyDefaults();
-    next.qualityPreset = preset;
+    next.refreshRate = this.clampRefreshRate(value);
     this.emit(next);
   }
 
@@ -147,56 +139,26 @@ export struct SessionDefaultsCard {
     this.emit(next);
   }
 
-  private updateCustomQuality(value: number): void {
-    const next = this.copyDefaults();
-    next.qualityPreset = 'custom';
-    next.customQuality = this.clampCustomQuality(value);
-    this.emit(next);
+  private rateChoices(): number[] {
+    return this.refreshRateChoices.length > 0 ? this.refreshRateChoices : [FALLBACK_REFRESH_RATE];
   }
 
-  private updateCustomFps(value: number): void {
-    const next = this.copyDefaults();
-    next.qualityPreset = 'custom';
-    next.customFps = this.clampCustomFps(value);
-    this.emit(next);
-  }
-
-  private clampCustomQuality(value: number): number {
+  private clampRefreshRate(value: number): number {
+    const choices = this.rateChoices();
     if (!Number.isFinite(value)) {
-      return 50;
+      return choices[choices.length - 1];
     }
-    return Math.min(2000, Math.max(10, Math.round(value)));
+    return Math.min(choices[choices.length - 1], Math.max(choices[0], Math.round(value)));
   }
 
-  private clampCustomFps(value: number): number {
-    if (!Number.isFinite(value)) {
-      return 30;
-    }
-    return Math.min(120, Math.max(5, Math.round(value)));
+  private refreshRateIndex(): number {
+    return Math.max(0, this.rateChoices().indexOf(this.clampRefreshRate(this.defaults.refreshRate)));
   }
 
-  private qualityIndex(): number {
-    if (this.defaults.qualityPreset === 'low') {
-      return 0;
-    }
-    if (this.defaults.qualityPreset === 'best') {
-      return 2;
-    }
-    if (this.defaults.qualityPreset === 'custom') {
-      return 3;
-    }
-    return 1;
-  }
-
-  private updateQualityIndex(index: number): void {
-    if (index === 0) {
-      this.updateQuality('low');
-    } else if (index === 2) {
-      this.updateQuality('best');
-    } else if (index === 3) {
-      this.updateQuality('custom');
-    } else {
-      this.updateQuality('balanced');
+  private updateRefreshRateIndex(index: number): void {
+    const choice = this.rateChoices()[index];
+    if (choice !== undefined) {
+      this.updateRefreshRate(choice);
     }
   }
 
@@ -490,76 +452,20 @@ export struct SessionDefaultsCard {
         .fontColor($r('app.color.neu_text_secondary'));
 
       LuminousSegmentedControl({
-        items: [
-          new LuminousSelectionItem('speed', $r('app.string.settings_quality_speed')),
-          new LuminousSelectionItem('balanced', $r('app.string.settings_quality_balanced')),
-          new LuminousSelectionItem('best', $r('app.string.settings_quality_best')),
-          new LuminousSelectionItem('custom', $r('app.string.settings_quality_custom')),
-        ],
-        selectedIndex: this.qualityIndex(),
+        items: this.rateChoices().map((rate: number) =>
+          new LuminousSelectionItem(`${rate}`, `${rate} 帧`)),
+        selectedIndex: this.refreshRateIndex(),
         controlWidth: this.selectorWidth(620),
         controlHeight: 50,
         motionEnabled: true,
-        onChange: (index: number) => this.updateQualityIndex(index),
+        onChange: (index: number) => this.updateRefreshRateIndex(index),
       })
         .margin({ top: -10 })
 
-      if (this.defaults.qualityPreset === 'custom') {
-        Column({ space: 8 }) {
-          Row() {
-            Text($r('app.string.settings_custom_quality'))
-              .layoutWeight(1)
-              .fontSize($r('app.float.font_label'))
-              .fontColor($r('app.color.neu_text_secondary'));
-            Text(`${this.clampCustomQuality(this.defaults.customQuality)}`)
-              .fontSize($r('app.float.font_label'))
-              .fontWeight(FontWeight.Bold)
-              .fontColor($r('app.color.neu_accent'));
-          }
-          .width(this.customSliderWidth());
-
-          LuminousSlider({
-            label: $r('app.string.settings_custom_quality'),
-            value: this.clampCustomQuality(this.defaults.customQuality),
-            minimum: 10,
-            maximum: 2000,
-            step: 10,
-            sliderWidth: this.customSliderWidth() - 40,
-            motionEnabled: true,
-            onChange: (value: number, _mode: SliderChangeMode): void => {
-              this.updateCustomQuality(value);
-            },
-          })
-
-          Row() {
-            Text($r('app.string.settings_custom_fps'))
-              .layoutWeight(1)
-              .fontSize($r('app.float.font_label'))
-              .fontColor($r('app.color.neu_text_secondary'));
-            Text(`${this.clampCustomFps(this.defaults.customFps)}`)
-              .fontSize($r('app.float.font_label'))
-              .fontWeight(FontWeight.Bold)
-              .fontColor($r('app.color.neu_accent'));
-          }
-          .width(this.customSliderWidth());
-
-          LuminousSlider({
-            label: $r('app.string.settings_custom_fps'),
-            value: this.clampCustomFps(this.defaults.customFps),
-            minimum: 5,
-            maximum: 120,
-            step: 1,
-            sliderWidth: this.customSliderWidth() - 40,
-            motionEnabled: true,
-            onChange: (value: number, _mode: SliderChangeMode): void => {
-              this.updateCustomFps(value);
-            },
-          })
-        }
+      Text('刷新率取自本机屏幕支持档位，决定远端采集上限。')
         .width('100%')
-        .alignItems(HorizontalAlign.Center)
-        .margin({ top: 2, bottom: 6 });
-      }
+        .fontSize($r('app.float.font_caption'))
+        .fontColor($r('app.color.neu_text_secondary'));
     }
     .width('100%');
   }

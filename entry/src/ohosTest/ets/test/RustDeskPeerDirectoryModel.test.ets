@@ -2,8 +2,8 @@ import { describe, expect, it } from '@ohos/hypium';
 import { PeerRecord, PeerSource } from '../../../main/ets/pages/rustdesk/RustDeskDirectoryTypes';
 import {
   applyPeerOnlineStates,
-  buildFavoritePeers,
   collectPeerOnlineIds,
+  buildFavoritePeers,
   copyPeerRecord,
   formatPeerId,
   peerProjectionListsEqual,
@@ -33,9 +33,31 @@ export default function rustDeskPeerDirectoryModelTest(): void {
       peer.hostname = 'workstation';
       expect(peerDisplayTitle(peer)).assertEqual('123 456 789');
       expect(peerDisplaySubtitle(peer)).assertEqual('alice@workstation');
+      peer.username = '';
+      expect(peerDisplaySubtitle(peer)).assertEqual('workstation');
+      peer.hostname = '';
+      // A peer that reports neither half shows no bare '@'.
+      expect(peerDisplaySubtitle(peer)).assertEqual('');
 
       peer.alias = 'Office PC';
       expect(peerDisplayTitle(peer)).assertEqual('Office PC');
+    });
+
+    it('shows a direct device address, with the port only when it is not the default', 0, () => {
+      const peer = makePeer('192.168.1.8:3389', 'recent');
+      peer.protocol = 'rdp';
+      peer.address = '192.168.1.8';
+      peer.port = 3389;
+      peer.hostname = 'workstation';
+      expect(peerDisplaySubtitle(peer)).assertEqual('192.168.1.8');
+      peer.port = 13389;
+      expect(peerDisplaySubtitle(peer)).assertEqual('192.168.1.8:13389');
+      peer.protocol = 'vnc';
+      peer.address = 'fe80::1';
+      peer.port = 5901;
+      expect(peerDisplaySubtitle(peer)).assertEqual('[fe80::1]:5901');
+      peer.port = 5900;
+      expect(peerDisplaySubtitle(peer)).assertEqual('fe80::1');
     });
 
     it('preserves online state by stable peer id across Core list reloads', 0, () => {
@@ -43,44 +65,35 @@ export default function rustDeskPeerDirectoryModelTest(): void {
       previous.online = true;
       const reloaded = makePeer('10001', 'lan');
       const unrelated = makePeer('10002', 'lan');
+      const otherProtocol = makePeer('10001', 'recent');
+      otherProtocol.protocol = 'vnc';
 
-      preservePeerOnlineStates([reloaded, unrelated], [[previous]]);
+      preservePeerOnlineStates([reloaded, unrelated, otherProtocol], [[previous]]);
 
       expect(reloaded.online).assertTrue();
-      expect(unrelated.online).assertFalse();
+      expect(unrelated.online).assertUndefined();
+      expect(otherProtocol.online).assertUndefined();
     });
 
-    it('queries and updates online state only by peer id', 0, () => {
+    it('queries RustDesk IDs and never submits TCP endpoints to rendezvous', 0, () => {
       const recent = makePeer('10001', 'recent');
       const sameLan = makePeer('10001', 'lan');
       const other = makePeer('192.168.1.20', 'recent');
       other.online = true;
+      const vnc = makePeer('10001', 'recent');
+      vnc.protocol = 'vnc';
 
-      const ids = collectPeerOnlineIds([[recent], [sameLan, other]]);
-      expect(ids.length).assertEqual(2);
+      const ids = collectPeerOnlineIds([[recent], [sameLan, other, vnc]]);
+      expect(ids.length).assertEqual(1);
       expect(ids[0]).assertEqual('10001');
-      expect(ids[1]).assertEqual('192.168.1.20');
 
-      applyPeerOnlineStates([[recent], [sameLan, other]], ['10001'], ['192.168.1.20']);
+      applyPeerOnlineStates([[recent], [sameLan, other, vnc]], ['10001'], ['192.168.1.20']);
       expect(recent.online).assertTrue();
       expect(sameLan.online).assertTrue();
-      expect(other.online).assertFalse();
+      expect(other.online).assertTrue();
+      expect(vnc.online).assertUndefined();
     });
 
-    it('builds Flutter favorite peers from recent first then LAN without duplicates', 0, () => {
-      const recent = makePeer('10001', 'recent');
-      recent.hostname = 'recent-host';
-      const duplicateLan = makePeer('10001', 'lan');
-      duplicateLan.hostname = 'lan-host';
-      const lanOnly = makePeer('10002', 'lan');
-
-      const favorites = buildFavoritePeers([recent], [duplicateLan, lanOnly], ['10002', '10001']);
-
-      expect(favorites.length).assertEqual(2);
-      expect(favorites[0].source).assertEqual('recent');
-      expect(favorites[0].hostname).assertEqual('recent-host');
-      expect(favorites[1].id).assertEqual('10002');
-    });
 
     it('keeps unchanged LAN projections stable during incremental polling', 0, () => {
       const previous = makePeer('10001', 'lan');
@@ -106,6 +119,9 @@ export default function rustDeskPeerDirectoryModelTest(): void {
       source.note = 'note';
       source.sameServer = true;
       source.tags = ['work'];
+      source.address = '10.0.0.5';
+      source.port = 3389;
+      source.rdpCertificateSha256 = 'ab'.repeat(32);
 
       const copied = copyPeerRecord(source);
       source.tags.push('changed');
@@ -114,6 +130,32 @@ export default function rustDeskPeerDirectoryModelTest(): void {
       expect(copied.note).assertEqual('note');
       expect(copied.sameServer === true).assertTrue();
       expect(copied.tags.length).assertEqual(1);
+      expect(copied.address).assertEqual('10.0.0.5');
+      expect(copied.port).assertEqual(3389);
+      expect(copied.rdpCertificateSha256).assertEqual('ab'.repeat(32));
+    });
+
+    it('keeps protocol-specific favorites on the same target distinct', 0, () => {
+      const vnc = makePeer('host', 'recent');
+      vnc.protocol = 'vnc';
+      vnc.favorite = true;
+      const rdp = makePeer('host', 'recent');
+      rdp.protocol = 'rdp';
+      rdp.favorite = true;
+      const plain = makePeer('host', 'recent');
+      const peers = buildFavoritePeers([vnc, rdp, plain], [copyPeerRecord(vnc)]);
+      expect(peers.length).assertEqual(2);
+    });
+
+    it('invalidates projections when edited endpoint or RDP trust fields change', 0, () => {
+      const original = makePeer('host', 'recent');
+      original.protocol = 'rdp';
+      const edited = copyPeerRecord(original);
+      edited.port = 3390;
+      expect(peerProjectionListsEqual([original], [edited])).assertFalse();
+      edited.port = original.port;
+      edited.rdpCertificateSha256 = 'cd'.repeat(32);
+      expect(peerProjectionListsEqual([original], [edited])).assertFalse();
     });
   });
 }

@@ -4,6 +4,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { LuminousMotionLight } from 'luminous_neo';
 import { PrivacyConsentService } from '../services/PrivacyConsentService';
+import { rustDeskRuntimeController } from '../services/RustDeskRuntimeController';
 import {
   DATA_TRANSFER_BACKGROUND_BIND_EVENT,
   DATA_TRANSFER_BACKGROUND_CHANGE_EVENT,
@@ -66,10 +67,14 @@ export default class EntryAbility extends UIAbility {
     this.abilityDestroyed = false;
     LuminousMotionLight.disableSensorSubscription();
     LuminousMotionLight.suspend();
-    this.privacyConsentAccepted = PrivacyConsentService.readSystemAccepted();
+    this.privacyConsentAccepted = PrivacyConsentService.readSystemState().accepted;
     hilog.debug(DOMAIN, TAG,
       'Startup privacy state accepted=%{public}s; gravity sensor remains explicitly gated',
       String(this.privacyConsentAccepted));
+    // EntryAbility is the only lifecycle/private-root owner. The native fence
+    // runs synchronously now; actual private initialization waits for foreground
+    // consent and a successful lifecycle receipt, not page appearance.
+    this.syncRuntimeLifecycle();
     this.subscribePrivacyStateChanged();
     this.statusBarKeepAliveService = new StatusBarKeepAliveService(this.context, () => this.restoreMainWindow());
     this.easyTierApiService = new EasyTierApiService(this.context);
@@ -143,6 +148,9 @@ export default class EntryAbility extends UIAbility {
   onDestroy(): void {
     hilog.info(DOMAIN, TAG, 'Ability onDestroy');
     this.abilityDestroyed = true;
+    this.privacyConsentAccepted = false;
+    this.appForeground = false;
+    this.syncRuntimeLifecycle();
     LuminousMotionLight.suspend();
     LuminousMotionLight.disableSensorSubscription();
     this.unsubscribePrivacyStateChanged();
@@ -174,10 +182,25 @@ export default class EntryAbility extends UIAbility {
   onBackground(): void {
     hilog.info(DOMAIN, TAG, 'Ability onBackground');
     this.appForeground = false;
+    this.syncRuntimeLifecycle();
     this.syncLuminousMotionLight();
     this.dataTransferBackgroundService?.onBackground();
     controlledHostCoordinator.onAbilityBackground();
     this.context.eventHub.emit(REMOTE_SESSION_APP_STATE_EVENT, false);
+  }
+
+  /** Every authoritative consent/foreground refresh retires the old native owner. */
+  private syncRuntimeLifecycle(): void {
+    rustDeskRuntimeController.updateLifecycle(this.context, this.privacyConsentAccepted, this.appForeground)
+      .then((): void => {
+        const state = rustDeskRuntimeController.state();
+        hilog.debug(DOMAIN, TAG,
+          'Runtime lifecycle work settled; current ready=%{public}s discoveryAllowed=%{public}s',
+          String(state.ready), String(state.discoveryAllowed));
+      })
+      .catch((error: Error): void => {
+        hilog.error(DOMAIN, TAG, 'Runtime lifecycle sync failed: %{public}s', String(error));
+      });
   }
 
   private syncLuminousMotionLight(): void {
@@ -247,19 +270,20 @@ export default class EntryAbility extends UIAbility {
         hilog.warn(DOMAIN, TAG, 'Ignored invalid privacy result type: %{public}d', resultType);
         return;
       }
-      const accepted = resultType === 1;
-      this.privacyConsentAccepted = accepted;
-      hilog.debug(DOMAIN, TAG,
-        'Privacy event applied accepted=%{public}s appIndex=%{public}d',
-        String(accepted), payload.appIndex ?? this.currentAppCloneIndex());
-      this.syncLuminousMotionLight();
+      // A broadcast invalidates the cached value; it cannot grant consent.
+      // Re-read the store-managed result, which fails closed when unavailable.
+      this.refreshPrivacyConsentFromSystem();
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'Failed to parse privacy state event: %{public}s', String(error));
     }
   }
 
   private refreshPrivacyConsentFromSystem(): void {
-    this.privacyConsentAccepted = PrivacyConsentService.readSystemAccepted();
+    if (this.abilityDestroyed) {
+      return;
+    }
+    this.privacyConsentAccepted = PrivacyConsentService.readSystemState().accepted;
+    this.syncRuntimeLifecycle();
     hilog.debug(DOMAIN, TAG,
       'System privacy state refreshed accepted=%{public}s', String(this.privacyConsentAccepted));
     this.syncLuminousMotionLight();

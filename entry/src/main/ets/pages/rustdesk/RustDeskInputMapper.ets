@@ -55,6 +55,17 @@ export class RustDeskCoordinateSpace {
   paintRect: RustDeskRect;
   renderSize: RustDeskSize;
   rotation: number;
+  /**
+   * The rectangle the current presentation clips the picture to, in pane
+   * coordinates.
+   *
+   * It is the picture's own rectangle for the native Surface, whose enclosing
+   * container is measured at that rectangle and clips the transformed picture to it,
+   * and the whole pane for the RGBA fallback, whose image fills the pane and is
+   * transformed outside that container. Hit testing has to follow whichever is
+   * presenting.
+   */
+  clipRect: RustDeskRect;
   viewScale: number;
   viewOffsetX: number;
   viewOffsetY: number;
@@ -66,6 +77,7 @@ export class RustDeskCoordinateSpace {
     paintRect: RustDeskRect,
     renderSize: RustDeskSize,
     rotation: number,
+    clipRect?: RustDeskRect,
     viewScale: number = 1,
     viewOffsetX: number = 0,
     viewOffsetY: number = 0,
@@ -76,6 +88,7 @@ export class RustDeskCoordinateSpace {
     this.paintRect = paintRect;
     this.renderSize = renderSize;
     this.rotation = rotation;
+    this.clipRect = clipRect ?? paintRect;
     this.viewScale = viewScale;
     this.viewOffsetX = viewOffsetX;
     this.viewOffsetY = viewOffsetY;
@@ -112,6 +125,16 @@ export class RustDeskFlutterKeyPayload {
   usb_hid: number;
   lock_modes: number;
   down_or_up: boolean;
+  /**
+   * The input generation this event is admitted under.
+   *
+   * A mapper that is not bound to a session leaves it unset; the sender fills it
+   * from the session's own adopted value at the moment the real event is sent, and
+   * never rewrites a value a caller already captured. A payload that already names
+   * one keeps it, so an event held across a generation change is refused instead of
+   * being laundered into the new generation.
+   */
+  inputGeneration?: string;
 
   constructor(character: string, usbHid: number, lockModes: number, downOrUp: boolean) {
     this.character = character;
@@ -235,8 +258,11 @@ export function mapHarmonyKeyCode(keyCode: number): RustDeskKeyMapping | undefin
       return { name: 'VK_END' };
     case 2083:
       return { name: 'VK_INSERT' };
-    case 2102:
-      return { name: 'VK_NUMLOCK' };
+    // HarmonyOS reports NumLock as keyCode 2102, but the engine's key vocabulary
+    // has no NumLock name (see `control_key`/`plain_key` in the NAPI layer), so
+    // mapping it here would make every press fail with "does not support key
+    // name". It is left unmapped instead of being forwarded under a name the
+    // peer cannot receive.
     case 2113:
       return { name: 'VK_DIVIDE' };
     case 2114:
@@ -427,11 +453,23 @@ export function resolvePreviewTransform(
   );
 }
 
+/**
+ * @param presentedRect the rectangle the presented picture really occupies in the
+ * pane, when the caller knows it. The fit rect is only right while the picture is
+ * fitted: a stretched picture fills the pane and a picture shown at its own pixel
+ * size may exceed it, so normalizing against the fit rect would offset every point
+ * in those modes. A caller that presents in a known rectangle passes it here.
+ * @param clipRect the rectangle the presentation clips the picture to, when it is
+ * not the picture's own rectangle (the RGBA fallback fills and is clipped by the
+ * whole pane).
+ */
 export function resolveCoordinateSpace(
   viewWidth: number,
   viewHeight: number,
   remoteRect: RustDeskRect,
   rotation: number,
+  presentedRect?: RustDeskRect,
+  clipRect?: RustDeskRect,
 ): RustDeskCoordinateSpace {
   const viewSize = new RustDeskSize(Math.max(viewWidth, 1), Math.max(viewHeight, 1));
   const safeRemoteRect = new RustDeskRect(
@@ -450,18 +488,35 @@ export function resolveCoordinateSpace(
   return new RustDeskCoordinateSpace(
     safeRemoteRect,
     viewSize,
-    transform.contentRect,
+    presentedRect ?? transform.contentRect,
     transform.renderSize,
     rotation,
+    clipRect,
   );
 }
 
+/**
+ * Whether a pane point is on the presented picture.
+ *
+ * Two things must hold. The picture is rendered inside a clip the presentation owns
+ * — the mode's rectangle for the native Surface, the whole pane for the RGBA
+ * fallback — and a point outside that clip is not on the picture however the inverse
+ * transform maps it: at a zoom-in the transformed picture reaches past the clip, and
+ * a click on the letterbox beside it must not reach the peer. Inside the clip, the
+ * point is mapped back through the user transform and must land on the picture
+ * itself, which is what excludes the empty margin of a zoomed-out or panned picture.
+ */
 export function isLocalPointInsidePaintRect(space: RustDeskCoordinateSpace, localX: number, localY: number): boolean {
+  if (!isPointInsideRect(space.clipRect, localX, localY)) {
+    return false;
+  }
   const basePoint = mapViewPointToBase(space, localX, localY);
-  return basePoint.x >= space.paintRect.left
-    && basePoint.x <= space.paintRect.left + space.paintRect.width
-    && basePoint.y >= space.paintRect.top
-    && basePoint.y <= space.paintRect.top + space.paintRect.height;
+  return isPointInsideRect(space.paintRect, basePoint.x, basePoint.y);
+}
+
+function isPointInsideRect(rect: RustDeskRect, x: number, y: number): boolean {
+  return x >= rect.left && x <= rect.left + rect.width
+    && y >= rect.top && y <= rect.top + rect.height;
 }
 
 function clampToRange(value: number, min: number, max: number): number {

@@ -1,49 +1,90 @@
+<#
+Consume only rd-engine's owning NAPI build. Never rebuild or hand-edit a HAR here.
+#>
 param(
-  [string]$NativeRoot = (Join-Path $PSScriptRoot '..\..\rustdesk_native_har'),
+  [string]$EngineRoot = $(if ($env:RD_ENGINE_ROOT) { $env:RD_ENGINE_ROOT } else { Join-Path $PSScriptRoot '..\..\rd-engine' }),
+  [string]$SourceHar,
   [string]$Ohpm,
   [switch]$KeepModules
 )
 
 $ErrorActionPreference = 'Stop'
-
 $AppRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$NativeRoot = (Resolve-Path $NativeRoot).Path
-$SourceHar = Join-Path $NativeRoot 'package.har'
+$Verifier = Join-Path $AppRoot 'scripts\verify-native-har.py'
 $TargetHar = Join-Path $AppRoot 'rustdesk-ohrs.har'
-$ModuleJsonSource = Join-Path $NativeRoot 'package\build\default\intermediates\merge_profile\default\module.json'
 
 function Find-Ohpm {
   if ($Ohpm) {
     return $Ohpm
   }
-
   $command = Get-Command ohpm -ErrorAction SilentlyContinue
   if ($command) {
     return $command.Source
   }
-
   $devecoHome = if ($env:DEVECO_HOME) { $env:DEVECO_HOME } else { 'C:\Program Files\Huawei\DevEco Studio' }
   $candidates = @(
     (Join-Path $devecoHome 'tools\ohpm\bin\ohpm.bat'),
     (Join-Path $devecoHome 'tools\ohpm\bin\ohpm')
   )
-
   foreach ($candidate in $candidates) {
-    if (Test-Path -LiteralPath $candidate) {
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
       return $candidate
     }
   }
-
   throw 'ohpm was not found. Install DevEco Studio or provide -Ohpm.'
 }
 
-if (-not (Test-Path -LiteralPath $SourceHar)) {
-  throw "Missing native HAR: $SourceHar`nBuild it first with rustdesk_native_har\scripts\build-har.ps1."
+function Find-Python {
+  foreach ($candidate in @($env:PYTHON, 'python3', 'python')) {
+    if (-not $candidate) {
+      continue
+    }
+    $command = Get-Command $candidate -ErrorAction SilentlyContinue
+    if ($command) {
+      return $command.Source
+    }
+  }
+  throw 'python 3 is required to verify the HAR; set PYTHON to a python executable.'
+}
+
+# build-har.sh stages these outputs here, independently of Cargo's cache/target settings.
+if (-not $SourceHar) {
+  $SourceHar = $env:NATIVE_HAR_PATH
+}
+if (-not $SourceHar) {
+  $SourceHar = Join-Path $EngineRoot 'native\ohos_napi\target\package.har'
+}
+if (-not (Test-Path -LiteralPath $SourceHar -PathType Leaf)) {
+  throw "Missing native HAR: $SourceHar`nBuild it first:`n  cd $EngineRoot`n  bash native/ohos_napi/build-har.sh"
+}
+$SourceHar = (Resolve-Path -LiteralPath $SourceHar).Path
+$SourceProvenance = if ($env:NATIVE_PROVENANCE_PATH) {
+  $env:NATIVE_PROVENANCE_PATH
+}
+else {
+  Join-Path (Split-Path -Parent $SourceHar) 'release-provenance.json'
+}
+
+$rootPackage = Get-Content -Raw -LiteralPath (Join-Path $AppRoot 'oh-package.json5') | ConvertFrom-Json
+if ($rootPackage.dependencies.'rustdesk-ohrs' -ne 'file:./rustdesk-ohrs.har') {
+  throw 'oh-package.json5 must depend on "rustdesk-ohrs": "file:./rustdesk-ohrs.har".'
+}
+$python = Find-Python
+$verifyArgs = @($Verifier, '--har', $SourceHar, '--sidecar', $SourceProvenance)
+if ($env:RD_ENGINE_SHA) {
+  $verifyArgs += @('--expected-engine-sha', $env:RD_ENGINE_SHA)
+}
+if ($env:RD_ENGINE_HAR_VERSION) {
+  $verifyArgs += @('--expected-package-version', $env:RD_ENGINE_HAR_VERSION)
+}
+# Schema 2 records a commit/dirty flag, not a working-tree freshness receipt or ABI proof.
+& $python @verifyArgs
+if ($LASTEXITCODE -ne 0) {
+  throw "HAR verification failed with exit code $LASTEXITCODE."
 }
 
 $Ohpm = Find-Ohpm
 Copy-Item -LiteralPath $SourceHar -Destination $TargetHar -Force
-
 if (-not $KeepModules) {
   foreach ($path in @(
     (Join-Path $AppRoot 'oh_modules'),
@@ -61,7 +102,6 @@ try {
   if ($LASTEXITCODE -ne 0) {
     throw "ohpm install failed with exit code $LASTEXITCODE."
   }
-
   Push-Location (Join-Path $AppRoot 'entry')
   try {
     & $Ohpm install
@@ -75,28 +115,6 @@ try {
 }
 finally {
   Pop-Location
-}
-
-# Hvigor probes unpacked HAR dependencies for module.json even when the package
-# itself is authored with module.json5. Copy the merged profile output into each
-# installed rustdesk-ohrs dependency if it exists.
-if (Test-Path -LiteralPath $ModuleJsonSource) {
-  $moduleRoots = @(
-    (Join-Path $AppRoot 'oh_modules\.ohpm'),
-    (Join-Path $AppRoot 'entry\oh_modules\.ohpm')
-  )
-
-  foreach ($moduleRoot in $moduleRoots) {
-    if (-not (Test-Path -LiteralPath $moduleRoot)) {
-      continue
-    }
-
-    Get-ChildItem -LiteralPath $moduleRoot -Directory -Recurse -Filter 'main' |
-      Where-Object { $_.FullName -match 'rustdesk-ohrs[\\/]src[\\/]main$' } |
-      ForEach-Object {
-        Copy-Item -LiteralPath $ModuleJsonSource -Destination (Join-Path $_.FullName 'module.json') -Force
-      }
-  }
 }
 
 Write-Host "Refreshed $TargetHar from $SourceHar"

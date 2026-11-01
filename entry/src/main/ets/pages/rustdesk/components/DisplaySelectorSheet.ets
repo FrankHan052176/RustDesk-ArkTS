@@ -1,4 +1,9 @@
 import { PeerDisplayInfo, ResolutionInfo } from '../RustDeskTypes';
+import {
+  findPeerResolutionIndex,
+  getPeerDisplayModeSize,
+  RustDeskDisplayMode,
+} from '../RustDeskViewportModel';
 
 export interface DisplaySelectorSheetProps {
   displays: PeerDisplayInfo[];
@@ -6,7 +11,9 @@ export interface DisplaySelectorSheetProps {
   resolutions: ResolutionInfo[];
   selectedResolution?: ResolutionInfo;
   resolutionEnabled: boolean;
-  viewOnlySession: boolean;
+  resolutionUnavailableText: string;
+  displayMode: RustDeskDisplayMode;
+  onSelectDisplayMode: (mode: RustDeskDisplayMode) => void;
   onSelectDisplay: (index: number) => void;
   onSelectResolution: (resolution: ResolutionInfo) => void;
   onClose: () => void;
@@ -14,7 +21,7 @@ export interface DisplaySelectorSheetProps {
 
 interface DisplayChoiceOptions {
   label: string;
-  badge: string;
+  badge: ResourceStr;
   selected: boolean;
   onClick: () => void;
 }
@@ -26,7 +33,10 @@ export struct DisplaySelectorSheet {
   @Param resolutions: ResolutionInfo[] = [];
   @Param selectedResolution: ResolutionInfo | undefined = undefined;
   @Param resolutionEnabled: boolean = false;
-  @Param viewOnlySession: boolean = false;
+  /** Why sizes cannot be chosen when `resolutionEnabled` is off; each wire states its own reason. */
+  @Param resolutionUnavailableText: string = '远端 OHOS 暂不支持修改显示器分辨率';
+  @Param displayMode: RustDeskDisplayMode = 'fit';
+  @Event onSelectDisplayMode: (mode: RustDeskDisplayMode) => void = (_mode: RustDeskDisplayMode) => {};
   @Event onSelectDisplay: (index: number) => void = (_index: number) => {};
   @Event onSelectResolution: (resolution: ResolutionInfo) => void = (_resolution: ResolutionInfo) => {};
   @Event onClose: () => void = () => {};
@@ -39,11 +49,14 @@ export struct DisplaySelectorSheet {
     return labels;
   }
 
-  private displayBadges(): string[] {
-    const badges: string[] = [];
+  private displayBadges(): ResourceStr[] {
+    const badges: ResourceStr[] = [];
     for (let index = 0; index < this.displays.length; index += 1) {
       const display = this.displays[index];
-      badges.push(`${display.width}×${display.height}`);
+      const mode = getPeerDisplayModeSize(display);
+      badges.push(mode === undefined
+        ? $r('app.string.display_badge_pixels', display.width, display.height)
+        : $r('app.string.display_badge_mode_pixels', mode.width, mode.height, display.width, display.height));
     }
     return badges;
   }
@@ -58,22 +71,9 @@ export struct DisplaySelectorSheet {
   }
 
   private selectedResolutionIndex(): number {
-    for (let index = 0; index < this.resolutions.length; index += 1) {
-      const resolution = this.resolutions[index];
-      if (this.selectedResolution !== undefined
-        && this.selectedResolution.width === resolution.width
-        && this.selectedResolution.height === resolution.height) {
-        return index;
-      }
-      if (this.selectedResolution === undefined
-        && this.currentDisplay >= 0
-        && this.currentDisplay < this.displays.length
-        && this.displays[this.currentDisplay].width === resolution.width
-        && this.displays[this.currentDisplay].height === resolution.height) {
-        return index;
-      }
-    }
-    return 0;
+    const display = this.currentDisplay >= 0 && this.currentDisplay < this.displays.length
+      ? this.displays[this.currentDisplay] : undefined;
+    return findPeerResolutionIndex(display, this.resolutions, this.selectedResolution);
   }
 
   private selectResolutionIndex(index: number): void {
@@ -81,6 +81,10 @@ export struct DisplaySelectorSheet {
       return;
     }
     this.onSelectResolution(this.resolutions[index]);
+  }
+
+  private hasBadge(badge: ResourceStr): boolean {
+    return typeof badge !== 'string' || badge.length > 0;
   }
 
   @Builder
@@ -93,18 +97,18 @@ export struct DisplaySelectorSheet {
           .fontColor(options.selected ? $r('app.color.white') : $r('app.color.neu_text_primary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
-        if (options.badge.length > 0) {
+        if (this.hasBadge(options.badge)) {
           Text(options.badge)
             .fontSize($r('app.float.font_caption'))
             .fontColor(options.selected ? $r('app.color.white') : $r('app.color.neu_text_secondary'))
-            .maxLines(1);
+            .maxLines(2);
         }
       }
       .width('100%')
       .alignItems(HorizontalAlign.Center);
     }
     .width(132)
-    .height(options.badge.length > 0 ? 52 : 44)
+    .height(this.hasBadge(options.badge) ? 68 : 44)
     .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_8') })
     .backgroundColor(options.selected ? $r('app.color.brand_primary') : $r('app.color.mica_control'))
     .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
@@ -139,6 +143,34 @@ export struct DisplaySelectorSheet {
         .margin({ right: $r('app.float.space_8'), bottom: $r('app.float.space_8') });
       }, (label: string, index: number) =>
         `display-${index}-${label}-${this.currentDisplay === index ? 'selected' : 'idle'}`)
+    }
+    .width('100%');
+  }
+
+  private displayModeBadge(mode: RustDeskDisplayMode): string {
+    return mode === 'stretch'
+      ? '铺满窗口，比例可能失真'
+      : mode === 'original'
+        ? '按远端像素显示，可拖动查看'
+        : '保持比例并留黑边';
+  }
+
+  @Builder
+  private DisplayModeChoices() {
+    Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
+      ForEach(['stretch', 'fit', 'original'] as RustDeskDisplayMode[],
+        (mode: RustDeskDisplayMode, index: number) => {
+          Stack() {
+            this.ChoiceButton({
+              label: mode === 'stretch' ? '拉伸画面' : mode === 'original' ? '原始画面' : '自适应画面',
+              badge: this.displayModeBadge(mode),
+              selected: this.displayMode === mode,
+              onClick: (): void => this.onSelectDisplayMode(mode),
+            })
+          }
+          .margin({ right: $r('app.float.space_8'), bottom: $r('app.float.space_8') });
+        },
+        (mode: RustDeskDisplayMode) => `display-mode-${mode}-${this.displayMode === mode ? 'selected' : 'idle'}`)
     }
     .width('100%');
   }
@@ -184,15 +216,28 @@ export struct DisplaySelectorSheet {
         .alignItems(HorizontalAlign.Start);
 
         Column({ space: $r('app.float.space_8') }) {
+          Text('画面模式')
+            .fontSize($r('app.float.font_body_large'))
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'));
+
+          Text('只影响本机显示，不改变远端采集设置。')
+            .fontSize($r('app.float.font_caption'))
+            .fontColor($r('app.color.text_secondary'));
+
+          this.DisplayModeChoices();
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start);
+
+        Column({ space: $r('app.float.space_8') }) {
           Text('分辨率')
             .fontSize($r('app.float.font_body_large'))
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'));
 
           if (!this.resolutionEnabled) {
-            Text(this.viewOnlySession
-              ? '只观看模式不修改远端分辨率'
-              : '远端 OHOS 暂不支持修改显示器分辨率')
+            Text(this.resolutionUnavailableText)
               .fontSize($r('app.float.font_body'))
               .fontColor($r('app.color.text_secondary'))
               .padding({ top: $r('app.float.space_8'), bottom: $r('app.float.space_8') });

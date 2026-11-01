@@ -1,20 +1,31 @@
-import { PeerRecord, PeerViewSource } from '../RustDeskDirectoryTypes';
-import { peerDisplaySubtitle, peerDisplayTitle } from '../RustDeskPeerDirectoryModel';
+import { LuminousButton, LuminousControlSize, LuminousTextField, LuminousTone } from 'luminous_neo';
+import { PeerProtocol, PeerRecord, PeerViewSource } from '../RustDeskDirectoryTypes';
+import {
+  bareTargetAddress,
+  peerDisplaySubtitle,
+  peerDisplayTitle,
+  peerOnlineState,
+  peerReachability,
+  peerProtocolLabel,
+  peerProtocolOf,
+} from '../RustDeskPeerDirectoryModel';
 import { FloatingActionSurface, FloatingGlassSurface } from './FloatingSurface';
+import { deviceConnectionTarget } from '../SavedDeviceModel';
 
 export interface PeerCardProps {
   peer: PeerRecord;
   viewSource: PeerViewSource;
   compact: boolean;
   cardWidth: number;
-  transferActive: boolean;
-  onSetFavorite: (peerId: string, favorite: boolean) => void;
-  onRemoveRecent: (peerId: string) => void;
-  onRemoveLan: (peerId: string) => void;
-  onConnectRemote: (peerId: string) => void;
-  onViewOnly: (peerId: string) => void;
-  onViewCamera: (peerId: string) => void;
-  onOpenTransfer: (peerId: string) => void;
+  removeEnabled: boolean;
+  onSetFavorite: (target: string, protocol: PeerProtocol, favorite: boolean, rustdeskIdOnly: boolean) => void;
+  onEditNote: (target: string, protocol: PeerProtocol, note: string, rustdeskIdOnly: boolean) => void;
+  onRemoveRecent: (target: string, protocol: PeerProtocol, rustdeskIdOnly: boolean) => void;
+  onRemoveLan: (target: string, protocol: PeerProtocol) => void;
+  onConnectRemote: (peerId: string, rustdeskIdOnly: boolean) => void;
+  onConnectVnc: (peerId: string) => void;
+  onConnectRdp: (peerId: string) => void;
+  onEditDevice: (peer: PeerRecord) => void;
 }
 
 @ComponentV2
@@ -23,14 +34,22 @@ export struct PeerCard {
   @Param viewSource: PeerViewSource = 'recent';
   @Param compact: boolean = false;
   @Param cardWidth: number = 0;
-  @Param transferActive: boolean = false;
-  @Event onSetFavorite: (peerId: string, favorite: boolean) => void = (_peerId: string, _favorite: boolean) => {};
-  @Event onRemoveRecent: (peerId: string) => void = (_peerId: string) => {};
-  @Event onRemoveLan: (peerId: string) => void = (_peerId: string) => {};
-  @Event onConnectRemote: (peerId: string) => void = (_peerId: string) => {};
-  @Event onViewOnly: (peerId: string) => void = (_peerId: string) => {};
-  @Event onViewCamera: (peerId: string) => void = (_peerId: string) => {};
-  @Event onOpenTransfer: (peerId: string) => void = (_peerId: string) => {};
+  @Param removeEnabled: boolean = true;
+  @Local noteEditing: boolean = false;
+  @Local noteDraft: string = '';
+  @Event onSetFavorite: (target: string, protocol: PeerProtocol, favorite: boolean, rustdeskIdOnly: boolean) => void =
+    (_target: string, _protocol: PeerProtocol, _favorite: boolean, _rustdeskIdOnly: boolean) => {};
+  @Event onEditNote: (target: string, protocol: PeerProtocol, note: string, rustdeskIdOnly: boolean) => void =
+    (_target: string, _protocol: PeerProtocol, _note: string, _rustdeskIdOnly: boolean) => {};
+  @Event onRemoveRecent: (target: string, protocol: PeerProtocol, rustdeskIdOnly: boolean) => void =
+    (_target: string, _protocol: PeerProtocol, _rustdeskIdOnly: boolean) => {};
+  @Event onRemoveLan: (target: string, protocol: PeerProtocol) => void =
+    (_target: string, _protocol: PeerProtocol) => {};
+  @Event onConnectRemote: (peerId: string, rustdeskIdOnly: boolean) => void =
+    (_peerId: string, _rustdeskIdOnly: boolean) => {};
+  @Event onConnectVnc: (peerId: string) => void = (_peerId: string) => {};
+  @Event onConnectRdp: (peerId: string) => void = (_peerId: string) => {};
+  @Event onEditDevice: (peer: PeerRecord) => void = (_peer: PeerRecord): void => {};
 
   private displayName(): string {
     return peerDisplayTitle(this.peer);
@@ -40,8 +59,67 @@ export struct PeerCard {
     return peerDisplaySubtitle(this.peer);
   }
 
+  private canEditNote(): boolean {
+    return this.viewSource !== 'addressBook';
+  }
+
+  private noteText(): string {
+    return this.peer.note.trim();
+  }
+
+  private noteActionLabel(): ResourceStr {
+    return this.noteText().length > 0
+      ? $r('app.string.device_note_edit')
+      : $r('app.string.device_note_add');
+  }
+
+  private noteFieldWidth(): number {
+    return this.cardWidth > 96 ? Math.max(120, this.cardWidth - 40) : 220;
+  }
+
+  private beginNoteEdit(): void {
+    this.noteDraft = this.peer.note;
+    this.noteEditing = true;
+  }
+
+  private cancelNoteEdit(): void {
+    this.noteDraft = this.peer.note;
+    this.noteEditing = false;
+  }
+
+  private commitNoteEdit(): void {
+    this.onEditNote(this.connectionTarget(), peerProtocolOf(this.peer), this.noteDraft.trim(), this.peer.rustdeskIdOnly);
+    this.noteEditing = false;
+  }
+
   private connectionTarget(): string {
-    return this.peer.id.trim();
+    return deviceConnectionTarget(this.peer);
+  }
+
+  /** `VNC` or `RDP` when the peer's protocol names that scheme, otherwise empty. */
+  private protocolBadge(): string {
+    return peerProtocolLabel(peerProtocolOf(this.peer));
+  }
+
+  private protocolAccent(): ResourceColor {
+    if (this.protocolBadge() === 'VNC') {
+      return $r('app.color.brand_secondary');
+    }
+    return $r('app.color.brand_primary');
+  }
+
+  /** The action a tap on the primary button takes, following the peer's protocol. */
+  private activateDefaultProtocol(): void {
+    const protocol = peerProtocolOf(this.peer);
+    if (protocol === 'vnc') {
+      this.onConnectVnc(bareTargetAddress(this.connectionTarget()));
+      return;
+    }
+    if (protocol === 'rdp') {
+      this.onConnectRdp(bareTargetAddress(this.connectionTarget()));
+      return;
+    }
+    this.onConnectRemote(this.connectionTarget(), this.peer.rustdeskIdOnly);
   }
 
   private sourceAccent(): ResourceColor {
@@ -65,31 +143,48 @@ export struct PeerCard {
   }
 
   private avatarAccent(): ResourceColor {
-    return this.peer.online
+    return peerReachability(this.peer) === true
       ? this.sourceAccent()
       : $r('app.color.neu_text_disabled');
   }
 
   private avatarBackground(): ResourceColor {
-    return this.peer.online
+    return peerReachability(this.peer) === true
       ? this.sourceBackground()
       : $r('app.color.surface_tertiary');
   }
 
+  /**
+   * A peer the runtime has not observed reads as `device_status_checking`, not
+   * as offline: after a restart an unobserved peer is unknown, and claiming it
+   * is offline would be a reachability claim nobody made.
+   */
   private onlineStatusText(): ResourceStr {
-    return this.peer.online
+    const state = peerOnlineState(peerReachability(this.peer));
+    if (state === 'unknown') {
+      return $r('app.string.device_status_checking');
+    }
+    return state === 'online'
       ? $r('app.string.device_status_online')
       : $r('app.string.device_status_offline');
   }
 
   private onlineStatusColor(): ResourceColor {
-    return this.peer.online
+    return peerReachability(this.peer) === true
       ? $r('app.color.success')
       : $r('app.color.neu_text_secondary');
   }
 
+  private onlineStatusDotColor(): ResourceColor {
+    const state = peerOnlineState(peerReachability(this.peer));
+    if (state === 'unknown') {
+      return $r('app.color.info');
+    }
+    return state === 'online' ? $r('app.color.success') : $r('app.color.neu_text_disabled');
+  }
+
   private toggleFavorite(): void {
-    this.onSetFavorite(this.peer.id, !this.peer.favorite);
+    this.onSetFavorite(this.connectionTarget(), peerProtocolOf(this.peer), !this.peer.favorite, this.peer.rustdeskIdOnly);
   }
 
   private canRemoveFromCurrentView(): boolean {
@@ -98,15 +193,12 @@ export struct PeerCard {
 
   private removeFromCurrentView(): void {
     if (this.viewSource === 'lan') {
-      this.onRemoveLan(this.peer.id);
+      this.onRemoveLan(this.connectionTarget(), peerProtocolOf(this.peer));
     } else if (this.viewSource === 'recent') {
-      this.onRemoveRecent(this.peer.id);
+      this.onRemoveRecent(this.connectionTarget(), peerProtocolOf(this.peer), this.peer.rustdeskIdOnly);
     }
   }
 
-  private cardHeight(): number {
-    return this.compact ? 180 : 184;
-  }
 
   private sessionSurfaceWidth(): number {
     return this.cardWidth > 32 ? this.cardWidth - 32 : 0;
@@ -194,6 +286,7 @@ export struct PeerCard {
         .borderRadius(0)
         .hitTestBehavior(HitTestMode.Block)
         .zIndex(10)
+        .enabled(this.removeEnabled)
         .accessibilityText(this.viewSource === 'lan' ? '从局域网设备中移除' : '从最近设备中移除')
         .onClick((): void => this.removeFromCurrentView());
     }
@@ -223,12 +316,25 @@ export struct PeerCard {
           .fontColor($r('app.color.neu_text_primary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(this.identityDetail())
-          .width('100%')
-          .fontSize(12)
-          .fontColor($r('app.color.neu_text_secondary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis });
+        Row({ space: 6 }) {
+          Text(this.identityDetail())
+            .layoutWeight(1)
+            .fontSize(12)
+            .fontColor($r('app.color.neu_text_secondary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
+          if (this.protocolBadge().length > 0) {
+            Text(this.protocolBadge())
+              .fontSize(10)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.protocolAccent())
+              .padding({ left: 6, right: 6, top: 1, bottom: 1 })
+              .borderRadius($r('app.float.radius_6'))
+              .backgroundColor($r('app.color.mica_control'));
+          }
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center);
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start);
@@ -247,15 +353,108 @@ export struct PeerCard {
   }
 
   @Builder
+  private NoteRow() {
+    if (this.canEditNote()) {
+      if (this.noteEditing) {
+        Column({ space: 6 }) {
+          Row({ space: 8 }) {
+            Text($r('app.string.device_note_label'))
+              .fontSize(11)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.neu_text_secondary'))
+              .layoutWeight(1);
+            Button({ type: ButtonType.Normal, stateEffect: false }) {
+              Text($r('app.string.device_note_cancel'))
+                .fontSize(11)
+                .fontColor($r('app.color.neu_text_secondary'));
+            }
+              .height(28)
+              .padding({ left: 8, right: 8 })
+              .backgroundColor(Color.Transparent)
+              .hoverEffect(HoverEffect.None)
+              .accessibilityText('取消编辑本机备注')
+              .onClick((): void => this.cancelNoteEdit());
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Center);
+
+          Row() {
+            LuminousTextField({
+              value: this.noteDraft,
+              placeholder: $r('app.string.device_note_placeholder'),
+              fieldWidth: this.noteFieldWidth(),
+              fieldHeight: 42,
+              motionEnabled: true,
+              onChange: (value: string): void => {
+                this.noteDraft = value;
+              },
+            });
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.Center)
+          .clip(false);
+
+          Row() {
+            LuminousButton({
+              label: $r('app.string.device_note_save'),
+              controlWidth: 112,
+              controlSizeMode: LuminousControlSize.Compact,
+              tone: LuminousTone.Accent,
+              motionEnabled: true,
+              onAction: (): void => this.commitNoteEdit(),
+            });
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.End)
+          .clip(false);
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start);
+      } else {
+        Row({ space: 8 }) {
+          Text($r('app.string.device_note_label'))
+            .fontSize(11)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.neu_text_secondary'));
+          Text(this.noteText().length > 0
+            ? this.noteText()
+            : $r('app.string.device_note_placeholder'))
+            .layoutWeight(1)
+            .fontSize(11)
+            .fontColor(this.noteText().length > 0
+              ? $r('app.color.neu_text_primary')
+              : $r('app.color.neu_text_disabled'))
+            .maxLines(2)
+            .lineHeight(16)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
+          Button({ type: ButtonType.Normal, stateEffect: false }) {
+            Text(this.noteActionLabel())
+              .fontSize(11)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.neu_accent'));
+          }
+            .height(30)
+            .padding({ left: 8, right: 8 })
+            .backgroundColor($r('app.color.mica_control'))
+            .hoverEffect(HoverEffect.None)
+            .borderRadius($r('app.float.radius_6'))
+            .accessibilityText('编辑本机备注')
+            .onClick((): void => this.beginNoteEdit());
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center);
+      }
+    }
+  }
+
+  @Builder
   private StatusRow() {
     Row({ space: 8 }) {
       Row()
         .width(8)
         .height(8)
         .borderRadius(4)
-        .backgroundColor(this.peer.online
-          ? $r('app.color.success')
-          : $r('app.color.neu_text_disabled'));
+        .backgroundColor(this.onlineStatusDotColor());
       Text(this.onlineStatusText())
         .fontSize(11)
         .fontWeight(FontWeight.Medium)
@@ -311,13 +510,11 @@ export struct PeerCard {
       }) {
         Stack({ alignContent: Alignment.Center }) {
           Row({ space: 8 }) {
-            this.SessionAction('远控', true, (): void => this.onConnectRemote(this.connectionTarget()));
-            this.SessionAction('观看', false, (): void => this.onViewOnly(this.connectionTarget()));
-            this.SessionAction('相机', false, (): void => this.onViewCamera(this.connectionTarget()));
             this.SessionAction(
-              this.transferActive ? '传输中' : '文件',
-              this.transferActive,
-              (): void => this.onOpenTransfer(this.connectionTarget()),
+              this.peer.rustdeskIdOnly ? $r('app.string.resk_connect_claimed_id') :
+                (this.protocolBadge().length > 0 ? this.protocolBadge() : $r('app.string.resk_connect')),
+              true,
+              (): void => this.activateDefaultProtocol(),
             );
           }
           .width('100%')
@@ -341,10 +538,18 @@ export struct PeerCard {
         subtleDepth: true,
         radius: $r('app.float.radius_18'),
         surfaceWidth: this.cardWidth,
-        surfaceHeight: this.cardHeight(),
+        measurementKey: this.noteEditing ? 'note-editing' : 'note-display',
       }) {
         Column({ space: this.compact ? 8 : 12 }) {
           this.IdentityRow();
+          this.NoteRow();
+          if (this.viewSource !== 'addressBook') {
+            Button($r('app.string.device_editor_edit'), { type: ButtonType.Normal })
+              .height(44)
+              .backgroundColor($r('app.color.mica_control'))
+              .fontColor($r('app.color.neu_accent'))
+              .onClick((): void => this.onEditDevice(this.peer));
+          }
           this.StatusRow();
           this.SessionActions();
         }

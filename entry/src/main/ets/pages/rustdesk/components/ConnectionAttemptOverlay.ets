@@ -24,15 +24,21 @@ export struct ConnectionAttemptOverlay {
     return this.phase === 'failed';
   }
 
-  private title(): string {
+  private title(): ResourceStr {
     if (this.phase === 'waiting_for_easytier') {
       return '正在准备 EasyTier 网络';
     }
     if (this.phase === 'awaiting_password') {
       return '等待密码验证';
     }
+    if (this.phase === 'awaiting_approval') {
+      return $r('app.string.resk_phase_approval');
+    }
     if (this.phase === 'authenticating') {
       return '正在验证密码';
+    }
+    if (this.phase === 'rendering') {
+      return '正在显示远端画面';
     }
     if (this.phase === 'connected') {
       return '连接成功';
@@ -43,7 +49,15 @@ export struct ConnectionAttemptOverlay {
     return '正在连接';
   }
 
-  private detail(): string {
+  private accessibleTitle(): string {
+    const title = this.title();
+    if (typeof title === 'string') {
+      return title;
+    }
+    return this.getUIContext().getHostContext()?.resourceManager.getStringSync(title.id) ?? this.phase;
+  }
+
+  private detail(): ResourceStr {
     if (this.message.trim().length > 0) {
       return this.message.trim();
     }
@@ -52,6 +66,12 @@ export struct ConnectionAttemptOverlay {
     }
     if (this.phase === 'waiting_for_easytier') {
       return 'RustDesk 尚未创建会话；EasyTier 确认实例运行后才会继续。';
+    }
+    if (this.phase === 'awaiting_approval') {
+      return $r('app.string.resk_status_approval');
+    }
+    if (this.phase === 'rendering') {
+      return '连接已建立，正在等待首帧画面。';
     }
     return '仍停留在当前页面，连接成功后再进入会话。';
   }
@@ -223,7 +243,7 @@ export struct ConnectionAttemptOverlay {
       .height('100%')
       .backgroundColor($r('app.color.overlay'))
       .accessibilityGroup(true)
-      .accessibilityText(this.title());
+      .accessibilityText(this.accessibleTitle());
     }
   }
 }

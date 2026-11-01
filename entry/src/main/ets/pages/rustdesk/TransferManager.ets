@@ -48,7 +48,6 @@ export class TransferManager {
       password,
       forceRelay,
       isFileTransfer: true,
-      isViewCamera: false,
       isViewOnly: false,
     };
     const addResponse = this.bridge.addSession(sessionId, target, options);
@@ -70,7 +69,7 @@ export class TransferManager {
     this.transferErrorMessage = '';
 
     if (!this.bridge.startSession(resolvedSessionId).ok) {
-      this.bridge.closeSession(resolvedSessionId);
+      void this.bridge.closeSession(resolvedSessionId);
       this.resetSessionState('文件传输连接启动失败');
       return false;
     }
@@ -341,7 +340,7 @@ export class TransferManager {
     return message;
   }
 
-  public close(): boolean {
+  public async close(): Promise<boolean> {
     if (this.fileSessionId.length === 0) {
       this.resetSessionState('文件传输未连接');
       return true;
@@ -351,7 +350,7 @@ export class TransferManager {
     }
     this.closeInProgress = true;
     const sessionId = this.fileSessionId;
-    const response = this.bridge.closeSession(sessionId);
+    const response = await this.bridge.closeSession(sessionId);
     this.resetSessionState('文件传输未连接');
     this.closeInProgress = false;
     return response.ok;

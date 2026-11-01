@@ -13,7 +13,9 @@ export interface PasswordDialogProps {
   visible: boolean;
   mode: AuthDialogMode;
   canTrustDevice: boolean;
-  errorMessage: string;
+  /** Whether this caller can really persist the credential it collects. */
+  canRememberPassword: boolean;
+  errorMessage: ResourceStr;
   password: string;
   rememberPassword: boolean;
   code2fa: string;
@@ -31,7 +33,17 @@ export struct PasswordDialog {
   @Param visible: boolean = false;
   @Param mode: AuthDialogMode = 'password';
   @Param canTrustDevice: boolean = true;
-  @Param errorMessage: string = '';
+  /**
+   * Whether this product stores a password at all.
+   *
+   * The password path collects a credential for the caller's next authorized
+   * connection attempt, so the dialog offers the remember switch only where a caller can
+   * actually persist the credential; the local preferences deliberately keep no
+   * password, and a switch that silently discarded its value would be a promise
+   * the component cannot keep.
+   */
+  @Param canRememberPassword: boolean = false;
+  @Param errorMessage: ResourceStr = '';
   @Param password: string = '';
   @Param rememberPassword: boolean = false;
   @Param code2fa: string = '';
@@ -92,7 +104,7 @@ export struct PasswordDialog {
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis });
 
-            if (this.errorMessage.length > 0) {
+            if (this.errorMessage !== '') {
               Text(this.errorMessage)
                 .width('100%')
                 .fontSize($r('app.float.font_caption'))
@@ -153,16 +165,18 @@ export struct PasswordDialog {
             .justifyContent(FlexAlign.Center)
             .clip(false);
 
-            LuminousSwitch({
-              label: '记住密码',
-              description: '仅保存在本机安全配置中',
-              isOn: this.rememberPassword,
-              rowWidth: this.panelWidth() - 48,
-              motionEnabled: true,
-              onChange: (value: boolean): void => {
-                this.onRememberChange(value);
-              },
-            })
+            if (this.canRememberPassword) {
+              LuminousSwitch({
+                label: '记住密码',
+                description: '仅保存在本机安全配置中',
+                isOn: this.rememberPassword,
+                rowWidth: this.panelWidth() - 48,
+                motionEnabled: true,
+                onChange: (value: boolean): void => {
+                  this.onRememberChange(value);
+                },
+              })
+            }
           }
 
           Row({ space: this.buttonRowGap() }) {

@@ -21,11 +21,11 @@ import {
 } from 'rustdesk-ohrs';
 
 export class NativeHostBridge {
-  start(optionsJson: string): string {
+  start(optionsJson: string): Promise<string> {
     return controlledServerStart(optionsJson);
   }
 
-  stop(): string {
+  stop(): Promise<string> {
     return controlledServerStop();
   }
 
@@ -93,7 +93,7 @@ export class NativeHostBridge {
     return controlledScreenConfigure(configJson);
   }
 
-  stopScreenCapture(): string {
+  stopScreenCapture(): Promise<string> {
     return controlledScreenCaptureStop();
   }
 

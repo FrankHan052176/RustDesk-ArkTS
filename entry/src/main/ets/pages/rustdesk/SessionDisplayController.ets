@@ -1,8 +1,22 @@
 import { NativeSessionBridge } from './NativeSessionBridge';
 import { RustDeskViewportModel } from './RustDeskViewportModel';
-import { ActionResponse, PeerDisplayInfo, ResolutionInfo } from './RustDeskTypes';
+import { ActionResponse, NativeEvent, PeerDisplayInfo, ResolutionInfo } from './RustDeskTypes';
 
-export type ImageQualityPreset = 'best' | 'balanced' | 'low' | 'custom';
+import {
+  DEFAULT_REFRESH_RATE,
+  MAX_REFRESH_RATE,
+  MIN_REFRESH_RATE,
+  isValidRefreshRate,
+} from './RustDeskRefreshRate';
+
+export { DEFAULT_REFRESH_RATE, MAX_REFRESH_RATE, MIN_REFRESH_RATE, isValidRefreshRate };
+
+/** Direct refusal fields are strings; a late refusal must not clear a newer pending size. */
+export function matchesResolutionRefusal(event: NativeEvent, display: number, width: number, height: number): boolean {
+  return event.name === 'resolution_refused' && display >= 0 && width > 0 && height > 0
+    && Number(event.display ?? -1) === display && Number(event.width ?? '0') === width
+    && Number(event.height ?? '0') === height;
+}
 
 export class SessionDisplayController {
   private readonly viewport: RustDeskViewportModel;
@@ -12,9 +26,7 @@ export class SessionDisplayController {
   private displays: PeerDisplayInfo[] = [];
   private resolutions: ResolutionInfo[] = [];
   private platform: string = '';
-  private imageQuality: ImageQualityPreset = 'balanced';
-  private customImageQuality: number = 50;
-  private customFps: number = 30;
+  private refreshRate: number = DEFAULT_REFRESH_RATE;
   private awaitingAction: boolean = false;
 
   constructor(
@@ -105,34 +117,24 @@ export class SessionDisplayController {
     }
   }
 
-  applyQuality(
-    sessionId: string,
-    quality: ImageQualityPreset,
-    customQuality: number = 50,
-    customFps: number = 30,
-  ): boolean {
-    if (!this.isValidQuality(quality)) {
+  /**
+   * Ask the peer for a capture rate.
+   *
+   * The rate is the only picture control the operator sets. Encoding quality is
+   * deliberately not offered: a quality level makes the app guess at a bandwidth
+   * the session cannot see, whereas a rate leaves the encoder free to spend
+   * whatever the path currently sustains.
+   */
+  applyRefreshRate(sessionId: string, refreshRate: number): boolean {
+    if (!this.isValidRefreshRate(refreshRate)) {
       return false;
     }
     this.awaitingAction = true;
     try {
-      if (quality !== 'custom') {
-        if (!this.applyAction(this.bridge.setImageQuality(sessionId, quality))) {
-          return false;
-        }
-        this.imageQuality = quality === 'best' ? 'best' : quality === 'balanced' ? 'balanced' : 'low';
-        return true;
-      }
-      if (!this.isValidCustomQuality(customQuality) || !this.isValidCustomFps(customFps)) {
+      if (!this.applyAction(this.bridge.setCustomFps(sessionId, Math.round(refreshRate)))) {
         return false;
       }
-      this.bridge.setCustomImageQuality(sessionId, Math.round(customQuality));
-      if (!this.applyAction(this.bridge.setCustomFps(sessionId, Math.round(customFps)))) {
-        return false;
-      }
-      this.imageQuality = 'custom';
-      this.customImageQuality = Math.round(customQuality);
-      this.customFps = Math.round(customFps);
+      this.refreshRate = Math.round(refreshRate);
       return true;
     } finally {
       this.awaitingAction = false;
@@ -155,28 +157,16 @@ export class SessionDisplayController {
     return this.platform;
   }
 
-  getImageQuality(): ImageQualityPreset {
-    return this.imageQuality;
+  getRefreshRate(): number {
+    return this.refreshRate;
   }
 
-  getCustomImageQuality(): number {
-    return this.customImageQuality;
+  restoreRefreshRate(refreshRate: number): void {
+    this.refreshRate = this.isValidRefreshRate(refreshRate) ? Math.round(refreshRate) : DEFAULT_REFRESH_RATE;
   }
 
-  getCustomFps(): number {
-    return this.customFps;
-  }
-
-  restoreQualityState(
-    quality: ImageQualityPreset,
-    customQuality: number,
-    customFps: number,
-  ): void {
-    this.imageQuality = this.isValidQuality(quality) ? quality : 'balanced';
-    this.customImageQuality = this.isValidCustomQuality(customQuality)
-      ? Math.round(customQuality)
-      : 50;
-    this.customFps = this.isValidCustomFps(customFps) ? Math.round(customFps) : 30;
+  private isValidRefreshRate(value: number): boolean {
+    return isValidRefreshRate(value);
   }
 
   isAwaitingAction(): boolean {
@@ -191,15 +181,4 @@ export class SessionDisplayController {
     return false;
   }
 
-  private isValidQuality(quality: string): boolean {
-    return quality === 'best' || quality === 'balanced' || quality === 'low' || quality === 'custom';
-  }
-
-  private isValidCustomQuality(value: number): boolean {
-    return Number.isFinite(value) && value >= 10 && value <= 2000;
-  }
-
-  private isValidCustomFps(value: number): boolean {
-    return Number.isFinite(value) && value >= 5 && value <= 120;
-  }
 }

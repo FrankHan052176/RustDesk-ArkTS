@@ -7,7 +7,7 @@ export default function remoteSessionTabsControllerTest(): void {
     it('keeps several sessions and pauses every inactive tab', 0, () => {
       const controller = new RemoteSessionTabsController(3);
       const first = controller.add('session-1', '100 001', 'remote_control');
-      const second = controller.add('session-2', '100 002', 'view_only');
+      const second = controller.add('session-2', '100 002', 'vnc');
       expect(first !== undefined).assertTrue();
       expect(second !== undefined).assertTrue();
       expect(controller.count()).assertEqual(2);
@@ -42,6 +42,18 @@ export default function remoteSessionTabsControllerTest(): void {
       expect(controller.remove('session-2')).assertEqual('session-1');
     });
 
+    it('keeps ID-only intent separate from a direct target across activation', 0, () => {
+      const controller = new RemoteSessionTabsController();
+      const byId = controller.add('by-id', '10.0.0.4', 'remote_control');
+      controller.add('by-ip', '10.0.0.4', 'remote_control');
+      if (byId !== undefined) {
+        byId.rustdeskIdOnly = true;
+      }
+      controller.activate('by-id');
+      expect(controller.get('by-id')?.rustdeskIdOnly ?? false).assertTrue();
+      expect(controller.get('by-ip')?.rustdeskIdOnly ?? true).assertFalse();
+    });
+
     it('stores background peer info and bounded attention events', 0, () => {
       const controller = new RemoteSessionTabsController();
       controller.add('session-1', '100 001', 'remote_control');
@@ -49,27 +61,27 @@ export default function remoteSessionTabsControllerTest(): void {
       const peerInfo: NativeEvent = { name: 'peer_info', hostname: 'Office PC' };
       controller.markPeerInfo('session-1', peerInfo);
       for (let index = 0; index < 70; index += 1) {
-        controller.enqueue('session-1', { name: 'chat_client_mode', text: `${index}` });
+        controller.enqueue('session-1', { name: 'clipboard', text: `${index}` });
       }
       expect(controller.get('session-1')?.label ?? '').assertEqual('Office PC');
       expect(controller.get('session-1')?.needsAttention ?? false).assertTrue();
-      expect(controller.takePendingEvents('session-1').length).assertEqual(70);
+      expect(controller.takePendingEvents('session-1').length).assertEqual(64);
     });
 
-    it('preserves mixed chat and actionable event order', 0, () => {
+    it('preserves background event order around an actionable alert', 0, () => {
       const controller = new RemoteSessionTabsController();
       controller.add('session-1', 'one', 'remote_control');
       controller.add('session-2', 'two', 'remote_control');
 
-      controller.enqueue('session-1', { name: 'chat_client_mode', text: 'before' });
+      controller.enqueue('session-1', { name: 'clipboard', text: 'before' });
       controller.enqueue('session-1', { name: 'msgbox', type: 'error', text: 'problem' });
-      controller.enqueue('session-1', { name: 'chat_client_mode', text: 'after' });
+      controller.enqueue('session-1', { name: 'clipboard', text: 'after' });
 
       const events = controller.takePendingEvents('session-1');
       expect(events.length).assertEqual(3);
-      expect(events[0].name).assertEqual('chat_client_mode');
+      expect(events[0].name).assertEqual('clipboard');
       expect(events[1].name).assertEqual('msgbox');
-      expect(events[2].name).assertEqual('chat_client_mode');
+      expect(events[2].name).assertEqual('clipboard');
     });
 
     it('caches cursor bitmaps and the active cursor id per session', 0, () => {
@@ -102,17 +114,33 @@ export default function remoteSessionTabsControllerTest(): void {
       expect(events[0].name).assertEqual('msgbox');
     });
 
-    it('marks omitted chat history after the per-session retention limit', 0, () => {
+    it('retains an actionable resolution refusal behind newer background telemetry', 0, () => {
+      const controller = new RemoteSessionTabsController();
+      controller.add('rdp-session', '10.0.0.4', 'rdp');
+      controller.enqueue('rdp-session', {
+        name: 'resolution_refused', display: '0', width: '1280', height: '720', message: 'Resize refused',
+      }, true);
+      for (let index = 0; index < 80; index += 1) {
+        controller.enqueue('rdp-session', { name: 'connection_ready', value: `${index}` });
+      }
+      const events = controller.takePendingEvents('rdp-session');
+      expect(events.length).assertEqual(65);
+      expect(events[0].name).assertEqual('resolution_refused');
+      expect(events[0].message ?? '').assertEqual('Resize refused');
+      expect(controller.get('rdp-session')?.needsAttention ?? false).assertTrue();
+    });
+
+    it('retains only the newest replaceable events', 0, () => {
       const controller = new RemoteSessionTabsController();
       controller.add('session-1', 'one', 'remote_control');
       controller.add('session-2', 'two', 'remote_control');
       for (let index = 0; index < 520; index += 1) {
-        controller.enqueue('session-1', { name: 'chat_client_mode', text: `${index}` });
+        controller.enqueue('session-1', { name: 'clipboard', text: `${index}` });
       }
 
       const events = controller.takePendingEvents('session-1');
-      expect(events.length).assertEqual(513);
-      expect(String(events[0].text ?? '').includes('8')).assertTrue();
+      expect(events.length).assertEqual(64);
+      expect(events[63].text ?? '').assertEqual('519');
     });
 
     it('bounds protected background alerts without dropping terminal close', 0, () => {

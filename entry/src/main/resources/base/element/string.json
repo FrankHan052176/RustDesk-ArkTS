@@ -1,5 +1,96 @@
 {
   "string": [
+    { "name": "direct_settings_title", "value": "VNC / RDP" },
+    { "name": "direct_settings_summary", "value": "桌面尺寸、Windows 缩放、RDP 声音与 VNC 画质" },
+    { "name": "direct_rdp_resolution", "value": "RDP 分辨率" },
+    { "name": "direct_rdp_follow_recommended", "value": "跟随本机（推荐）" },
+    { "name": "direct_follow_device", "value": "跟随本机" },
+    { "name": "direct_rdp_scale", "value": "RDP 缩放" },
+    { "name": "direct_rdp_audio", "value": "RDP 播放远端声音" },
+    { "name": "direct_vnc_quality", "value": "VNC 画质" },
+    { "name": "direct_vnc_lossless", "value": "无损" },
+    { "name": "direct_vnc_balanced", "value": "平衡（默认）" },
+    { "name": "direct_vnc_fast", "value": "流畅" },
+    { "name": "direct_next_connection_hint", "value": "这些设置应用于下一次连接；已连接的会话不会重新协商。" },
+    { "name": "direct_rdp_live_hint", "value": "分辨率立即请求远端调整，需远端支持 Display Control；跟随本机会随旋转或分屏变化。缩放应用于下一次连接。" },
+    { "name": "direct_vnc_audio_unsupported", "value": "VNC 协议不传输声音" },
+    { "name": "direct_rdp_audio_unsupported", "value": "此 RDP 连接未协商远端声音；可在设置中启用后重新连接" },
+    { "name": "direct_rdp_audio_waiting", "value": "等待 RDP 声音通道协商" },
+    { "name": "direct_toolbar_capabilities", "value": "直接连接仅有一个显示器；未报告相对鼠标能力，故不显示相对模式；VNC / RDP 不提供安卓导航。" },
+    { "name": "direct_keyboard_pc_reason", "value": "本机窗口模式使用实体键盘；输入法与虚拟键盘仅在移动设备提供。" },
+    { "name": "direct_keyboard_permission_reason", "value": "远端未授予键盘权限，输入法与虚拟键盘不可用。" },
+    { "name": "direct_keyboard_fold_reason", "value": "折叠悬停模式使用下方按键区，浮动虚拟键盘不可用。" },
+    { "name": "direct_window_reason", "value": "当前窗口模式不提供全屏或最小化控制。" },
+    { "name": "device_editor_edit", "value": "编辑设备" },
+    { "name": "device_editor_name", "value": "显示名称" },
+    { "name": "device_editor_address", "value": "地址或 RustDesk ID" },
+    { "name": "device_editor_port", "value": "端口（留空使用协议默认值）" },
+    { "name": "device_editor_favorite", "value": "收藏此设备" },
+    { "name": "device_editor_username", "value": "RDP 用户名（可选）" },
+    { "name": "device_editor_no_password", "value": "只保存在本机，不保存密码。RDP 证书由系统验证；你明确选择信任并记住的证书按主机与端口保存。" },
+    { "name": "device_editor_address_error", "value": "请输入有效的地址或 ID，端口范围为 1–65535；RustDesk ID 可不填端口。" },
+    { "name": "device_editor_rdp_error", "value": "请检查 RDP 用户名。" },
+    { "name": "device_liveness_hint", "value": "IP 设备检测 TCP 端口，RustDesk ID 查询服务器。在线只表示此刻可达，不表示认证成功；未能检测的设备显示未知。每 30 秒检测一次，后台停止。" },
+    { "name": "device_editor_save_unavailable", "value": "设备保存接口不可用，请返回后重试" },
+    { "name": "resk_target_claimed_id_hint", "value": "此目标来自局域网声明或其保存记录，始终按设备 ID 经已批准的服务器路由连接，即使文字看起来像 IP。不会自动降级为 IP 直连；手工编辑目标才会重新选择普通解析。" },
+    { "name": "resk_connect_claimed_id", "value": "按设备 ID 连接" },
+    { "name": "resk_server_validate", "value": "校验格式（不联网）" },
+    { "name": "resk_server_format_valid", "value": "格式有效，尚未保存；未检测服务器可达性。" },
+    { "name": "resk_server_saved", "value": "已明确保存，等待实际连接验证；未检测服务器可达性。" },
+    { "name": "resk_server_approved", "value": "新连接使用最近已明确保存的配置；编辑草稿不会改变已有连接或重试的路由。" },
+    { "name": "resk_server_legacy", "value": "旧版配置仅作为草稿展示；需要重新明确保存才能连接设备 ID。" },
+    { "name": "resk_server_unapproved", "value": "尚无已批准的 ID 路由。请选择你信任的服务器并明确保存；IP 直连不受影响。" },
+    { "name": "resk_privacy_unavailable", "value": "系统隐私管理服务不可用或本应用尚未接入：局域网发现和新 ID 连接已禁用。下方显示真实服务错误，不能用本地开关代替系统授权。" },
+    { "name": "resk_privacy_required", "value": "系统未报告当前隐私协议的完整模式同意：局域网发现和新 ID 连接已禁用。" },
+    { "name": "resk_discovery_foreground_required", "value": "局域网发现仅限应用前台且页面仍在使用时；回到前台不会自动扫描。" },
+    { "name": "resk_discovery_unavailable", "value": "原生发现当前不可用，已关闭新扫描准入；保留真实错误，不将失败视为空列表。" },
+    { "name": "resk_native_initializing", "value": "等待原生沙箱初始化及发现所有者就绪；不会自动扫描。" },
+    { "name": "resk_lan_empty_title", "value": "列表中暂无设备" },
+    { "name": "resk_lan_starting", "value": "正在请求开始扫描，等待原生确认…" },
+    { "name": "resk_lan_cleaning", "value": "正在等待扫描清理或缓存移除完成…" },
+    { "name": "resk_lan_inactivity", "value": "扫描已结束：达到无活动等待时间。" },
+    { "name": "resk_lan_deadline", "value": "扫描已结束：达到本次扫描时限。" },
+    { "name": "resk_lan_cancelled", "value": "扫描已取消，原生清理已完成。" },
+    { "name": "resk_lan_failed", "value": "本次扫描失败；以下缓存不是成功扫描或在线证明。" },
+    { "name": "resk_lan_cached", "value": "本地发现缓存；不代表本次扫描结果或当前在线状态。" },
+    { "name": "resk_lan_loading", "value": "正在读取本地发现缓存，尚未开始扫描。" },
+    { "name": "resk_lan_unavailable", "value": "当前没有可用的发现状态。" },
+    { "name": "resk_lan_stop", "value": "停止扫描" },
+    { "name": "resk_lan_untrusted", "value": "设备名称、主机名和 ID 都是未经验证的局域网声明。连接只使用所选 ID 和独立批准的服务器路由，不从发现信息获取地址、公钥或信任。" },
+    {
+      "name": "quality_submitted_fps",
+      "value": "提交帧率"
+    },
+    { "name": "quality_requested_fps", "value": "请求帧率" },
+    { "name": "quality_panel_refresh_rate", "value": "屏幕刷新率" },
+    { "name": "quality_received_fps", "value": "接收帧率" },
+    { "name": "quality_queued_units", "value": "队列深度" },
+    { "name": "quality_codec", "value": "编解码器" },
+    { "name": "quality_network_rtt", "value": "网络延迟（RTT）" },
+    { "name": "quality_receive_bandwidth", "value": "接收带宽" },
+    { "name": "quality_target_bitrate", "value": "目标码率" },
+    { "name": "remote_session_header_submitted_fps", "value": "提交 %1$s FPS" },
+    { "name": "remote_session_header_rtt_ms", "value": "RTT %1$s ms" },
+    {
+      "name": "display_badge_pixels",
+      "value": "像素 %1$d×%2$d"
+    },
+    {
+      "name": "display_badge_mode_pixels",
+      "value": "显示 %1$d×%2$d\n像素 %3$d×%4$d"
+    },
+    {
+      "name": "easytier_readiness_waiting",
+      "value": "EasyTier 已运行，正在等待目标网络可达"
+    },
+    {
+      "name": "easytier_readiness_progress",
+      "value": "EasyTier 已运行，正在等待目标网络可达（%1$d/%2$d，最多 12 秒）"
+    },
+    {
+      "name": "easytier_readiness_exhausted",
+      "value": "EasyTier 已运行，但目标端口尚不可达。请确认目标在线及直连端口已启用后重试。"
+    },
     {
       "name": "module_desc",
       "value": "RustDesk HarmonyOS entry module"
@@ -49,12 +140,16 @@
       "value": "显示安卓导航"
     },
     {
+      "name": "remote_session_toolbar_drag",
+      "value": "拖动工具栏"
+    },
+    {
       "name": "device_directory_title",
       "value": "设备中心"
     },
     {
       "name": "device_directory_subtitle",
-      "value": "从最近设备、通讯簿或局域网快速发起独立会话"
+      "value": "从本地最近设备、收藏或局域网发起会话；云端通讯录暂不支持"
     },
     {
       "name": "device_source_recent",
@@ -62,7 +157,7 @@
     },
     {
       "name": "device_source_address_book",
-      "value": "通讯簿"
+      "value": "云端通讯录"
     },
     {
       "name": "device_source_lan",
@@ -70,7 +165,7 @@
     },
     {
       "name": "device_status_checking",
-      "value": "未检测"
+      "value": "未知"
     },
     {
       "name": "device_status_online",
@@ -82,7 +177,31 @@
     },
     {
       "name": "device_search_placeholder",
-      "value": "搜索 ID、别名或设备名"
+      "value": "搜索 ID、别名、设备名或本机备注"
+    },
+    {
+      "name": "device_note_label",
+      "value": "本机备注"
+    },
+    {
+      "name": "device_note_placeholder",
+      "value": "添加本机备注"
+    },
+    {
+      "name": "device_note_add",
+      "value": "添加"
+    },
+    {
+      "name": "device_note_edit",
+      "value": "编辑"
+    },
+    {
+      "name": "device_note_save",
+      "value": "保存"
+    },
+    {
+      "name": "device_note_cancel",
+      "value": "取消"
     },
     {
       "name": "device_scan_lan",
@@ -110,11 +229,15 @@
     },
     {
       "name": "device_empty_address_book",
-      "value": "当前服务器没有可用的通讯簿缓存。"
+      "value": "Resk 尚未接入云端通讯录同步与编辑；可继续使用本地最近设备与收藏。"
+    },
+    {
+      "name": "device_address_book_unavailable",
+      "value": "云端通讯录暂不支持"
     },
     {
       "name": "device_empty_lan",
-      "value": "没有发现局域网设备，可尝试重新扫描。"
+      "value": "当前列表没有缓存设备。点击扫描或下拉可主动发现；切换到此页不会自动扫描。"
     },
     {
       "name": "device_empty_search",
@@ -123,10 +246,6 @@
     {
       "name": "device_action_remote",
       "value": "远控"
-    },
-    {
-      "name": "device_action_camera",
-      "value": "摄像头"
     },
     {
       "name": "device_action_files",
@@ -142,7 +261,7 @@
     },
     {
       "name": "settings_server_subtitle",
-      "value": "使用内置官方服务，或配置自己的 ID / Relay / API"
+      "value": "明确保存后，设备 ID 才能使用所选官方或自定义 ID / Relay 路由"
     },
     {
       "name": "settings_server_official",
@@ -206,7 +325,7 @@
     },
     {
       "name": "settings_server_save",
-      "value": "保存并应用"
+      "value": "保存并批准 ID 路由"
     },
     {
       "name": "settings_server_effective_api",
@@ -222,7 +341,7 @@
     },
     {
       "name": "settings_server_account_capability",
-      "value": "账户与通讯簿"
+      "value": "账户与云端通讯录"
     },
     {
       "name": "settings_server_remote_ready",
@@ -245,18 +364,6 @@
       "value": "未配置（可直接留空）"
     },
     {
-      "name": "settings_server_account_ready",
-      "value": "服务可用"
-    },
-    {
-      "name": "settings_server_account_pending",
-      "value": "API 未验证或尚未登录"
-    },
-    {
-      "name": "settings_server_account_unconfigured",
-      "value": "未配置 API，不影响远控"
-    },
-    {
       "name": "settings_id_server_placeholder",
       "value": "例如 hbbs.example.com:21116"
     },
@@ -270,7 +377,7 @@
     },
     {
       "name": "settings_server_key_placeholder",
-      "value": "可选，服务器公钥"
+      "value": "必填，32 字节 Ed25519 公钥的标准 Base64"
     },
     {
       "name": "settings_server_testing",
@@ -282,7 +389,7 @@
     },
     {
       "name": "settings_server_validation_note",
-      "value": "测试会执行 RustDesk ID、Relay 协议探测以及 API /api/login-options 校验；普通网站或仅端口可连接不会判定为正常。全部留空表示不使用自定义服务器。"
+      "value": "格式校验只检查地址和公钥，不联网探测、不保存也不批准。保存成功仅允许后续连接使用该路由，不证明服务器在线。API、账户与云端通讯录在 Resk 中暂不支持。"
     },
     {
       "name": "settings_server_error_id_required",
@@ -302,11 +409,11 @@
     },
     {
       "name": "settings_server_public_hint",
-      "value": "使用 RustDesk 内置官方 ID、Relay 与账户服务；无需填写地址，保存后由内核自动选择公共节点。"
+      "value": "明确保存后使用本构建固定的 RustDesk 官方服务器及官方公钥，不读取其他自定义服务器配置；仍需系统隐私同意及原生初始化完成。"
     },
     {
       "name": "settings_server_custom_hint",
-      "value": "填写自建或受信任服务的 ID / Relay / API 与公钥；只使用局域网 IP 直连时也可留空。"
+      "value": "仅填写你明确信任的 ID 服务器及其公钥，中继地址可选。自定义模式不会回退到官方公钥；手动 IP 直连不依赖此配置。"
     },
     {
       "name": "settings_server_test_success",
@@ -434,167 +541,19 @@
     },
     {
       "name": "settings_account_title",
-      "value": "账户与通讯簿"
+      "value": "账户与云端通讯录"
     },
     {
       "name": "settings_account_subtitle",
-      "value": "登录当前 API 服务并同步设备通讯簿"
+      "value": "账户登录与云端通讯录暂未接入 Resk"
     },
     {
-      "name": "settings_account_signed_out",
-      "value": "未登录"
+      "name": "settings_account_unavailable",
+      "value": "Resk 暂不支持"
     },
     {
-      "name": "settings_account_signed_in",
-      "value": "已登录"
-    },
-    {
-      "name": "settings_account_awaiting_verification",
-      "value": "等待验证"
-    },
-    {
-      "name": "settings_account_login_hint",
-      "value": "账户能力由当前服务器的 API 提供；仅配置 ID / Relay 的自建服务器可能不支持登录。"
-    },
-    {
-      "name": "settings_account_oidc_divider",
-      "value": "或使用浏览器授权"
-    },
-    {
-      "name": "settings_account_oidc_hint",
-      "value": "选择账户提供商后，将在系统浏览器中完成安全授权。"
-    },
-    {
-      "name": "settings_account_oidc_active_hint",
-      "value": "请在系统浏览器中完成授权；返回应用后会自动继续登录。"
-    },
-    {
-      "name": "settings_account_oidc_waiting_short",
-      "value": "等待浏览器授权"
-    },
-    {
-      "name": "settings_account_oidc_github",
-      "value": "继续使用 GitHub"
-    },
-    {
-      "name": "settings_account_oidc_google",
-      "value": "继续使用 Google"
-    },
-    {
-      "name": "settings_account_oidc_microsoft",
-      "value": "继续使用 Microsoft"
-    },
-    {
-      "name": "settings_account_oidc_github_short",
-      "value": "GitHub"
-    },
-    {
-      "name": "settings_account_oidc_google_short",
-      "value": "Google"
-    },
-    {
-      "name": "settings_account_oidc_microsoft_short",
-      "value": "微软"
-    },
-    {
-      "name": "settings_account_oidc_cancel",
-      "value": "取消浏览器授权"
-    },
-    {
-      "name": "settings_account_username",
-      "value": "用户名"
-    },
-    {
-      "name": "settings_account_username_placeholder",
-      "value": "用户名或邮箱"
-    },
-    {
-      "name": "settings_account_password",
-      "value": "密码"
-    },
-    {
-      "name": "settings_account_password_placeholder",
-      "value": "输入账户密码"
-    },
-    {
-      "name": "settings_account_password_note",
-      "value": "密码仅用于本次登录请求，提交后会立即从界面内存中清除，不会写入本地偏好设置。"
-    },
-    {
-      "name": "settings_account_login",
-      "value": "登录"
-    },
-    {
-      "name": "settings_account_logging_in",
-      "value": "正在登录…"
-    },
-    {
-      "name": "settings_account_email_title",
-      "value": "验证登录邮箱"
-    },
-    {
-      "name": "settings_account_email_hint",
-      "value": "输入服务器发送到以下邮箱的验证码。"
-    },
-    {
-      "name": "settings_account_totp_title",
-      "value": "双重身份验证"
-    },
-    {
-      "name": "settings_account_totp_hint",
-      "value": "输入身份验证器当前生成的一次性验证码。"
-    },
-    {
-      "name": "settings_account_verification_code",
-      "value": "验证码"
-    },
-    {
-      "name": "settings_account_code_placeholder",
-      "value": "输入验证码"
-    },
-    {
-      "name": "settings_account_verify",
-      "value": "验证并登录"
-    },
-    {
-      "name": "settings_account_verifying",
-      "value": "正在验证…"
-    },
-    {
-      "name": "settings_account_cancel",
-      "value": "取消验证"
-    },
-    {
-      "name": "settings_account_default_user",
-      "value": "RustDesk 用户"
-    },
-    {
-      "name": "settings_account_not_provided",
-      "value": "未提供"
-    },
-    {
-      "name": "settings_account_signed_in_hint",
-      "value": "当前服务器账户"
-    },
-    {
-      "name": "settings_account_email",
-      "value": "邮箱"
-    },
-    {
-      "name": "settings_account_sync",
-      "value": "同步通讯簿"
-    },
-    {
-      "name": "settings_account_syncing",
-      "value": "正在同步…"
-    },
-    {
-      "name": "settings_account_logout",
-      "value": "退出登录"
-    },
-    {
-      "name": "settings_account_api_unavailable",
-      "value": "当前未提供账户 API"
+      "name": "settings_account_unavailable_detail",
+      "value": "Resk 暂不支持账户登录、登录验证、浏览器授权，以及云端通讯录同步与编辑。现有远程连接不受影响。"
     },
     {
       "name": "settings_back",
@@ -674,7 +633,7 @@
     },
     {
       "name": "guide_official_description",
-      "value": "最简单的跨网络连接方式。首次安装默认启用内置 RustDesk 官方 ID、Relay 与账户服务，无需手动填写服务器。"
+      "value": "跨网络连接使用内置 RustDesk 官方 ID 与 Relay 服务，无需手动填写服务器。Resk 暂不支持账户登录与云端通讯录。"
     },
     {
       "name": "guide_official_step_1_title",
@@ -690,7 +649,7 @@
     },
     {
       "name": "guide_official_step_2_body",
-      "value": "回到首页输入受控设备显示的 RustDesk ID，选择远程控制、只看屏幕、查看相机或文件传输。"
+      "value": "回到首页输入受控设备显示的 RustDesk ID，选择远程控制、只看屏幕或文件传输。"
     },
     {
       "name": "guide_official_step_3_title",
@@ -698,7 +657,7 @@
     },
     {
       "name": "guide_official_step_3_body",
-      "value": "输入受控设备的一次性密码，或等待对方确认。需要通讯簿时可在“设置 > 账户”登录。"
+      "value": "输入受控设备的一次性密码，或等待对方确认。远程连接与账户登录是独立能力；Resk 暂不支持账户登录与云端通讯录。"
     },
     {
       "name": "guide_direct_description",
@@ -750,11 +709,11 @@
     },
     {
       "name": "guide_server_step_3_title",
-      "value": "连接与账户同步"
+      "value": "连接与功能范围"
     },
     {
       "name": "guide_server_step_3_body",
-      "value": "输入同一服务器上的设备 ID 发起连接；配置了 API 时，可在“账户”中登录并同步通讯簿。"
+      "value": "远程连接与账户登录是独立能力。Resk 暂不支持账户登录与云端通讯录同步、编辑，配置 API 服务也不会启用这些功能。"
     },
     {
       "name": "guide_remote_heading",
@@ -778,7 +737,7 @@
     },
     {
       "name": "guide_remote_tools_body",
-      "value": "悬浮栏提供音频、显示器、画质、聊天和断开；文本、图片与文件剪贴板会按会话同步，画面支持缩放、平移、旋转与复位。"
+      "value": "悬浮栏提供音频、显示器、画质和断开；文本、图片与文件剪贴板会按会话同步，画面支持缩放、平移、旋转与复位。"
     },
     {
       "name": "guide_remote_sessions_title",
@@ -794,7 +753,7 @@
     },
     {
       "name": "guide_features_heading_subtitle",
-      "value": "设备中心、文件、相机与被看服务均可独立使用"
+      "value": "设备中心、文件与被看服务均可独立使用"
     },
     {
       "name": "guide_devices_title",
@@ -802,15 +761,15 @@
     },
     {
       "name": "guide_devices_body",
-      "value": "在“设备”中查看最近设备、服务器通讯簿和局域网发现结果，可搜索、收藏、检查在线状态，并直接发起远控、相机或文件会话。"
+      "value": "在“设备”中查看本地最近设备、收藏和局域网发现结果，可搜索、检查在线状态并发起会话。云端通讯录同步与编辑暂不支持。"
     },
     {
       "name": "guide_transfer_title",
-      "value": "文件传输与查看相机"
+      "value": "文件传输"
     },
     {
       "name": "guide_transfer_body",
-      "value": "首页连接类型可切换为“文件传输”或“查看相机”；文件任务支持进度、取消和后台保持，相机会使用独立只看会话。"
+      "value": "首页连接类型可切换为“文件传输”；文件任务支持进度、取消和后台保持。"
     },
     {
       "name": "guide_host_title",
@@ -834,7 +793,7 @@
     },
     {
       "name": "guide_defaults_body",
-      "value": "在“远控默认”设置输入、右键手势、音频、剪贴板、画质、编码和工具栏状态；在服务器、账户与安全页面管理网络和授权。"
+      "value": "在“远控默认”设置输入、右键手势、音频、剪贴板、画质、编码和工具栏状态；在服务器与安全页面管理网络和远控授权。账户登录与云端通讯录暂不支持。"
     },
     {
       "name": "remote_session_tab_add",
@@ -851,6 +810,473 @@
     {
       "name": "remote_session_tab_close_symbol",
       "value": "×"
-    }
+    },
+    {
+      "name": "resk_home_title",
+      "value": "Resk 远程控制"
+    },
+    {
+      "name": "resk_home_subtitle",
+      "value": "保留 IP 直连；明确保存服务器路由后可连接设备 ID。局域网发现仅由你主动发起。"
+    },
+    {
+      "name": "resk_mode_rustdesk",
+      "value": "RustDesk"
+    },
+    {
+      "name": "resk_mode_vnc",
+      "value": "VNC"
+    },
+    {
+      "name": "resk_target_placeholder",
+      "value": "设备 ID、192.168.1.10 或 192.168.1.10:21118"
+    },
+    {
+      "name": "resk_target_placeholder_vnc",
+      "value": "例如 192.168.1.10 或 192.168.1.10:5900"
+    },
+    {
+      "name": "resk_target_hint",
+      "value": "字面 IP 或 IP:端口仍走直连。设备 ID 使用最近明确保存的服务器路由；草稿、格式校验及旧版配置都不代表批准。"
+    },
+    {
+      "name": "resk_target_hint_vnc",
+      "value": "VNC 目标会补全为 vnc://host:port（默认 5900）。VNC 会话只有指针通道，没有键盘。"
+    },
+    {
+      "name": "resk_password_placeholder",
+      "value": "一次性密码（仅保存在本次会话内存中）"
+    },
+    {
+      "name": "resk_password_note",
+      "value": "密码不会写入本机存储，也不会出现在任何日志或诊断信息里。"
+    },
+    {
+      "name": "resk_requested_fps",
+      "value": "请求帧率"
+    },
+    {
+      "name": "resk_requested_fps_note",
+      "value": "60/90/120/144 是发给对端的采集率请求，只在会话启动时生效；运行中的会话保持原速率，改动需要重新连接。实测速率见会话诊断。"
+    },
+    {
+      "name": "resk_touch_scroll_speed",
+      "value": "三指下滑速度"
+    },
+    {
+      "name": "resk_touch_scroll_speed_fast",
+      "value": "快"
+    },
+    {
+      "name": "resk_touch_scroll_speed_standard",
+      "value": "标准"
+    },
+    {
+      "name": "resk_touch_scroll_speed_slow",
+      "value": "慢"
+    },
+    {
+      "name": "resk_touch_scroll_speed_note",
+      "value": "三指上下滑动模拟远端滚轮；双指滚动保持兼容。速度越快，每次滑动产生的滚轮步进越多。"
+    },
+    {
+      "name": "resk_session_fullscreen",
+      "value": "连接时使用全屏布局"
+    },
+    {
+      "name": "resk_session_fullscreen_note",
+      "value": "进入远程会话时隐藏系统栏，断开后自动恢复。"
+    },
+    {
+      "name": "resk_connect",
+      "value": "连接"
+    },
+    {
+      "name": "resk_back_home",
+      "value": "返回首页"
+    },
+    {
+      "name": "resk_disconnect",
+      "value": "断开"
+    },
+    {
+      "name": "resk_refresh",
+      "value": "刷新画面"
+    },
+    {
+      "name": "resk_view_only",
+      "value": "只读"
+    },
+    {
+      "name": "resk_keyboard",
+      "value": "键盘"
+    },
+    {
+      "name": "resk_ime",
+      "value": "输入法"
+    },
+    {
+      "name": "resk_diagnostics",
+      "value": "诊断"
+    },
+    {
+      "name": "resk_security_plain_title",
+      "value": "连接未加密"
+    },
+    {
+      "name": "resk_security_plain_subtitle",
+      "value": "对端没有协商出端到端加密"
+    },
+    {
+      "name": "resk_security_unverified_title",
+      "value": "无法验证对端身份"
+    },
+    {
+      "name": "resk_security_unverified_subtitle",
+      "value": "连接已加密，但直连地址不能证明对端是谁"
+    },
+    {
+      "name": "resk_reclamation_blocked",
+      "value": "引擎未能确认原生视频表面已回收，该表面不可复用。请重启应用后再连接。"
+    },
+    {
+      "name": "resk_terminal_receipt_blocked",
+      "value": "原生视频表面已确认回收，但会话终态记录尚未确认移除。暂不创建新会话，请再次关闭或重试以完成记录确认。"
+    },
+    {
+      "name": "resk_password_release_blocked",
+      "value": "原生视频表面已确认回收，但输入释放状态缺失或仍有未完成释放。保留终态记录，不会发起密码重试。"
+    },
+    {
+      "name": "resk_engine_version",
+      "value": "引擎版本"
+    },
+    {
+      "name": "resk_decoder_summary",
+      "value": "解码能力"
+    },
+    {
+      "name": "resk_ime_note",
+      "value": "开启系统输入法后，文本经 sessionInputString 发送；关闭时按键作为原始键事件（含修饰键）发送。"
+    },
+    {
+      "name": "resk_retry",
+      "value": "重试"
+    },
+    {
+      "name": "resk_section_session",
+      "value": "会话"
+    },
+    {
+      "name": "resk_section_security",
+      "value": "安全"
+    },
+    {
+      "name": "resk_section_input",
+      "value": "输入"
+    },
+    {
+      "name": "resk_section_geometry",
+      "value": "几何"
+    },
+    {
+      "name": "resk_section_rate",
+      "value": "速率"
+    },
+    {
+      "name": "resk_section_engine",
+      "value": "引擎"
+    },
+    {
+      "name": "resk_input_allowed",
+      "value": "输入已授权"
+    },
+    {
+      "name": "resk_input_denied",
+      "value": "对端未授予输入"
+    },
+    {
+      "name": "resk_input_view_only",
+      "value": "本地只读（不发送输入）"
+    },
+    {
+      "name": "resk_input_vnc_no_keyboard",
+      "value": "VNC 会话没有键盘通道"
+    },
+    {
+      "name": "resk_row_phase",
+      "value": "引擎状态"
+    },
+    {
+      "name": "resk_row_peer_platform",
+      "value": "对端系统"
+    },
+    {
+      "name": "resk_row_route",
+      "value": "连接路由"
+    },
+    {
+      "name": "resk_row_encrypted",
+      "value": "端到端加密"
+    },
+    {
+      "name": "resk_row_peer_verified",
+      "value": "对端身份"
+    },
+    {
+      "name": "resk_row_keyboard_grant",
+      "value": "对端输入授权"
+    },
+    {
+      "name": "resk_row_keyboard_channel",
+      "value": "键盘通道"
+    },
+    {
+      "name": "resk_row_view_only",
+      "value": "本地只读"
+    },
+    {
+      "name": "resk_row_remote_geometry",
+      "value": "远端画面"
+    },
+    {
+      "name": "resk_row_surface_pixels",
+      "value": "本机表面像素"
+    },
+    {
+      "name": "resk_row_layout",
+      "value": "本机布局"
+    },
+    {
+      "name": "resk_row_requested_fps",
+      "value": "请求帧率"
+    },
+    {
+      "name": "resk_row_received_rate",
+      "value": "实测接收"
+    },
+    {
+      "name": "resk_row_decoded_rate",
+      "value": "实测解码"
+    },
+    {
+      "name": "resk_row_submitted_rate",
+      "value": "实测提交"
+    },
+    {
+      "name": "resk_row_submit_latency",
+      "value": "提交耗时"
+    },
+    {
+      "name": "resk_row_decode_queue",
+      "value": "解码队列"
+    },
+    {
+      "name": "resk_row_telemetry",
+      "value": "采样状态"
+    },
+    {
+      "name": "resk_row_engine_note",
+      "value": "引擎消息"
+    },
+    {
+      "name": "resk_row_modifier",
+      "value": "本机修饰键"
+    },
+    {
+      "name": "resk_value_yes",
+      "value": "是"
+    },
+    {
+      "name": "resk_value_no",
+      "value": "否"
+    },
+    {
+      "name": "resk_value_unrecorded",
+      "value": "未记录"
+    },
+    {
+      "name": "resk_value_unmeasured",
+      "value": "未测量"
+    },
+    {
+      "name": "resk_rate_note",
+      "value": "接收/解码/提交由引擎累计计数在本机采样窗口内实测；请求帧率只是发给对端的采集请求，三者都不代表本机物理屏幕刷新。"
+    },
+    {
+      "name": "resk_geometry_note",
+      "value": "视频表面像素由 XComponent 上报；本机布局与触摸映射按 vp 计算，触摸点只在本地映射一次为显示内像素，屏幕原点由引擎补上。"
+    },
+    {
+      "name": "resk_view_only_note",
+      "value": "只读只阻止本机发送输入，引擎仍会持续接收并显示画面。"
+    },
+    {
+      "name": "resk_last_failure",
+      "value": "上次连接未完成"
+    },
+    {
+      "name": "resk_failure_hint",
+      "value": "请检查目标、密码与对端许可。设备 ID 还需要明确保存的服务器配置和系统隐私同意；重试沿用上次连接意图，不读取新草稿。"
+    },
+    {
+      "name": "resk_target_required",
+      "value": "请先填写目标地址。"
+    },
+    {
+      "name": "resk_password_required",
+      "value": "请输入对端密码。"
+    },
+    {
+      "name": "resk_password_incorrect",
+      "value": "密码不正确，请重新输入。"
+    },
+    {
+      "name": "resk_phase_preparing",
+      "value": "正在准备会话"
+    },
+    {
+      "name": "resk_phase_connecting",
+      "value": "正在连接对端"
+    },
+    {
+      "name": "resk_phase_authenticating",
+      "value": "正在验证凭据"
+    },
+    {
+      "name": "resk_phase_approval",
+      "value": "等待对端允许"
+    },
+    {
+      "name": "resk_phase_surface",
+      "value": "已授权，等待视频表面打开"
+    },
+    {
+      "name": "resk_phase_streaming",
+      "value": "正在接收画面"
+    },
+    {
+      "name": "resk_phase_closing",
+      "value": "正在断开并等待表面回收"
+    },
+    {
+      "name": "resk_phase_failed",
+      "value": "连接失败"
+    },
+    {
+      "name": "resk_phase_unknown",
+      "value": "未知状态"
+    },
+    {
+      "name": "resk_status_waiting_frames",
+      "value": "已授权；等待解码器提交首帧。"
+    },
+    {
+      "name": "resk_status_streaming",
+      "value": "会话进行中；画面由引擎提交到本机视频表面。"
+    },
+    {
+      "name": "resk_status_approval",
+      "value": "请在对端窗口允许或拒绝本次连接；无需重新输入密码。"
+    },
+    {
+      "name": "resk_security_plain_message",
+      "value": "对端没有协商出端到端加密：本机看到的画面与发送的按键可能被同一网络中的其他设备读取。仍要继续吗？"
+    },
+    {
+      "name": "resk_security_unverified_message",
+      "value": "本次连接已加密，但直连地址无法证明对端身份；请确认该地址就是你控制的设备。仍要继续吗？"
+    },
+    {
+      "name": "resk_security_verified",
+      "value": "已加密并验证对端"
+    },
+    {
+      "name": "resk_row_codec",
+      "value": "编码器"
+    },
+    {
+      "name": "resk_remote_surface",
+      "value": "远端画面：触摸、鼠标或键盘在这里操作"
+    },
+    {
+      "name": "insecure_connection_title",
+      "value": "无法验证端到端加密"
+    },
+    {
+      "name": "insecure_connection_subtitle",
+      "value": "继续连接会绕过服务器身份验证"
+    },
+    {
+      "name": "insecure_connection_detail",
+      "value": "无法验证端到端加密。远程设备可能仍在准备中；如果此问题持续出现，服务器可能不受信任。仍要继续吗？"
+    },
+    {
+      "name": "direct_credentials_title_vnc",
+      "value": "输入 VNC 密码"
+    },
+    {
+      "name": "direct_credentials_title_rdp",
+      "value": "输入 RDP 凭据"
+    },
+    {
+      "name": "direct_credentials_subtitle_vnc",
+      "value": "密码会在连接建立前交给引擎；无密码（None）认证可留空。"
+    },
+    {
+      "name": "direct_credentials_subtitle_rdp",
+      "value": "用户名与密码会在连接建立前交给引擎，不会保存到本机。"
+    },
+    {
+      "name": "direct_credentials_username_placeholder",
+      "value": "用户名（可含 DOMAIN\\ 前缀）"
+    },
+    {
+      "name": "direct_credentials_password_placeholder",
+      "value": "密码"
+    },
+    {
+      "name": "direct_credentials_cancel",
+      "value": "取消"
+    },
+    {
+      "name": "direct_credentials_username_required",
+      "value": "请输入 RDP 用户名（可含 DOMAIN\\ 前缀）"
+    },
+    {
+      "name": "direct_credentials_username_invalid",
+      "value": "RDP 用户名不能包含 @、:、/、? 或 #"
+    },
+    {
+      "name": "direct_credentials_username_too_long",
+      "value": "RDP 用户名不能超过 128 个字符"
+    },
+    {
+      "name": "direct_credentials_submit",
+      "value": "连接"
+    },
+    { "name": "rdp_certificate_title", "value": "无法验证服务器证书" },
+    { "name": "rdp_certificate_changed", "value": "服务器证书已变化" },
+    { "name": "rdp_certificate_changed_help", "value": "可能是服务器更新了证书，也可能有人冒充服务器。请通过可信渠道核对新指纹后再连接。" },
+    { "name": "rdp_certificate_subject", "value": "主体" },
+    { "name": "rdp_certificate_issuer", "value": "颁发者" },
+    { "name": "rdp_certificate_validity", "value": "有效期" },
+    { "name": "rdp_certificate_fingerprint", "value": "SHA-256 指纹" },
+    { "name": "rdp_certificate_old_fingerprint", "value": "原指纹" },
+    { "name": "rdp_certificate_new_fingerprint", "value": "新指纹" },
+    { "name": "rdp_certificate_untrusted", "value": "证书不受系统信任（可能为自签名证书）。" },
+    { "name": "rdp_certificate_name_mismatch", "value": "证书中的服务器名称与连接地址不匹配。" },
+    { "name": "rdp_certificate_expired", "value": "服务器证书已过期。" },
+    { "name": "rdp_certificate_not_yet_valid", "value": "服务器证书尚未生效，请核对本机时间与证书有效期。" },
+    { "name": "rdp_certificate_pin_mismatch", "value": "服务器提供的证书与本机原先记住的指纹不一致，连接已被拒绝。" },
+    { "name": "rdp_certificate_connect_once", "value": "仅本次连接" },
+    { "name": "rdp_certificate_remember", "value": "信任并记住" },
+    { "name": "rdp_certificate_replace", "value": "确认替换并连接" },
+    { "name": "rdp_certificate_replace_help", "value": "再次确认后会替换此主机与端口原先记住的证书。只有在你已核实证书变化时才继续。" },
+    { "name": "rdp_certificate_cancelled", "value": "已拒绝服务器证书，连接失败。" },
+    { "name": "rdp_certificate_waiting", "value": "服务器证书未通过验证，等待你的决定。" },
+    { "name": "rdp_certificate_save_failed", "value": "无法确认已保存证书信任记录。请重试或选择仅本次连接。" },
+    { "name": "rdp_certificate_release_failed", "value": "原连接仍在释放画面，请稍候再试。" },
+    { "name": "rdp_certificate_privacy_cancelled", "value": "隐私或页面状态已变化，已取消 RDP 连接，请重新连接。" }
   ]
 }

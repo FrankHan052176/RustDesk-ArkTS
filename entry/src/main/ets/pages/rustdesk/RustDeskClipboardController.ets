@@ -2,6 +2,7 @@ import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { fileIo, fileUri } from '@kit.CoreFileKit';
 import { image } from '@kit.ImageKit';
+import { isDirectWireKind } from './DirectWireCredentials';
 
 const MAX_CLIPBOARD_FILES = 64;
 const MAX_CLIPBOARD_IMAGE_BYTES = 64 * 1024 * 1024;
@@ -40,15 +41,247 @@ export interface RustDeskClipboardControllerCallbacks {
   sendText: (sessionId: string, content: string) => boolean;
   sendImage: (sessionId: string, image: Uint8Array) => boolean;
   sendFiles: (sessionId: string, paths: Array<string>) => boolean;
+  /**
+   * Whether this session can carry file and image clipboard payloads at all.
+   *
+   * A session that cannot must not have its local files copied into the staging
+   * area or its pixel maps decoded: the send would be refused after the work was
+   * done, while the text on the same clipboard still has to be forwarded.
+   */
+  supportsRichClipboard: (sessionId: string) => boolean;
   log: (label: string, payload: string) => void;
 }
 
-export class RustDeskClipboardController {
+/** Whether a session kind carries clipboard text: a RustDesk session or a direct wire. */
+export function carriesTextClipboard(kind: string): boolean {
+  return kind === 'remote_control' || isDirectWireKind(kind);
+}
+
+/**
+ * Whether a session kind carries file and image clipboard payloads.
+ *
+ * Only the RustDesk Core wire has those channels; a direct VNC/RDP wire carries
+ * text only, so staging a file or decoding a pixel map for one would be work whose
+ * result the peer refuses.
+ */
+export function carriesRichClipboard(kind: string): boolean {
+  return kind === 'remote_control';
+}
+
+/**
+ * Whether the active session's clipboard text may be synchronized right now.
+ *
+ * The operator's own switch gates it, and so does the session's `disable-clipboard`
+ * option: the wire enforces that option as well, so honouring it here keeps the
+ * local read path from copying text the peer would refuse.
+ */
+export function clipboardTextSyncAllowed(
+  syncEnabled: boolean,
+  kind: string,
+  sessionClipboardDisabled: boolean,
+): boolean {
+  return syncEnabled && carriesTextClipboard(kind) && !sessionClipboardDisabled;
+}
+
+/**
+ * Whether a peer payload says the remote clipboard is now empty.
+ *
+ * An empty text is a clear, not a text: the peer removed what it held, so the
+ * local clipboard must not be left holding it. Absent text is no text at all,
+ * which is what an image-only or file-only payload looks like.
+ */
+export function isRemoteClipboardClear(payload: RustDeskRemoteClipboardPayload): boolean {
+  return payload.text !== undefined && payload.text.length === 0
+    && payload.html === undefined
+    && payload.image === undefined
+    && (payload.files === undefined || payload.files.length === 0);
+}
+
+/**
+ * The identity of a file clipboard payload: the URIs it publishes, in order.
+ *
+ * It is what both sides of an echo comparison are built from, because the pasteboard
+ * hands a published file payload back as its URI records.
+ */
+export function fileClipboardSignature(uris: Array<string>): string {
+  return `files:${uris.join('\n')}`;
+}
+
+/**
+ * Whether a locally read file payload is the one this session already applied or sent.
+ *
+ * The peer's files arrive as the URI records its own apply published, and our sends
+ * come back through the pasteboard update listener; neither may be staged and sent
+ * again.
+ */
+export function isClipboardFileEcho(
+  uris: Array<string>,
+  lastRemoteFileSignature: string | undefined,
+  lastLocalSignature: string | undefined,
+): boolean {
+  const signature = fileClipboardSignature(uris);
+  return signature === lastRemoteFileSignature || signature === lastLocalSignature;
+}
+
+/**
+ * Whether locally read text is text this session already applied or sent.
+ *
+ * The peer's own text arrives back through the local clipboard once it is applied,
+ * and our own sends come back through the pasteboard update listener. The applied
+ * text is recognized by its content, while our own sends are recognized by the
+ * signature they were sent under, because a clipboard read may hand back a
+ * normalized form of what was written.
+ */
+export function isClipboardTextEcho(
+  content: string,
+  lastRemoteText: string | undefined,
+  lastLocalSignature: string | undefined,
+): boolean {
+  return content === lastRemoteText || `text:${content}` === lastLocalSignature;
+}
+
+/**
+ * The clipboard surface the controller drives.
+ *
+ * It is a port so the controller's ordering rules — a local read overtaken by a
+ * peer write, a clear queued across a lifecycle boundary, a peer update that
+ * supersedes the local send history — can be exercised against a pasteboard a test
+ * resolves on demand. Production passes `RustDeskSystemClipboardHost`, which drives
+ * the system pasteboard and answers the read permission from the ability context.
+ */
+export interface RustDeskClipboardHost {
+  readonly filesDir: string;
+  readonly cacheDir: string;
+  onUpdate(listener: () => void): void;
+  offUpdate(listener: () => void): void;
+  hasData(): Promise<boolean>;
+  hasDataType(mimeType: string): boolean;
+  getData(): Promise<pasteboard.PasteData>;
+  /**
+   * Writes the data into the system pasteboard synchronously.
+   *
+   * The commit is synchronous on purpose: the caller has already done its
+   * potentially asynchronous preparation and validated admission, and a commit that
+   * could still be outstanding when a lifecycle boundary arrives could not be
+   * fenced by any later check.
+   */
+  setDataSync(data: pasteboard.PasteData): void;
+  /** Empties the system pasteboard synchronously, with the same reasoning. */
+  clearDataSync(): void;
+  /** Whether the local clipboard may be read, requesting the permission once. */
+  ensureReadAccess(): Promise<boolean>;
+  /** Whether it may be read right now, without asking for the permission. */
+  hasReadAccess(): Promise<boolean>;
+  /** Forgets the read-access decision so the next read checks it again. */
+  resetReadAccess(): void;
+}
+
+/** The system pasteboard and the ability context behind it. */
+export class RustDeskSystemClipboardHost implements RustDeskClipboardHost {
+  readonly filesDir: string;
+  readonly cacheDir: string;
   private readonly context: common.UIAbilityContext;
-  private readonly callbacks: RustDeskClipboardControllerCallbacks;
+  private readonly log: (label: string, payload: string) => void;
   private readonly systemPasteboard: pasteboard.SystemPasteboard = pasteboard.getSystemPasteboard();
   private readonly atManager: abilityAccessCtrl.AtManager = abilityAccessCtrl.createAtManager();
   private readonly permissions: Permissions[] = ['ohos.permission.READ_PASTEBOARD'];
+  private permissionRequestAttempted: boolean = false;
+  private permissionGranted: boolean = false;
+
+  constructor(context: common.UIAbilityContext, log: (label: string, payload: string) => void) {
+    this.context = context;
+    this.log = log;
+    this.filesDir = context.filesDir;
+    this.cacheDir = context.cacheDir;
+  }
+
+  onUpdate(listener: () => void): void {
+    this.systemPasteboard.on('update', listener);
+  }
+
+  offUpdate(listener: () => void): void {
+    this.systemPasteboard.off('update', listener);
+  }
+
+  hasData(): Promise<boolean> {
+    return this.systemPasteboard.hasData();
+  }
+
+  hasDataType(mimeType: string): boolean {
+    return this.systemPasteboard.hasDataType(mimeType);
+  }
+
+  getData(): Promise<pasteboard.PasteData> {
+    return this.systemPasteboard.getData();
+  }
+
+  setDataSync(data: pasteboard.PasteData): void {
+    this.systemPasteboard.setDataSync(data);
+  }
+
+  clearDataSync(): void {
+    this.systemPasteboard.clearDataSync();
+  }
+
+  async ensureReadAccess(): Promise<boolean> {
+    if (this.permissionGranted) {
+      return true;
+    }
+    const permission = this.permissions[0];
+    const tokenId = this.context.applicationInfo.accessTokenId;
+    try {
+      const current = await this.atManager.checkAccessToken(tokenId, permission);
+      if (current === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED) {
+        this.permissionGranted = true;
+        return true;
+      }
+    } catch (error) {
+      this.log('clipboard_permission', `status check failed=${String(error)}`);
+    }
+    if (this.permissionRequestAttempted) {
+      return false;
+    }
+    this.permissionRequestAttempted = true;
+    try {
+      await this.atManager.requestPermissionsFromUser(this.context, this.permissions);
+      const updated = await this.atManager.checkAccessToken(tokenId, permission);
+      this.permissionGranted = updated === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
+    } catch (error) {
+      this.log('clipboard_permission', `request failed=${String(error)}`);
+      this.permissionGranted = false;
+    }
+    if (!this.permissionGranted) {
+      this.log('clipboard_permission', 'READ_PASTEBOARD was not granted');
+    }
+    return this.permissionGranted;
+  }
+
+  async hasReadAccess(): Promise<boolean> {
+    if (this.permissionGranted) {
+      return true;
+    }
+    try {
+      const status = await this.atManager.checkAccessToken(
+        this.context.applicationInfo.accessTokenId,
+        this.permissions[0],
+      );
+      this.permissionGranted = status === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
+    } catch (error) {
+      this.log('clipboard_permission', `status check failed=${String(error)}`);
+      this.permissionGranted = false;
+    }
+    return this.permissionGranted;
+  }
+
+  resetReadAccess(): void {
+    this.permissionGranted = false;
+    this.permissionRequestAttempted = false;
+  }
+}
+
+export class RustDeskClipboardController {
+  private readonly host: RustDeskClipboardHost;
+  private readonly callbacks: RustDeskClipboardControllerCallbacks;
   private active: boolean = false;
   private sessionId: string = '';
   private lifecycleGeneration: number = 0;
@@ -56,13 +289,19 @@ export class RustDeskClipboardController {
   private readAgain: boolean = false;
   private remoteWriteInFlight: boolean = false;
   private readonly remoteWriteIdleWaiters: Array<() => void> = [];
-  private permissionRequestAttempted: boolean = false;
-  private permissionGranted: boolean = false;
+  /**
+   * How many peer clipboard applies have started.
+   *
+   * The session epoch is not enough to judge a local read: a peer apply in the same
+   * session supersedes a snapshot taken before it, so a read carries the revision it
+   * started under and is dropped when a peer apply began meanwhile.
+   */
+  private peerApplyRevision: number = 0;
   private pendingRemoteClipboard: RustDeskRemoteClipboardPayload | undefined = undefined;
   private pendingRemoteSessionId: string = '';
   private lastRemoteText: string | undefined = undefined;
   private lastRemoteImageSignature: string | undefined = undefined;
-  private lastRemoteChangeCount: number = -1;
+  private lastRemoteFileSignature: string | undefined = undefined;
   private lastLocalSignature: string | undefined = undefined;
   private stagingGeneration: number = 0;
   private readonly stagingRoots: Array<string> = [];
@@ -70,7 +309,15 @@ export class RustDeskClipboardController {
   private retainedClosedIncomingRoots: Array<string> = [];
   private incomingRoot: string = '';
   private readonly onPasteboardUpdate = (): void => {
-    if (!this.active || this.remoteWriteInFlight) {
+    if (!this.active) {
+      return;
+    }
+    if (this.remoteWriteInFlight) {
+      // The pasteboard changed while a peer payload was being applied: the user may
+      // have copied something of their own in that window, and the write is about to
+      // overwrite it. The update is remembered so the completion re-reads the
+      // pasteboard instead of treating the change as this write's own echo.
+      this.readAgain = true;
       return;
     }
     void this.cleanupRetainedIncomingRoots().then((): void => {
@@ -78,8 +325,8 @@ export class RustDeskClipboardController {
     });
   };
 
-  constructor(context: common.UIAbilityContext, callbacks: RustDeskClipboardControllerCallbacks) {
-    this.context = context;
+  constructor(host: RustDeskClipboardHost, callbacks: RustDeskClipboardControllerCallbacks) {
+    this.host = host;
     this.callbacks = callbacks;
   }
 
@@ -101,6 +348,7 @@ export class RustDeskClipboardController {
       }
       this.lastRemoteText = undefined;
       this.lastRemoteImageSignature = undefined;
+      this.lastRemoteFileSignature = undefined;
       this.lastLocalSignature = undefined;
       this.cancelActiveCopies();
     }
@@ -108,7 +356,7 @@ export class RustDeskClipboardController {
       this.stopListener();
     }
     try {
-      this.systemPasteboard.on('update', this.onPasteboardUpdate);
+      this.host.onUpdate(this.onPasteboardUpdate);
       this.active = true;
     } catch (error) {
       this.callbacks.log('clipboard_listener', `start failed=${String(error)}`);
@@ -131,9 +379,14 @@ export class RustDeskClipboardController {
       this.stopListener();
     }
     this.cancelActiveCopies();
+    // Queued peer work belongs to the lifecycle that admitted it. It is dropped
+    // here rather than carried into the next start, where it would be applied under
+    // a fresh generation and could overwrite what the user copied meanwhile: a
+    // clear queued before a pause must not erase a newer local clipboard on resume.
+    this.pendingRemoteClipboard = undefined;
+    this.pendingRemoteSessionId = '';
     this.readAgain = false;
-    this.permissionGranted = false;
-    this.permissionRequestAttempted = false;
+    this.host.resetReadAccess();
   }
 
   async stopAndDrainRemoteWrite(): Promise<void> {
@@ -148,7 +401,7 @@ export class RustDeskClipboardController {
 
   private stopListener(): void {
     try {
-      this.systemPasteboard.off('update', this.onPasteboardUpdate);
+      this.host.offUpdate(this.onPasteboardUpdate);
     } catch (error) {
       this.callbacks.log('clipboard_listener', `stop failed=${String(error)}`);
     }
@@ -160,10 +413,9 @@ export class RustDeskClipboardController {
     this.pendingRemoteSessionId = '';
     this.lastRemoteText = undefined;
     this.lastRemoteImageSignature = undefined;
-    this.lastRemoteChangeCount = -1;
+    this.lastRemoteFileSignature = undefined;
     this.lastLocalSignature = undefined;
-    this.permissionRequestAttempted = false;
-    this.permissionGranted = false;
+    this.host.resetReadAccess();
     this.sessionId = '';
     this.incomingRoot = '';
     this.cleanupAllStagingRoots();
@@ -177,10 +429,12 @@ export class RustDeskClipboardController {
     if (sessionId.length === 0) {
       return;
     }
-    this.lastRemoteText = payload.text;
-    this.lastRemoteImageSignature = payload.image === undefined
-      ? undefined
-      : this.byteSignature(payload.image.bytes);
+    // The echo identity of a peer payload is established when it is committed, not
+    // when it is queued: a queued payload can be dropped at a lifecycle boundary or
+    // survive a session switch, and only the payload that actually reaches the
+    // pasteboard may be recognized as the peer's own. What is recorded here is only
+    // that the peer moved on, so the local send history is no longer current.
+    this.lastLocalSignature = undefined;
     this.pendingRemoteClipboard = payload;
     this.pendingRemoteSessionId = sessionId;
     this.flushRemoteClipboard();
@@ -188,7 +442,7 @@ export class RustDeskClipboardController {
 
   incomingFileRoot(sessionId: string): string {
     const safeSessionId = sessionId.replace(/[^A-Za-z0-9_-]/g, '_');
-    const parent = `${this.context.filesDir}/rustdesk-clipboard-in`;
+    const parent = `${this.host.filesDir}/rustdesk-clipboard-in`;
     this.incomingRoot = `${parent}/${safeSessionId}`;
     this.cleanupOldIncomingRoots(parent, this.incomingRoot);
     return this.incomingRoot;
@@ -202,18 +456,15 @@ export class RustDeskClipboardController {
     if (safeSessionId.length === 0) {
       return;
     }
-    const parent = `${this.context.filesDir}/rustdesk-clipboard-in`;
+    const parent = `${this.host.filesDir}/rustdesk-clipboard-in`;
     const root = `${parent}/${safeSessionId}`;
     try {
-      const permission = this.permissions[0];
-      const tokenId = this.context.applicationInfo.accessTokenId;
-      const status = await this.atManager.checkAccessToken(tokenId, permission);
-      if (status !== abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED) {
+      if (!await this.host.hasReadAccess()) {
         return;
       }
-      if (await this.systemPasteboard.hasData()
-        && this.systemPasteboard.hasDataType(pasteboard.MIMETYPE_TEXT_URI)) {
-        const data = await this.systemPasteboard.getData();
+      if (await this.host.hasData()
+        && this.host.hasDataType(pasteboard.MIMETYPE_TEXT_URI)) {
+        const data = await this.host.getData();
         const uris = this.collectDefaultUris(data);
         const rootUri = fileUri.getUriFromPath(root);
         for (const uri of uris) {
@@ -244,16 +495,13 @@ export class RustDeskClipboardController {
       return;
     }
     try {
-      const permission = this.permissions[0];
-      const tokenId = this.context.applicationInfo.accessTokenId;
-      const status = await this.atManager.checkAccessToken(tokenId, permission);
-      if (status !== abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED) {
+      if (!await this.host.hasReadAccess()) {
         return;
       }
       const publishedUris: Array<string> = [];
-      if (await this.systemPasteboard.hasData()
-        && this.systemPasteboard.hasDataType(pasteboard.MIMETYPE_TEXT_URI)) {
-        const data = await this.systemPasteboard.getData();
+      if (await this.host.hasData()
+        && this.host.hasDataType(pasteboard.MIMETYPE_TEXT_URI)) {
+        const data = await this.host.getData();
         publishedUris.push(...this.collectDefaultUris(data));
       }
       const remaining: Array<string> = [];
@@ -323,8 +571,25 @@ export class RustDeskClipboardController {
     this.pendingRemoteClipboard = undefined;
     this.pendingRemoteSessionId = '';
     this.remoteWriteInFlight = true;
+    // This is the payload the peer's clipboard now holds, so its echo identity is
+    // recorded here: after any session-switch reset, and before its own pasteboard
+    // update can be reconciled and read back as a local copy.
+    this.lastRemoteText = payload.text;
+    this.lastRemoteImageSignature = payload.image === undefined
+      ? undefined
+      : this.byteSignature(payload.image.bytes);
+    this.lastRemoteFileSignature = payload.files !== undefined && payload.files.length > 0
+      ? fileClipboardSignature(this.publishedFileUris(payload.files))
+      : undefined;
+    // This apply supersedes any local read that started before it: the snapshot such
+    // a read is holding is older than the peer's state.
+    this.peerApplyRevision += 1;
     let pixelMap: image.PixelMap | undefined = undefined;
     try {
+      if (isRemoteClipboardClear(payload)) {
+        await this.applyRemoteClipboardClear(generation, sessionId);
+        return;
+      }
       let data: pasteboard.PasteData | undefined = undefined;
       if (payload.files !== undefined && payload.files.length > 0) {
         data = this.createFilePasteData(payload.files);
@@ -355,10 +620,13 @@ export class RustDeskClipboardController {
       const property = data.getProperty();
       property.shareOption = pasteboard.ShareOption.LOCALDEVICE;
       data.setProperty(property);
-      await this.systemPasteboard.setData(data);
-      // The pasteboard is process-global. Suppress this write even if the user
-      // switched tabs while setData was awaiting completion.
-      this.lastRemoteChangeCount = this.systemPasteboard.getChangeCount();
+      // Admission is checked before the write, not only after it, and the commit is
+      // synchronous: no await separates the check from the mutation, so a stop or a
+      // session change cannot leave a pasteboard write outstanding behind it.
+      if (!this.isCurrentSession(generation, sessionId)) {
+        return;
+      }
+      this.host.setDataSync(data);
       await this.cleanupRetainedIncomingRoots();
       if (!this.isCurrentSession(generation, sessionId)) {
         return;
@@ -391,6 +659,44 @@ export class RustDeskClipboardController {
         this.readAndSendLocalClipboard();
       }
     }
+  }
+
+  /**
+   * Applies a remote clear to the system pasteboard.
+   *
+   * `clearDataSync` is the pasteboard's own clear; an empty text record is a
+   * different operation and is not documented to be accepted. The retained file
+   * roots are re-examined exactly as after a write, so a root the peer no longer
+   * publishes is not kept alive by the clear.
+   */
+  private async applyRemoteClipboardClear(generation: number, sessionId: string): Promise<void> {
+    // A clear cannot be undone, so admission is checked before it runs rather than
+    // after, and the clear is committed synchronously in the same turn: no await
+    // separates the check from the mutation, so a stop cannot be overtaken by a
+    // clear that was already submitted.
+    if (!this.isCurrentSession(generation, sessionId)) {
+      return;
+    }
+    this.host.clearDataSync();
+    await this.cleanupRetainedIncomingRoots();
+    if (!this.isCurrentSession(generation, sessionId)) {
+      return;
+    }
+    this.callbacks.log('clipboard_remote', 'applied clear');
+  }
+
+  /**
+   * The URIs a committed file payload publishes, in order.
+   *
+   * The pasteboard hands these same URIs back on the next read, so they are the
+   * identity the echo comparison is built from.
+   */
+  private publishedFileUris(paths: Array<string>): Array<string> {
+    const uris: Array<string> = [];
+    for (let index = 0; index < paths.length; index += 1) {
+      uris.push(fileUri.getUriFromPath(paths[index]));
+    }
+    return uris;
   }
 
   private createFilePasteData(paths: Array<string>): pasteboard.PasteData {
@@ -474,44 +780,49 @@ export class RustDeskClipboardController {
     this.readInFlight = true;
     const generation = this.lifecycleGeneration;
     const sessionId = this.sessionId;
+    const applyRevision = this.peerApplyRevision;
     try {
-      if (!await this.systemPasteboard.hasData()) {
+      if (!await this.host.hasData()) {
         return;
       }
-      if (!this.isCurrentSession(generation, sessionId)) {
+      if (!this.isLocalReadCurrent(generation, sessionId, applyRevision)) {
         return;
       }
-      if (!await this.ensureReadPermission()) {
+      if (!await this.host.ensureReadAccess()) {
         return;
       }
-      if (!this.isCurrentSession(generation, sessionId)) {
+      if (!this.isLocalReadCurrent(generation, sessionId, applyRevision)) {
         return;
       }
-      const hasSupportedType = this.systemPasteboard.hasDataType(pasteboard.MIMETYPE_TEXT_URI)
-        || this.systemPasteboard.hasDataType(pasteboard.MIMETYPE_PIXELMAP)
-        || this.systemPasteboard.hasDataType(pasteboard.MIMETYPE_TEXT_HTML)
-        || this.systemPasteboard.hasDataType(pasteboard.MIMETYPE_TEXT_PLAIN);
+      const hasSupportedType = this.host.hasDataType(pasteboard.MIMETYPE_TEXT_URI)
+        || this.host.hasDataType(pasteboard.MIMETYPE_PIXELMAP)
+        || this.host.hasDataType(pasteboard.MIMETYPE_TEXT_HTML)
+        || this.host.hasDataType(pasteboard.MIMETYPE_TEXT_PLAIN);
       if (!hasSupportedType) {
         return;
       }
-      if (this.systemPasteboard.getChangeCount() === this.lastRemoteChangeCount) {
+      // There is deliberately no change-count short circuit here: the system count is
+      // global and belongs to whichever writer produced it (this session, another
+      // application, or the pasteboard expiring), so it can neither prove that this
+      // session wrote the content nor prove that the content is an echo. Echo is
+      // judged by the content itself, in the send helpers below.
+      const data = await this.host.getData();
+      if (!this.isLocalReadCurrent(generation, sessionId, applyRevision) || data.getRecordCount() === 0) {
         return;
       }
-      const data = await this.systemPasteboard.getData();
-      if (!this.isCurrentSession(generation, sessionId) || data.getRecordCount() === 0) {
-        return;
+      if (this.callbacks.supportsRichClipboard(sessionId)) {
+        const uris = this.collectDefaultUris(data);
+        if (uris.length > 0) {
+          await this.sendLocalFiles(uris, generation, sessionId, applyRevision);
+          return;
+        }
+        const pixelMap = this.firstDefaultPixelMap(data);
+        if (pixelMap !== undefined) {
+          await this.sendLocalImage(pixelMap, generation, sessionId, applyRevision);
+          return;
+        }
       }
-      const uris = this.collectDefaultUris(data);
-      if (uris.length > 0) {
-        await this.sendLocalFiles(uris, generation, sessionId);
-        return;
-      }
-      const pixelMap = this.firstDefaultPixelMap(data);
-      if (pixelMap !== undefined) {
-        await this.sendLocalImage(pixelMap, generation, sessionId);
-        return;
-      }
-      this.sendLocalText(data, generation, sessionId);
+      this.sendLocalText(data, generation, sessionId, applyRevision);
     } catch (error) {
       this.callbacks.log('clipboard_local', `failed=${String(error)}`);
     } finally {
@@ -521,6 +832,19 @@ export class RustDeskClipboardController {
         this.readAndSendLocalClipboard();
       }
     }
+  }
+
+  /**
+   * Whether a local read may still hand its snapshot to the peer.
+   *
+   * The session epoch alone is not enough: a peer clipboard apply in the same
+   * session supersedes a snapshot taken before it, so the apply revision the read
+   * started under is part of the check. It is revalidated after every await and
+   * immediately before the send, because the read's own awaits are long enough for
+   * a peer update to be applied meanwhile.
+   */
+  private isLocalReadCurrent(generation: number, sessionId: string, applyRevision: number): boolean {
+    return this.isCurrentSession(generation, sessionId) && applyRevision === this.peerApplyRevision;
   }
 
   private collectDefaultUris(data: pasteboard.PasteData): Array<string> {
@@ -551,8 +875,9 @@ export class RustDeskClipboardController {
     data: pasteboard.PasteData,
     generation: number,
     sessionId: string,
+    applyRevision: number,
   ): void {
-    if (!this.isCurrentSession(generation, sessionId)) {
+    if (!this.isLocalReadCurrent(generation, sessionId, applyRevision)) {
       return;
     }
     for (let index = 0; index < data.getRecordCount(); index += 1) {
@@ -565,7 +890,7 @@ export class RustDeskClipboardController {
         ? record.plainText
         : record.toPlainText();
       const signature = `text:${content}`;
-      if (content === this.lastRemoteText || signature === this.lastLocalSignature) {
+      if (isClipboardTextEcho(content, this.lastRemoteText, this.lastLocalSignature)) {
         return;
       }
       if (this.callbacks.sendText(sessionId, content)) {
@@ -580,11 +905,12 @@ export class RustDeskClipboardController {
     pixelMap: image.PixelMap,
     generation: number,
     sessionId: string,
+    applyRevision: number,
   ): Promise<void> {
     const packer = image.createImagePacker();
     try {
       const packed = await packer.packToData(pixelMap, { format: 'image/png', quality: 100 });
-      if (!this.isCurrentSession(generation, sessionId)) {
+      if (!this.isLocalReadCurrent(generation, sessionId, applyRevision)) {
         return;
       }
       const bytes = new Uint8Array(packed);
@@ -605,13 +931,16 @@ export class RustDeskClipboardController {
     uris: Array<string>,
     generation: number,
     sessionId: string,
+    applyRevision: number,
   ): Promise<void> {
-    const signature = `files:${uris.join('\n')}`;
-    if (signature === this.lastLocalSignature) {
+    // The peer's own files come back as the URI records its apply published, so they
+    // are recognized before anything is staged or copied out.
+    if (isClipboardFileEcho(uris, this.lastRemoteFileSignature, this.lastLocalSignature)) {
       return;
     }
+    const signature = fileClipboardSignature(uris);
     const paths = await this.stageFileUris(uris, generation, sessionId);
-    if (!this.isCurrentSession(generation, sessionId) || paths.length === 0) {
+    if (!this.isLocalReadCurrent(generation, sessionId, applyRevision) || paths.length === 0) {
       return;
     }
     if (this.callbacks.sendFiles(sessionId, paths)) {
@@ -626,7 +955,7 @@ export class RustDeskClipboardController {
     sessionId: string,
   ): Promise<Array<string>> {
     this.stagingGeneration += 1;
-    const root = `${this.context.cacheDir}/rustdesk-clipboard-out/${Date.now()}-${this.stagingGeneration}`;
+    const root = `${this.host.cacheDir}/rustdesk-clipboard-out/${Date.now()}-${this.stagingGeneration}`;
     fileIo.mkdirSync(root, true);
     const paths: Array<string> = [];
     const stagedNames: Array<string> = [];
@@ -813,38 +1142,5 @@ export class RustDeskClipboardController {
       hash = Math.imul(hash ^ bytes[index], 16777619);
     }
     return `${bytes.length}:${hash >>> 0}`;
-  }
-
-  private async ensureReadPermission(): Promise<boolean> {
-    if (this.permissionGranted) {
-      return true;
-    }
-    const permission = this.permissions[0];
-    const tokenId = this.context.applicationInfo.accessTokenId;
-    try {
-      const current = await this.atManager.checkAccessToken(tokenId, permission);
-      if (current === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED) {
-        this.permissionGranted = true;
-        return true;
-      }
-    } catch (error) {
-      this.callbacks.log('clipboard_permission', `status check failed=${String(error)}`);
-    }
-    if (this.permissionRequestAttempted) {
-      return false;
-    }
-    this.permissionRequestAttempted = true;
-    try {
-      await this.atManager.requestPermissionsFromUser(this.context, this.permissions);
-      const updated = await this.atManager.checkAccessToken(tokenId, permission);
-      this.permissionGranted = updated === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
-    } catch (error) {
-      this.callbacks.log('clipboard_permission', `request failed=${String(error)}`);
-      this.permissionGranted = false;
-    }
-    if (!this.permissionGranted) {
-      this.callbacks.log('clipboard_permission', 'READ_PASTEBOARD was not granted');
-    }
-    return this.permissionGranted;
   }
 }

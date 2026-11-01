@@ -1,6 +1,6 @@
 {
   "modelVersion": "6.1.0",
-  "description": "RustDesk HarmonyOS ArkTS host app.",
+  "description": "Resk HarmonyOS frontend consuming the rd-engine HAR.",
   "dependencies": {
     "rustdesk-ohrs": "file:./rustdesk-ohrs.har"
   },

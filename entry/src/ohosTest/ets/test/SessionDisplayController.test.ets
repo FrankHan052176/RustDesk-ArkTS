@@ -1,9 +1,9 @@
 import { describe, expect, it } from '@ohos/hypium';
 import { NativeSessionBridge } from '../../../main/ets/pages/rustdesk/NativeSessionBridge';
 import { RemoteAudioState, SessionStartOptions } from '../../../main/ets/pages/rustdesk/RustDeskSessionTypes';
-import { SessionDisplayController } from '../../../main/ets/pages/rustdesk/SessionDisplayController';
+import { DEFAULT_REFRESH_RATE, matchesResolutionRefusal, SessionDisplayController } from '../../../main/ets/pages/rustdesk/SessionDisplayController';
 import { RustDeskViewportModel } from '../../../main/ets/pages/rustdesk/RustDeskViewportModel';
-import { ActionResponse, PeerDisplayInfo, ResolutionInfo } from '../../../main/ets/pages/rustdesk/RustDeskTypes';
+import { ActionResponse, NativeEvent, PeerDisplayInfo, ResolutionInfo } from '../../../main/ets/pages/rustdesk/RustDeskTypes';
 
 class RecordingNativeSessionBridge implements NativeSessionBridge {
   commands: string[] = [];
@@ -58,8 +58,9 @@ class RecordingNativeSessionBridge implements NativeSessionBridge {
     return this.ok('set_image_quality');
   }
 
-  setCustomImageQuality(_sessionId: string, quality: number): void {
+  setCustomImageQuality(_sessionId: string, quality: number): ActionResponse {
     this.commands.push(`custom-quality:${quality}`);
+    return this.ok('set_custom_image_quality');
   }
 
   setCustomFps(_sessionId: string, fps: number): ActionResponse {
@@ -67,9 +68,8 @@ class RecordingNativeSessionBridge implements NativeSessionBridge {
     return this.ok('set_custom_fps');
   }
 
-  sendChat(_sessionId: string, text: string): ActionResponse {
-    this.commands.push(`chat:${text}`);
-    return this.ok('send_chat');
+  getFrameRateSnapshot(_sessionId: string): string {
+    return '{}';
   }
 
   sendClipboard(_sessionId: string, _content: string): ActionResponse {
@@ -104,8 +104,16 @@ class RecordingNativeSessionBridge implements NativeSessionBridge {
     return this.ok('start_session');
   }
 
-  closeSession(_sessionId: string): ActionResponse {
+  async closeSession(_sessionId: string): Promise<ActionResponse> {
     return this.ok('close_session');
+  }
+
+  surfaceDestroyed(_sessionId: string, _surfaceId: string, _lifecycleEpoch: string): ActionResponse {
+    return this.ok('surface_destroyed');
+  }
+
+  acknowledgeClose(_sessionId: string, _lifecycleEpoch: string): ActionResponse {
+    return this.ok('acknowledge_close');
   }
 
   setViewOnly(_sessionId: string, _enabled: boolean): ActionResponse {
@@ -116,7 +124,9 @@ class RecordingNativeSessionBridge implements NativeSessionBridge {
     return this.ok('login');
   }
 
-  setCommon(_sessionId: string, _key: string, _value: string): void {}
+  setCommon(_sessionId: string, _key: string, _value: string): ActionResponse {
+    return this.ok('set_common');
+  }
 
   pollEvents(_sessionId: string, _limit: number): ActionResponse {
     return this.ok('poll_events');
@@ -147,7 +157,9 @@ class RecordingNativeSessionBridge implements NativeSessionBridge {
     return false;
   }
 
-  toggleOption(_sessionId: string, _option: string): void {}
+  toggleOption(_sessionId: string, _option: string): ActionResponse {
+    return this.ok('toggle_option');
+  }
 
   getRemoteAudioState(_sessionId: string): RemoteAudioState {
     return {
@@ -189,6 +201,41 @@ function createController(bridge: RecordingNativeSessionBridge): SessionDisplayC
 
 export default function sessionDisplayControllerTest(): void {
   describe('SessionDisplayControllerTest', () => {
+    it('matches direct string-valued refusals only to the pending display and size', 0, () => {
+      const refused: NativeEvent = {
+        name: 'resolution_refused', display: '0', width: '1280', height: '720', message: 'Resize refused',
+      };
+      expect(matchesResolutionRefusal(refused, 0, 1280, 720)).assertTrue();
+      expect(matchesResolutionRefusal(refused, 1, 1280, 720)).assertFalse();
+      expect(matchesResolutionRefusal(refused, 0, 1920, 1080)).assertFalse();
+      expect(matchesResolutionRefusal(refused, -1, 0, 0)).assertFalse();
+      expect(matchesResolutionRefusal({ name: 'resolution_refused' }, 0, 1280, 720)).assertFalse();
+      expect(matchesResolutionRefusal({ name: 'resolution_refused', display: '0', width: 'bad', height: '720' },
+        0, 1280, 720)).assertFalse();
+      expect(matchesResolutionRefusal({ name: 'switch_display', display: 0, width: '1280', height: '720' },
+        0, 1280, 720)).assertFalse();
+    });
+
+    it('keeps HiDPI initialization on the reported display without changing mode or multiplying scale', 0, () => {
+      const bridge = new RecordingNativeSessionBridge();
+      const viewport = new RustDeskViewportModel();
+      viewport.setViewportSize(1280, 800);
+      const controller = new SessionDisplayController(viewport, bridge, () => {}, () => {});
+      const peerDisplays: PeerDisplayInfo[] = [
+        { width: 7680, height: 4320, x: 0, y: 0, scaled_width: 3840, scaled_height: 2160 },
+        { width: 5120, height: 2880, x: 7680, y: 0, scaled_width: 2560, scaled_height: 1440 },
+      ];
+      controller.updatePeerInfo(peerDisplays, 1, resolutions(), 'Mac OS');
+      expect(controller.getCurrentDisplayIndex()).assertEqual(1);
+      expect(bridge.commands.length).assertEqual(0);
+      expect(viewport.setSubmittedVideoSize(1, 2560, 1440)).assertTrue();
+      expect(controller.getDisplays()[1].width).assertEqual(5120);
+      expect(controller.getDisplays()[1].scaled_width).assertEqual(2560);
+      expect(controller.selectDisplay('session-hidpi', 1)).assertTrue();
+      expect(bridge.commands.join(',')).assertEqual('switch:1,size:1:5120:2880,refresh:1');
+      expect(viewport.getSubmittedVideoSize() === undefined).assertTrue();
+    });
+
     it('selecting a display sends switch size refresh in order', 0, () => {
       const bridge = new RecordingNativeSessionBridge();
       const controller = createController(bridge);
@@ -254,41 +301,38 @@ export default function sessionDisplayControllerTest(): void {
       expect(bridge.commands.length).assertEqual(0);
     });
 
-    it('applies custom quality in native order with valid defaults and bounds', 0, () => {
+    it('asks the peer for a capture rate and remembers the one it accepted', 0, () => {
       const bridge = new RecordingNativeSessionBridge();
       const controller = createController(bridge);
 
-      expect(controller.applyQuality('session-1', 'custom')).assertTrue();
-      expect(bridge.commands.join(',')).assertEqual('custom-quality:50,custom-fps:30');
-      expect(controller.getImageQuality()).assertEqual('custom');
-      expect(controller.getCustomImageQuality()).assertEqual(50);
-      expect(controller.getCustomFps()).assertEqual(30);
+      expect(controller.applyRefreshRate('session-1', 120)).assertTrue();
+      expect(bridge.commands.join(',')).assertEqual('custom-fps:120');
+      expect(controller.getRefreshRate()).assertEqual(120);
 
       bridge.commands = [];
-      expect(controller.applyQuality('session-1', 'custom', 10, 5)).assertTrue();
-      expect(bridge.commands.join(',')).assertEqual('custom-quality:10,custom-fps:5');
-      expect(controller.applyQuality('session-1', 'custom', 2001, 5)).assertFalse();
-      expect(controller.applyQuality('session-1', 'custom', 10, 121)).assertFalse();
+      // 0 is below the peer's bound and 241 above it; neither may be sent.
+      expect(controller.applyRefreshRate('session-1', 0)).assertFalse();
+      expect(controller.applyRefreshRate('session-1', 241)).assertFalse();
+      expect(bridge.commands.length).assertEqual(0);
+      expect(controller.getRefreshRate()).assertEqual(120);
     });
 
-    it('can change resolution for Windows and presets do not emit custom fps', 0, () => {
+    it('can change resolution for Windows', 0, () => {
       const bridge = new RecordingNativeSessionBridge();
       const controller = createController(bridge);
 
       expect(controller.canChangeResolution('Windows')).assertTrue();
-      expect(controller.applyQuality('session-1', 'low', 500, 60)).assertTrue();
-      expect(bridge.commands.join(',')).assertEqual('quality:low');
     });
 
-    it('restores per-session quality state without sending native commands', 0, () => {
+    it('restores a per-session capture rate without sending native commands', 0, () => {
       const bridge = new RecordingNativeSessionBridge();
       const controller = createController(bridge);
 
-      controller.restoreQualityState('custom', 125, 48);
-
-      expect(controller.getImageQuality()).assertEqual('custom');
-      expect(controller.getCustomImageQuality()).assertEqual(125);
-      expect(controller.getCustomFps()).assertEqual(48);
+      controller.restoreRefreshRate(90);
+      expect(controller.getRefreshRate()).assertEqual(90);
+      // A stored rate outside the peer's bound falls back rather than being kept.
+      controller.restoreRefreshRate(0);
+      expect(controller.getRefreshRate()).assertEqual(DEFAULT_REFRESH_RATE);
       expect(bridge.commands.length).assertEqual(0);
     });
   });

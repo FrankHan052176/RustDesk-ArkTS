@@ -29,11 +29,11 @@ export interface NativeSessionBridge {
   getConnToken(sessionId: string): string | null;
   getEnableTrustedDevices(sessionId: string): boolean;
   send2fa(sessionId: string, code: string, trustThisDevice: boolean): ActionResponse;
-  inputString(sessionId: string, value: string): ActionResponse;
+  inputString(sessionId: string, value: string, inputGeneration?: string): ActionResponse;
   setImageQuality(sessionId: string, quality: string): ActionResponse;
-  setCustomImageQuality(sessionId: string, quality: number): void;
+  setCustomImageQuality(sessionId: string, quality: number): ActionResponse;
   setCustomFps(sessionId: string, fps: number): ActionResponse;
-  sendChat(sessionId: string, text: string): ActionResponse;
+  getFrameRateSnapshot(sessionId: string, display: number): string;
   sendClipboard(sessionId: string, content: string): ActionResponse;
   sendClipboardFiles(sessionId: string, paths: Array<string>): ActionResponse;
   sendClipboardImage(sessionId: string, image: Uint8Array): ActionResponse;
@@ -44,8 +44,15 @@ export interface NativeSessionBridge {
   startSession(sessionId: string): ActionResponse;
   setViewOnly(sessionId: string, enabled: boolean): ActionResponse;
   login(sessionId: string, password: string, remember?: boolean): ActionResponse;
-  setCommon(sessionId: string, key: string, value: string): void;
-  closeSession(sessionId: string): ActionResponse;
+  setCommon(sessionId: string, key: string, value: string): ActionResponse;
+  /**
+   * Requests the close and resolves with the native join receipt, not with
+   * "the request was accepted": the caller may destroy the Surface and remove
+   * the tab once the receipt reports every destination released, and only then
+   * acknowledges the epoch.
+   */
+  closeSession(sessionId: string): Promise<ActionResponse>;
+  acknowledgeClose(sessionId: string, lifecycleEpoch: string): ActionResponse;
   pollEvents(sessionId: string, limit: number): ActionResponse;
   transferNextJobId(): number;
   readRemoteDir(sessionId: string, path: string): ActionResponse;
@@ -54,7 +61,7 @@ export interface NativeSessionBridge {
     needOverride: boolean, isUpload: boolean): ActionResponse;
   cancelTransfer(sessionId: string, actId: number): ActionResponse;
   getToggleOption(sessionId: string, option: string): boolean;
-  toggleOption(sessionId: string, option: string): void;
+  toggleOption(sessionId: string, option: string): ActionResponse;
   getRemoteAudioState(sessionId: string): RemoteAudioState;
   setRemoteAudioMuted(sessionId: string, muted: boolean): boolean;
 }
@@ -96,24 +103,24 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
     return this.parseNativeResponse(() => native.sessionSend2fa(sessionId, code, trustThisDevice));
   }
 
-  inputString(sessionId: string, value: string): ActionResponse {
-    return this.parseNativeResponse(() => native.sessionInputString(sessionId, value));
+  inputString(sessionId: string, value: string, inputGeneration?: string): ActionResponse {
+    return this.parseNativeResponse(() => native.sessionInputString(sessionId, value, inputGeneration));
   }
 
   setImageQuality(sessionId: string, quality: string): ActionResponse {
     return this.parseNativeResponse(() => native.sessionSetImageQuality(sessionId, quality));
   }
 
-  setCustomImageQuality(sessionId: string, quality: number): void {
-    native.sessionSetCustomImageQuality(sessionId, quality);
+  setCustomImageQuality(sessionId: string, quality: number): ActionResponse {
+    return this.parseNativeResponse(() => native.sessionSetCustomImageQuality(sessionId, quality));
   }
 
   setCustomFps(sessionId: string, fps: number): ActionResponse {
     return this.parseNativeResponse(() => native.sessionSetCustomFps(sessionId, fps));
   }
 
-  sendChat(sessionId: string, text: string): ActionResponse {
-    return this.parseNativeResponse(() => native.sessionSendChat(sessionId, text));
+  getFrameRateSnapshot(sessionId: string, display: number): string {
+    return native.sessionGetFrameRateSnapshot(sessionId, display);
   }
 
   sendClipboard(sessionId: string, content: string): ActionResponse {
@@ -167,12 +174,24 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
     })));
   }
 
-  setCommon(sessionId: string, key: string, value: string): void {
-    native.sessionSetCommon(sessionId, key, value);
+  setCommon(sessionId: string, key: string, value: string): ActionResponse {
+    return this.parseNativeResponse(() => native.sessionSetCommon(sessionId, key, value));
   }
 
-  closeSession(sessionId: string): ActionResponse {
-    return this.parseNativeResponse(() => native.sessionClose(sessionId));
+  async closeSession(sessionId: string): Promise<ActionResponse> {
+    try {
+      return JSON.parse(await native.sessionClose(sessionId)) as ActionResponse;
+    } catch (error) {
+      return {
+        ok: false,
+        action: 'session_close',
+        message: String(error),
+      };
+    }
+  }
+
+  acknowledgeClose(sessionId: string, lifecycleEpoch: string): ActionResponse {
+    return this.parseNativeResponse(() => native.sessionAcknowledgeClose(sessionId, lifecycleEpoch));
   }
 
   pollEvents(sessionId: string, limit: number): ActionResponse {
@@ -211,8 +230,8 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
     return native.sessionGetToggleOption(sessionId, option);
   }
 
-  toggleOption(sessionId: string, option: string): void {
-    native.sessionToggleOption(sessionId, option);
+  toggleOption(sessionId: string, option: string): ActionResponse {
+    return this.parseNativeResponse(() => native.sessionToggleOption(sessionId, option));
   }
 
   getRemoteAudioState(sessionId: string): RemoteAudioState {
@@ -223,11 +242,15 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
       const response = JSON.parse(native.sessionGetRemoteAudioState(sessionId)) as RemoteAudioStateResponse;
       const audio = response.audio;
       if (audio === undefined) {
-        return this.unavailableRemoteAudioState();
+        const state = this.unavailableRemoteAudioState();
+        state.errorText = response.message ?? '';
+        return state;
       }
       return audio;
     } catch (error) {
-      return this.unavailableRemoteAudioState();
+      const state = this.unavailableRemoteAudioState();
+      state.errorText = String(error);
+      return state;
     }
   }
 
@@ -237,7 +260,7 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
     }
     const disableAudio = this.getToggleOption(sessionId, 'disable-audio');
     if (disableAudio !== muted) {
-      this.toggleOption(sessionId, 'disable-audio');
+      return this.toggleOption(sessionId, 'disable-audio').ok;
     }
     return true;
   }

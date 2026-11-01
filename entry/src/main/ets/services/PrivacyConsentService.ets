@@ -1,25 +1,34 @@
 import { privacyManager } from '@kit.AppGalleryKit';
+import { BusinessError } from '@kit.BasicServicesKit';
+
+export class PrivacyConsentState {
+  accepted: boolean = false;
+  available: boolean = true;
+  error: string = '';
+}
 
 export class PrivacyConsentService {
-  /**
-   * Reads the store-managed privacy agreement.  The public event is only a
-   * change notification; the store result is the startup source of truth.
-   * Fail closed when the service is unavailable or no agreement is present.
-   */
-  static readSystemAccepted(): boolean {
+  /** Events only invalidate this authoritative store-managed result. */
+  static readSystemState(): PrivacyConsentState {
+    const state = new PrivacyConsentState();
     try {
       const results: privacyManager.AppPrivacyResult[] = privacyManager.getAppPrivacyResult();
+      let found = false;
       for (let index = 0; index < results.length; index += 1) {
         const result = results[index];
-        if (result.type === privacyManager.AppPrivacyType.PRIVACY_AGREEMENT &&
-          result.result === privacyManager.AppPrivacyResultType.FULL_MODE_AGREED) {
-          return true;
+        if (result.type === privacyManager.AppPrivacyType.PRIVACY_AGREEMENT) {
+          if (result.result !== privacyManager.AppPrivacyResultType.FULL_MODE_AGREED) {
+            return state;
+          }
+          found = true;
         }
       }
-    } catch (_) {
-      // A missing/unavailable standard privacy service must never unlock sensors.
+      state.accepted = found;
+    } catch (error) {
+      const failure = error as BusinessError;
+      state.available = false;
+      state.error = `${failure.code}: ${failure.message}`;
     }
-    return false;
+    return state;
   }
-
 }

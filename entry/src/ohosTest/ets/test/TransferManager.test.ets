@@ -11,7 +11,6 @@ class RecordingTransferBridge implements NativeSessionBridge {
     password: '',
     forceRelay: false,
     isFileTransfer: false,
-    isViewCamera: false,
     isViewOnly: false,
   };
   private nextJobId: number = 7;
@@ -27,9 +26,17 @@ class RecordingTransferBridge implements NativeSessionBridge {
     return this.ok('start_session');
   }
 
-  closeSession(sessionId: string): ActionResponse {
+  async closeSession(sessionId: string): Promise<ActionResponse> {
     this.calls.push(`close:${sessionId}`);
     return this.ok('close_session');
+  }
+
+  surfaceDestroyed(_sessionId: string, _surfaceId: string, _lifecycleEpoch: string): ActionResponse {
+    return this.ok('surface_destroyed');
+  }
+
+  acknowledgeClose(_sessionId: string, _lifecycleEpoch: string): ActionResponse {
+    return this.ok('acknowledge_close');
   }
 
   setViewOnly(_sessionId: string, _enabled: boolean): ActionResponse {
@@ -112,14 +119,16 @@ class RecordingTransferBridge implements NativeSessionBridge {
     return this.ok('set_image_quality');
   }
 
-  setCustomImageQuality(_sessionId: string, _quality: number): void {}
+  setCustomImageQuality(_sessionId: string, _quality: number): ActionResponse {
+    return this.ok('set_custom_image_quality');
+  }
+
+  getFrameRateSnapshot(_sessionId: string): string {
+    return '{}';
+  }
 
   setCustomFps(_sessionId: string, _fps: number): ActionResponse {
     return this.ok('set_custom_fps');
-  }
-
-  sendChat(_sessionId: string, _text: string): ActionResponse {
-    return this.ok('send_chat');
   }
 
   sendClipboard(_sessionId: string, _content: string): ActionResponse {
@@ -150,13 +159,17 @@ class RecordingTransferBridge implements NativeSessionBridge {
     return this.ok('login');
   }
 
-  setCommon(_sessionId: string, _key: string, _value: string): void {}
+  setCommon(_sessionId: string, _key: string, _value: string): ActionResponse {
+    return this.ok('set_common');
+  }
 
   getToggleOption(_sessionId: string, _option: string): boolean {
     return false;
   }
 
-  toggleOption(_sessionId: string, _option: string): void {}
+  toggleOption(_sessionId: string, _option: string): ActionResponse {
+    return this.ok('toggle_option');
+  }
 
   getRemoteAudioState(_sessionId: string): RemoteAudioState {
     return {
@@ -197,7 +210,6 @@ export default function transferManagerTest(): void {
       expect(bridge.lastOptions.password).assertEqual('secret');
       expect(bridge.lastOptions.forceRelay).assertTrue();
       expect(bridge.lastOptions.isFileTransfer).assertTrue();
-      expect(bridge.lastOptions.isViewCamera).assertFalse();
       expect(bridge.lastOptions.isViewOnly).assertFalse();
     });
 

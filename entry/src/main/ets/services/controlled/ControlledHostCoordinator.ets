@@ -23,6 +23,17 @@ import { NativeHostBridge } from './NativeHostBridge';
 const DOMAIN = 0xFF00;
 const TAG = 'RustDeskViewedHost';
 const POLL_INTERVAL_MS = 250;
+/**
+ * The legacy start option object.
+ *
+ * `requireLocalApproval: true` is really enforced: for the lifetime of the
+ * service every connection must be approved locally, through Core's own approval
+ * option, without ever writing the local user's persisted setting. A deployment
+ * policy that cannot require local approval makes the start refuse, and `false`
+ * is refused too (this host never auto-approves). Omitting the field leaves the
+ * policy untouched. Input and clipboard stay off, which is what a view-only host
+ * accepts; desktop audio follows the Core option and is only reported.
+ */
 class ControlledStartOptions {
   requireLocalApproval: boolean = true;
   enableInput: boolean = false;
@@ -59,7 +70,7 @@ export class ControlledHostCoordinator {
     }
     this.context = context;
     this.backgroundService = new ControlledHostBackgroundService(context, (): void => {
-      this.failClosed('系统已终止被看服务后台任务');
+      void this.failClosed('系统已终止被看服务后台任务');
     });
     this.initialized = true;
     this.runtimeReady = false;
@@ -131,32 +142,47 @@ export class ControlledHostCoordinator {
       const screenJson = JSON.stringify(screenOptions);
       this.requireSuccess(this.bridge.configureScreen(screenJson), '屏幕参数配置失败');
       const startOptions = new ControlledStartOptions();
-      this.requireSuccess(this.bridge.start(JSON.stringify(startOptions)), 'RustDesk 被看服务启动失败');
-      this.state.captureActive = true;
+      const startReply = this.requireSuccess(
+        await this.bridge.start(JSON.stringify(startOptions)),
+        'RustDesk 被看服务启动失败',
+      );
+      // `start` resolves only from the real capture state: consent granted, the
+      // first access unit produced, and the frontend's privacy admission still in
+      // force. Its own fields are re-checked here rather than assumed.
+      this.applyHostPolicy(startReply);
+      if (!this.state.captureAuthorized) {
+        throw new Error('被看服务启动后未确认屏幕采集');
+      }
       if (currentGeneration !== this.generation) {
-        this.stopNativeFailClosed();
+        await this.stopNativeFailClosed();
         return;
       }
       this.state.runningInBackground = this.backgroundService?.isRunning() === true;
       this.state.phase = 'ready';
-      this.state.statusText = '被看服务已启用，等待远端认证';
+      this.state.statusText = this.readyStatusText();
       this.refreshNativeStatus();
       this.emitState();
       this.schedulePoll(0);
     } catch (error) {
-      this.failClosed(`启动失败：${String(error)}`);
+      await this.failClosed(`启动失败：${String(error)}`);
     }
   }
 
-  stop(reason: string = '被看服务已停止'): void {
+  async stop(reason: string = '被看服务已停止'): Promise<void> {
     this.generation += 1;
     this.clearPoll();
+    const backgroundService = this.backgroundService;
     this.state.phase = 'stopping';
     this.state.statusText = reason;
     this.emitState();
-    const stopError = this.stopNativeFailClosed();
-    this.backgroundService?.stop();
+    backgroundService?.stop();
+    const stopError = await this.stopNativeFailClosed();
     this.state.captureActive = false;
+    this.state.captureAuthorized = false;
+    // The service's scoped approval policy is released when it stops, so it is
+    // not reported as still in force.
+    this.state.approveModeScoped = false;
+    this.state.localApprovalEnforced = false;
     this.state.runningInBackground = false;
     this.state.incoming = undefined;
     this.state.incomingResolving = false;
@@ -229,6 +255,9 @@ export class ControlledHostCoordinator {
   refreshPasswordState(): void {
     try {
       const payload = JSON.parse(this.bridge.password()) as ControlledPasswordPayload;
+      if (payload.ok === false) {
+        throw new Error(payload.message ?? payload.lastError ?? 'Core 拒绝读取密码设置');
+      }
       this.state.temporaryPassword = payload.temporaryPassword ?? '';
       this.state.verificationMethod = this.normalizePasswordMode(payload.verificationMethod ?? '');
       this.state.permanentPasswordSet = payload.permanentPasswordSet ?? false;
@@ -246,6 +275,9 @@ export class ControlledHostCoordinator {
   refreshTemporaryPassword(): void {
     try {
       const payload = JSON.parse(this.bridge.refreshPassword()) as ControlledPasswordPayload;
+      if (payload.ok === false) {
+        throw new Error(payload.message ?? payload.lastError ?? 'Core 拒绝刷新随机密码');
+      }
       this.state.temporaryPassword = payload.temporaryPassword ?? '';
       this.state.passwordError = '';
     } catch (error) {
@@ -314,6 +346,9 @@ export class ControlledHostCoordinator {
   refreshTwoFactorState(): void {
     try {
       const payload = JSON.parse(this.bridge.twoFactor()) as ControlledTwoFactorPayload;
+      if (payload.ok === false) {
+        throw new Error(payload.message ?? payload.lastError ?? 'Core 拒绝读取双重认证状态');
+      }
       this.twoFactorState.enabled = payload.enabled ?? false;
       this.twoFactorState.trustedDevicesEnabled = payload.trustedDevicesEnabled ?? true;
       this.twoFactorState.trustedDevicesFixed = payload.trustedDevicesFixed ?? false;
@@ -442,7 +477,7 @@ export class ControlledHostCoordinator {
     }
     if (this.running()) {
       this.state.statusText = this.state.phase === 'active' ? this.state.statusText :
-        '被看服务已启用，等待远端认证';
+        this.readyStatusText();
       this.schedulePoll(0);
     }
     this.emitState();
@@ -453,14 +488,18 @@ export class ControlledHostCoordinator {
       this.cancelTwoFactorSetup();
     }
     if (this.running()) {
-      this.state.statusText = '被看服务正在后台共享屏幕与设备内音频';
+      // Desktop audio follows the Core option, so the text does not claim audio
+      // is being shared when the option says it is not.
+      this.state.statusText = this.state.audioEnabled
+        ? '被看服务正在后台共享屏幕与设备内音频'
+        : '被看服务正在后台共享屏幕';
       this.schedulePoll(0);
       this.emitState();
     }
   }
 
   onAbilityDestroy(): void {
-    this.stop('应用已退出，被看服务已停止');
+    void this.stop('应用已退出，被看服务已停止');
     this.listeners = [];
     this.backgroundService = undefined;
     this.context = undefined;
@@ -491,16 +530,88 @@ export class ControlledHostCoordinator {
     }
   }
 
+  /**
+   * The native capture verdict, exactly as the host adapter reports it.
+   *
+   * A missing field fails closed: an absent `active`/`captureActive` or
+   * `systemCaptureConfirmed` is not a claim that capture is running, and the
+   * SDK's own state code is never interpreted as one.
+   */
+  private captureIsHealthy(payload: ControlledNativeActionPayload): boolean {
+    const live = payload.active === true || payload.captureActive === true;
+    return payload.ok !== false
+      && live
+      && payload.terminal !== true
+      && payload.systemCaptureConfirmed === true
+      && (payload.framesObserved ?? 0) > 0;
+  }
+
   private refreshNativeStatus(): void {
     const payload = JSON.parse(this.bridge.status()) as ControlledServerStatusPayload;
-    this.state.myId = payload.myId ?? '';
+    this.state.myId = payload.myId ?? this.state.myId;
     this.state.temporaryPassword = payload.temporaryPassword ?? '';
+    this.applyHostPolicy(payload);
+    this.state.terminalReason = payload.terminalReason ?? payload.error ?? '';
     if (payload.ok === false || payload.serverRunning !== true || payload.state !== 'ready') {
       throw new Error(payload.message ?? payload.lastError ?? '原生被看服务已停止');
+    }
+    if (this.state.teardownUnconfirmed.length > 0) {
+      throw new Error(this.state.teardownUnconfirmed);
     }
     if ((payload.lastError ?? '').length > 0) {
       throw new Error(payload.lastError ?? '原生服务报告失败');
     }
+  }
+
+  /**
+   * Adopts the capture and policy facts one host answer really carries.
+   *
+   * Everything here is copied from the answer: the approval mode is Core's own
+   * policy, an unconfirmed teardown is kept until a later status clears it, and
+   * the capture verdict is the adapter's predicate rather than a local guess.
+   */
+  private applyHostPolicy(payload: ControlledNativeActionPayload): void {
+    this.state.captureActive = payload.active === true || payload.captureActive === true;
+    this.state.captureAuthorized = this.captureIsHealthy(payload);
+    this.state.teardownUnconfirmed = payload.teardownUnconfirmed ?? '';
+    const server = payload as ControlledServerStatusPayload;
+    if (server.approveMode !== undefined) {
+      this.state.approveMode = server.approveMode;
+    }
+    if (server.localApprovalEnforced !== undefined) {
+      this.state.localApprovalEnforced = server.localApprovalEnforced;
+    }
+    if (server.approveModeScoped !== undefined) {
+      this.state.approveModeScoped = server.approveModeScoped;
+    }
+    if (server.audioEnabled !== undefined) {
+      this.state.audioEnabled = server.audioEnabled;
+    }
+  }
+
+  /** What the operator's local-approval policy really requires, or an empty string. */
+  private approveModeText(): string {
+    if (this.state.approveModeScoped) {
+      return '本机要求每次连接都需点击同意';
+    }
+    if (this.state.approveMode === 'password') {
+      return '远端需输入密码';
+    }
+    if (this.state.approveMode === 'click') {
+      return '需在本机点击同意';
+    }
+    if (this.state.approveMode === 'both') {
+      return '远端密码或本机点击同意';
+    }
+    return '';
+  }
+
+  /** The ready text, naming Core's own approval policy when it reported one. */
+  private readyStatusText(): string {
+    const approval = this.approveModeText();
+    return approval.length > 0
+      ? `被看服务已启用（${approval}），等待远端认证`
+      : '被看服务已启用，等待远端认证';
   }
 
   private schedulePoll(delayMs: number): void {
@@ -521,13 +632,15 @@ export class ControlledHostCoordinator {
     try {
       this.refreshNativeStatus();
       const capture = JSON.parse(this.bridge.screenCaptureStatus()) as ControlledNativeActionPayload;
-      const nativeState = capture.nativeStateCode ?? -1;
-      const terminalCaptureStates: number[] = [1, 2, 3, 4, 10];
-      if (capture.ok === false || capture.active === false || terminalCaptureStates.includes(nativeState)) {
-        throw new Error(capture.message ?? capture.lastError ?? '系统屏幕共享已停止');
+      this.applyHostPolicy(capture);
+      if (!this.state.captureAuthorized) {
+        throw new Error(capture.terminalReason ?? capture.error ?? capture.lastError ?? capture.message
+          ?? '系统屏幕共享已停止');
       }
-      this.state.captureActive = true;
       const incomingPayload = JSON.parse(this.bridge.pollIncoming(256)) as ControlledIncomingPayload;
+      if (incomingPayload.ok === false) {
+        throw new Error(incomingPayload.message ?? '无法读取被看连接列表');
+      }
       const requests = incomingPayload.requests ?? incomingPayload.clients ?? [];
       const clients = incomingPayload.clients ?? [];
       let activePeer: ControlledIncomingPeer | undefined = undefined;
@@ -591,11 +704,11 @@ export class ControlledHostCoordinator {
         this.state.incoming = undefined;
         this.state.activePeerName = '';
         this.state.phase = 'ready';
-        this.state.statusText = '被看服务已启用，等待远端认证';
+        this.state.statusText = this.readyStatusText();
       }
       this.emitState();
     } catch (error) {
-      this.failClosed(`服务轮询失败：${String(error)}`);
+      await this.failClosed(`服务轮询失败：${String(error)}`);
       return;
     } finally {
       this.pollInFlight = false;
@@ -603,11 +716,12 @@ export class ControlledHostCoordinator {
     this.schedulePoll(POLL_INTERVAL_MS);
   }
 
-  private requireSuccess(resultJson: string, fallback: string): void {
+  private requireSuccess(resultJson: string, fallback: string): ControlledNativeActionPayload {
     const payload = JSON.parse(resultJson) as ControlledNativeActionPayload;
     if (payload.ok === false) {
       throw new Error(payload.message ?? payload.lastError ?? fallback);
     }
+    return payload;
   }
 
   private clearPoll(): void {
@@ -618,10 +732,10 @@ export class ControlledHostCoordinator {
     this.pollTimer = -1;
   }
 
-  private stopNativeFailClosed(): string {
+  private async stopNativeFailClosed(): Promise<string> {
     let message = '';
     try {
-      const captureResult = JSON.parse(this.bridge.stopScreenCapture()) as ControlledNativeActionPayload;
+      const captureResult = JSON.parse(await this.bridge.stopScreenCapture()) as ControlledNativeActionPayload;
       if (captureResult.ok === false) {
         message = captureResult.message ?? captureResult.lastError ?? '屏幕采集停止失败';
       }
@@ -629,7 +743,7 @@ export class ControlledHostCoordinator {
       message = `屏幕采集停止失败：${String(error)}`;
     }
     try {
-      const serverResult = JSON.parse(this.bridge.stop()) as ControlledNativeActionPayload;
+      const serverResult = JSON.parse(await this.bridge.stop()) as ControlledNativeActionPayload;
       if (serverResult.ok === false && message.length === 0) {
         message = serverResult.message ?? serverResult.lastError ?? '原生服务停止失败';
       }
@@ -641,12 +755,13 @@ export class ControlledHostCoordinator {
     return message;
   }
 
-  private failClosed(message: string): void {
+  private async failClosed(message: string): Promise<void> {
     this.generation += 1;
     this.clearPoll();
-    const stopError = this.stopNativeFailClosed();
     this.backgroundService?.stop();
+    const stopError = await this.stopNativeFailClosed();
     this.state.captureActive = false;
+    this.state.captureAuthorized = false;
     this.state.runningInBackground = false;
     this.state.incoming = undefined;
     this.state.incomingResolving = false;

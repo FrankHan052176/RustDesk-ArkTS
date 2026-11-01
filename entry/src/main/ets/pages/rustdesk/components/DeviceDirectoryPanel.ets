@@ -6,31 +6,35 @@ import {
 } from 'luminous_neo';
 import {
   DirectorySnapshot,
+  PeerProtocol,
   PeerRecord,
   PeerViewSource,
 } from '../RustDeskDirectoryTypes';
 import { RustDeskLayoutTokens } from '../RustDeskLayoutTokens';
+import { peerProtocolOf } from '../RustDeskPeerDirectoryModel';
 import { PeerCard } from './PeerCard';
+import { SavedDeviceEditor } from './SavedDeviceEditor';
 
 export interface DeviceDirectoryPanelProps {
   snapshot: DirectorySnapshot;
   wideLayout: boolean;
   titleSpacerHeight: number;
   bottomAvoidInset: number;
-  activeTransferPeerId: string;
   recentScroller: Scroller;
   favoriteScroller: Scroller;
   lanScroller: Scroller;
   addressBookScroller: Scroller;
   onRefresh: () => void;
   onScanLan: () => void;
-  onSetFavorite: (peerId: string, favorite: boolean) => void;
-  onRemoveRecent: (peerId: string) => void;
-  onRemoveLan: (peerId: string) => void;
-  onConnectRemote: (peerId: string) => void;
-  onViewOnly: (peerId: string) => void;
-  onViewCamera: (peerId: string) => void;
-  onOpenTransfer: (peerId: string) => void;
+  onStopLan: () => void;
+  onSetFavorite: (target: string, protocol: PeerProtocol, favorite: boolean, rustdeskIdOnly: boolean) => void;
+  onEditNote: (target: string, protocol: PeerProtocol, note: string, rustdeskIdOnly: boolean) => void;
+  onRemoveRecent: (target: string, protocol: PeerProtocol, rustdeskIdOnly: boolean) => void;
+  onRemoveLan: (target: string, protocol: PeerProtocol) => void;
+  onConnectRemote: (peerId: string, rustdeskIdOnly: boolean) => void;
+  onConnectVnc: (peerId: string) => void;
+  onConnectRdp: (peerId: string) => void;
+  onSaveDevice: (original: PeerRecord, peer: PeerRecord) => ResourceStr;
 }
 
 @ComponentV2
@@ -39,7 +43,6 @@ export struct DeviceDirectoryPanel {
   @Param wideLayout: boolean = false;
   @Param titleSpacerHeight: number = 56;
   @Param bottomAvoidInset: number = 0;
-  @Param activeTransferPeerId: string = '';
   @Param recentScroller: Scroller = new Scroller();
   @Param favoriteScroller: Scroller = new Scroller();
   @Param lanScroller: Scroller = new Scroller();
@@ -50,17 +53,41 @@ export struct DeviceDirectoryPanel {
   @Local lanRefreshing: boolean = false;
   @Local lanRefreshStatus: RefreshStatus = RefreshStatus.Inactive;
   @Local pressedEmptySource: string = '';
-  private lanAutoScanRequested: boolean = false;
+  @Local deviceEditorVisible: boolean = false;
+  @Local deviceEditorPeer: PeerRecord = new PeerRecord();
+  private deviceEditorOriginal: PeerRecord = new PeerRecord();
   private swiperController: SwiperController = new SwiperController();
   @Event onRefresh: () => void = () => {};
   @Event onScanLan: () => void = () => {};
-  @Event onSetFavorite: (peerId: string, favorite: boolean) => void = (_peerId: string, _favorite: boolean) => {};
-  @Event onRemoveRecent: (peerId: string) => void = (_peerId: string) => {};
-  @Event onRemoveLan: (peerId: string) => void = (_peerId: string) => {};
-  @Event onConnectRemote: (peerId: string) => void = (_peerId: string) => {};
-  @Event onViewOnly: (peerId: string) => void = (_peerId: string) => {};
-  @Event onViewCamera: (peerId: string) => void = (_peerId: string) => {};
-  @Event onOpenTransfer: (peerId: string) => void = (_peerId: string) => {};
+  @Event onStopLan: () => void = () => {};
+  @Event onSetFavorite: (target: string, protocol: PeerProtocol, favorite: boolean, rustdeskIdOnly: boolean) => void =
+    (_target: string, _protocol: PeerProtocol, _favorite: boolean, _rustdeskIdOnly: boolean) => {};
+  @Event onEditNote: (target: string, protocol: PeerProtocol, note: string, rustdeskIdOnly: boolean) => void =
+    (_target: string, _protocol: PeerProtocol, _note: string, _rustdeskIdOnly: boolean) => {};
+  @Event onRemoveRecent: (target: string, protocol: PeerProtocol, rustdeskIdOnly: boolean) => void =
+    (_target: string, _protocol: PeerProtocol, _rustdeskIdOnly: boolean) => {};
+  @Event onRemoveLan: (target: string, protocol: PeerProtocol) => void =
+    (_target: string, _protocol: PeerProtocol) => {};
+  @Event onConnectRemote: (peerId: string, rustdeskIdOnly: boolean) => void =
+    (_peerId: string, _rustdeskIdOnly: boolean) => {};
+  @Event onConnectVnc: (peerId: string) => void = (_peerId: string) => {};
+  @Event onConnectRdp: (peerId: string) => void = (_peerId: string) => {};
+  @Event onSaveDevice: (original: PeerRecord, peer: PeerRecord) => ResourceStr =
+    (_original: PeerRecord, _peer: PeerRecord): ResourceStr => $r('app.string.device_editor_save_unavailable');
+
+  private editDevice(peer: PeerRecord): void {
+    this.deviceEditorOriginal = peer;
+    this.deviceEditorPeer = peer;
+    this.deviceEditorVisible = true;
+  }
+
+  private saveDevice(peer: PeerRecord): ResourceStr {
+    const error = this.onSaveDevice(this.deviceEditorOriginal, peer);
+    if (error === '') {
+      this.deviceEditorVisible = false;
+    }
+    return error;
+  }
 
   aboutToAppear(): void {
     this.lanRefreshing = this.snapshot.lanScanning;
@@ -181,7 +208,7 @@ export struct DeviceDirectoryPanel {
       new LuminousSelectionItem('recent', '最近', '最近连接的设备'),
       new LuminousSelectionItem('favorite', '收藏', '收藏的设备'),
       new LuminousSelectionItem('lan', '局域网', '局域网发现的设备'),
-      new LuminousSelectionItem('address-book', '通讯录', '通讯录中的设备'),
+      new LuminousSelectionItem('address-book', '通讯录', $r('app.string.device_address_book_unavailable')),
     ];
   }
 
@@ -192,7 +219,7 @@ export struct DeviceDirectoryPanel {
       || peer.username.toLowerCase().includes(query)) {
       return true;
     }
-    return source === 'addressBook' && peer.note.toLowerCase().includes(query);
+    return source !== 'addressBook' && peer.note.toLowerCase().includes(query);
   }
 
   private comparePeerIds(left: PeerRecord, right: PeerRecord): number {
@@ -220,15 +247,29 @@ export struct DeviceDirectoryPanel {
     return visible;
   }
 
+  /**
+   * One target-intent tuple per card; LAN additionally retains the raw username.
+   *
+   * The fields are free-form strings that may contain any joining character —
+   * address book `ops` + `lab-vnc-host` and `ops-rustdesk-lab` + `host` spelled
+   * the same key when they were joined with hyphens — and ArkUI leaves the
+   * rendering of duplicate keys unspecified, so the encoding is a tuple.
+   */
+  private peerRenderKey(source: PeerViewSource, peer: PeerRecord): string {
+    if (source === 'lan') {
+      return JSON.stringify([source, peer.addressBookName, peerProtocolOf(peer), peer.id,
+        peer.rustdeskIdOnly, peer.username]);
+    }
+    return JSON.stringify([source, peer.addressBookName, peerProtocolOf(peer), peer.id, peer.rustdeskIdOnly]);
+  }
+
+
   private emptyText(source: PeerViewSource): ResourceStr {
     if (this.query.trim().length > 0) {
       return $r('app.string.device_empty_search');
     }
     if (source === 'favorite') {
       return '收藏设备后会显示在这里';
-    }
-    if (source === 'addressBook') {
-      return $r('app.string.device_empty_address_book');
     }
     if (source === 'lan') {
       return $r('app.string.device_empty_lan');
@@ -243,11 +284,8 @@ export struct DeviceDirectoryPanel {
     if (source === 'favorite') {
       return '还没有收藏设备';
     }
-    if (source === 'addressBook') {
-      return '通讯录还是空的';
-    }
     if (source === 'lan') {
-      return '附近暂未发现设备';
+      return $r('app.string.resk_lan_empty_title');
     }
     return '还没有最近设备';
   }
@@ -270,9 +308,6 @@ export struct DeviceDirectoryPanel {
     if (source === 'favorite') {
       return $r('sys.symbol.star');
     }
-    if (source === 'addressBook') {
-      return $r('sys.symbol.person_2');
-    }
     if (source === 'lan') {
       return $r('sys.symbol.wifi');
     }
@@ -282,10 +317,6 @@ export struct DeviceDirectoryPanel {
   private changeSource(index: number): void {
     const target = Math.max(0, Math.min(3, index));
     this.activeSource = this.sourceFromIndex(target);
-    if (this.activeSource === 'lan' && !this.lanAutoScanRequested) {
-      this.lanAutoScanRequested = true;
-      this.startLanRefresh();
-    }
     try {
       this.swiperController.changeIndex(target, true);
     } catch (_) {
@@ -293,21 +324,92 @@ export struct DeviceDirectoryPanel {
   }
 
   private startLanRefresh(): void {
-    if (this.snapshot.lanScanning) {
+    this.lanRefreshing = this.snapshot.lanScanning;
+    if (!this.snapshot.lanCanScan || this.snapshot.lanScanning) {
       return;
     }
-    this.lanRefreshing = true;
     this.onScanLan();
   }
 
   private lanRefreshPrompt(): ResourceStr {
-    if (this.snapshot.lanScanning || this.lanRefreshing || this.lanRefreshStatus === RefreshStatus.Refresh) {
+    if (this.snapshot.lanScanning) {
       return $r('app.string.device_scanning_lan');
     }
     if (this.lanRefreshStatus === RefreshStatus.OverDrag) {
       return $r('app.string.device_release_scan_lan');
     }
     return $r('app.string.device_pull_scan_lan');
+  }
+
+  private lanStatus(): ResourceStr {
+    if (this.snapshot.lanState === 'unavailable') {
+      return $r('app.string.resk_lan_unavailable');
+    }
+    if (this.snapshot.lanState === 'loading') {
+      return $r('app.string.resk_lan_loading');
+    }
+    if (this.snapshot.lanState === 'starting') {
+      return $r('app.string.resk_lan_starting');
+    }
+    if (this.snapshot.lanState === 'stopping' || this.snapshot.lanState === 'removing') {
+      return $r('app.string.resk_lan_cleaning');
+    }
+    if (this.snapshot.lanScanning) {
+      return $r('app.string.device_scanning_lan');
+    }
+    if (this.snapshot.lanTerminal === 'inactivity') {
+      return $r('app.string.resk_lan_inactivity');
+    }
+    if (this.snapshot.lanTerminal === 'deadline') {
+      return $r('app.string.resk_lan_deadline');
+    }
+    if (this.snapshot.lanTerminal === 'cancelled') {
+      return $r('app.string.resk_lan_cancelled');
+    }
+    if (this.snapshot.lanTerminal === 'failed') {
+      return $r('app.string.resk_lan_failed');
+    }
+    return $r('app.string.resk_lan_cached');
+  }
+
+  @Builder
+  private LanActions() {
+    Column({ space: $r('app.float.space_8') }) {
+      Row({ space: $r('app.float.space_8') }) {
+        Button($r('app.string.device_scan_lan'))
+          .enabled(this.snapshot.lanCanScan && !this.snapshot.lanScanning)
+          .onClick((): void => this.startLanRefresh());
+        if (this.snapshot.lanScanning) {
+          Button($r('app.string.resk_lan_stop'))
+            .enabled(this.snapshot.lanCanScan)
+            .onClick((): void => this.onStopLan());
+        }
+      }
+      .width('100%');
+      Text(this.lanStatus())
+        .width('100%')
+        .fontSize($r('app.float.font_label'))
+        .fontColor($r('app.color.neu_text_secondary'));
+      Text($r('app.string.resk_lan_untrusted'))
+        .width('100%')
+        .fontSize($r('app.float.font_caption'))
+        .fontColor($r('app.color.neu_text_secondary'));
+      if (this.snapshot.lanDisabledReason !== '') {
+        Text(this.snapshot.lanDisabledReason)
+          .width('100%')
+          .fontSize($r('app.float.font_label'))
+          .fontColor($r('app.color.warning'));
+      }
+      if (this.snapshot.lanError.length > 0) {
+        Text(this.snapshot.lanError)
+          .width('100%')
+          .fontSize($r('app.float.font_caption'))
+          .fontColor($r('app.color.error'));
+      }
+    }
+    .width(this.controlWidth())
+    .padding({ top: $r('app.float.space_8'), bottom: $r('app.float.space_8') })
+    .alignItems(HorizontalAlign.Start);
   }
 
   private activateEmptyAction(source: PeerViewSource): void {
@@ -360,6 +462,28 @@ export struct DeviceDirectoryPanel {
     .alignItems(VerticalAlign.Center)
     .clip(false)
     .zIndex(2);
+  }
+
+  @Builder
+  private AddressBookUnavailable() {
+    Column({ space: $r('app.float.space_8') }) {
+      Text($r('app.string.device_address_book_unavailable'))
+        .width('100%')
+        .fontSize($r('app.float.font_body'))
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.neu_text_primary'));
+      Text($r('app.string.device_empty_address_book'))
+        .width('100%')
+        .fontSize($r('app.float.font_label'))
+        .lineHeight(20)
+        .fontColor($r('app.color.neu_text_secondary'));
+    }
+    .width(this.controlWidth())
+    .padding($r('app.float.space_16'))
+    .alignItems(HorizontalAlign.Start)
+    .backgroundColor($r('app.color.neu_base'))
+    .border({ width: 1, color: $r('app.color.outline') })
+    .borderRadius($r('app.float.radius_24'));
   }
 
   @Builder
@@ -448,7 +572,9 @@ export struct DeviceDirectoryPanel {
 
   @Builder
   private PeerList(source: PeerViewSource) {
-    if (this.visiblePeers(source).length === 0) {
+    if (source === 'addressBook') {
+      this.AddressBookUnavailable();
+    } else if (this.visiblePeers(source).length === 0) {
       Row() {
         Column() {
           this.EmptyState(source);
@@ -465,16 +591,20 @@ export struct DeviceDirectoryPanel {
             peer: peer,
             viewSource: source,
             compact: this.compactPeerCard(),
-            transferActive: this.activeTransferPeerId === peer.id,
-            onSetFavorite: (peerId: string, favorite: boolean) => this.onSetFavorite(peerId, favorite),
-            onRemoveRecent: (peerId: string) => this.onRemoveRecent(peerId),
-            onRemoveLan: (peerId: string) => this.onRemoveLan(peerId),
-            onConnectRemote: (peerId: string) => this.onConnectRemote(peerId),
-            onViewOnly: (peerId: string) => this.onViewOnly(peerId),
-            onViewCamera: (peerId: string) => this.onViewCamera(peerId),
-            onOpenTransfer: (peerId: string) => this.onOpenTransfer(peerId),
+            removeEnabled: source !== 'lan' || this.snapshot.lanCanScan,
+            onSetFavorite: (target: string, protocol: PeerProtocol, favorite: boolean, idOnly: boolean) =>
+              this.onSetFavorite(target, protocol, favorite, idOnly),
+            onEditNote: (target: string, protocol: PeerProtocol, note: string, idOnly: boolean) =>
+              this.onEditNote(target, protocol, note, idOnly),
+            onRemoveRecent: (target: string, protocol: PeerProtocol, idOnly: boolean) =>
+              this.onRemoveRecent(target, protocol, idOnly),
+            onRemoveLan: (target: string, protocol: PeerProtocol) => this.onRemoveLan(target, protocol),
+            onConnectRemote: (peerId: string, idOnly: boolean) => this.onConnectRemote(peerId, idOnly),
+            onConnectVnc: (peerId: string) => this.onConnectVnc(peerId),
+            onConnectRdp: (peerId: string) => this.onConnectRdp(peerId),
+            onEditDevice: (peer: PeerRecord): void => this.editDevice(peer),
           });
-        }, (peer: PeerRecord) => `${source}-${peer.addressBookName}-${peer.id}`);
+        }, (peer: PeerRecord) => this.peerRenderKey(source, peer));
       }
       .width(this.controlWidth())
       .alignItems(HorizontalAlign.Start);
@@ -485,18 +615,22 @@ export struct DeviceDirectoryPanel {
             peer: peer,
             viewSource: source,
             compact: this.compactPeerCard(),
-            transferActive: this.activeTransferPeerId === peer.id,
-            onSetFavorite: (peerId: string, favorite: boolean) => this.onSetFavorite(peerId, favorite),
-            onRemoveRecent: (peerId: string) => this.onRemoveRecent(peerId),
-            onRemoveLan: (peerId: string) => this.onRemoveLan(peerId),
-            onConnectRemote: (peerId: string) => this.onConnectRemote(peerId),
-            onViewOnly: (peerId: string) => this.onViewOnly(peerId),
-            onViewCamera: (peerId: string) => this.onViewCamera(peerId),
-            onOpenTransfer: (peerId: string) => this.onOpenTransfer(peerId),
+            removeEnabled: source !== 'lan' || this.snapshot.lanCanScan,
+            onSetFavorite: (target: string, protocol: PeerProtocol, favorite: boolean, idOnly: boolean) =>
+              this.onSetFavorite(target, protocol, favorite, idOnly),
+            onEditNote: (target: string, protocol: PeerProtocol, note: string, idOnly: boolean) =>
+              this.onEditNote(target, protocol, note, idOnly),
+            onRemoveRecent: (target: string, protocol: PeerProtocol, idOnly: boolean) =>
+              this.onRemoveRecent(target, protocol, idOnly),
+            onRemoveLan: (target: string, protocol: PeerProtocol) => this.onRemoveLan(target, protocol),
+            onConnectRemote: (peerId: string, idOnly: boolean) => this.onConnectRemote(peerId, idOnly),
+            onConnectVnc: (peerId: string) => this.onConnectVnc(peerId),
+            onConnectRdp: (peerId: string) => this.onConnectRdp(peerId),
+            onEditDevice: (peer: PeerRecord): void => this.editDevice(peer),
           })
             .width(this.cardWidth())
             .margin({ bottom: 18 });
-        }, (peer: PeerRecord) => `${source}-${peer.addressBookName}-${peer.id}`);
+        }, (peer: PeerRecord) => this.peerRenderKey(source, peer));
       }
       .width(this.controlWidth());
     }
@@ -513,6 +647,9 @@ export struct DeviceDirectoryPanel {
               .height(this.sourceSwitcherContentInset())
               .flexShrink(0);
 
+            if (source === 'lan') {
+              this.LanActions();
+            }
             this.PeerList(source);
           }
           .width(this.controlWidth())
@@ -574,11 +711,20 @@ export struct DeviceDirectoryPanel {
       .onStateChange((status: RefreshStatus) => this.lanRefreshStatus = status)
       .onRefreshing(() => this.startLanRefresh());
     } else {
-      this.SourceList(source, scroller);
+      Refresh({ refreshing: this.lanRefreshing!! }) {
+        this.SourceList(source, scroller);
+      }
+      .width('100%')
+      .height('100%')
+      .onRefreshing((): void => {
+        this.onRefresh();
+        this.lanRefreshing = false;
+      });
     }
   }
 
   build() {
+    Stack() {
     Column() {
       Blank()
         .width('100%')
@@ -588,6 +734,18 @@ export struct DeviceDirectoryPanel {
       Row() {
         Column() {
           this.DirectorySearch();
+          Text($r('app.string.device_liveness_hint'))
+            .width('100%')
+            .fontSize($r('app.float.font_caption'))
+            .fontColor($r('app.color.neu_text_secondary'))
+            .margin({ bottom: 8 });
+          if (this.snapshot.message.length > 0) {
+            Text(this.snapshot.message)
+              .width('100%')
+              .fontSize($r('app.float.font_caption'))
+              .fontColor($r('app.color.neu_text_secondary'))
+              .maxLines(3);
+          }
         }
         .width(this.controlWidth())
         .alignItems(HorizontalAlign.Center);
@@ -617,10 +775,6 @@ export struct DeviceDirectoryPanel {
         .duration(280)
         .onChange((index: number) => {
           this.activeSource = this.sourceFromIndex(index);
-          if (this.activeSource === 'lan' && !this.lanAutoScanRequested) {
-            this.lanAutoScanRequested = true;
-            this.startLanRefresh();
-          }
         });
       }
       .layoutWeight(1)
@@ -636,5 +790,15 @@ export struct DeviceDirectoryPanel {
         this.viewportWidth = width;
       }
     });
+    if (this.deviceEditorVisible) {
+      SavedDeviceEditor({
+        peer: this.deviceEditorPeer,
+        onSave: (peer: PeerRecord): ResourceStr => this.saveDevice(peer),
+        onCancel: (): void => { this.deviceEditorVisible = false; },
+      })
+    }
+    }
+    .width('100%')
+    .height('100%');
   }
 }

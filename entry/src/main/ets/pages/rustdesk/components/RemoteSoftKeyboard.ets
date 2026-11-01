@@ -2,6 +2,14 @@ import { FloatingGlassSurface } from './FloatingSurface';
 
 export const REMOTE_SOFT_KEYBOARD_PANEL_HEIGHT: number = 224;
 
+/**
+ * The modifier names this panel offers, in the wire vocabulary the page presses.
+ *
+ * Shared by the latch display and the release request, so the two cannot name
+ * different keys for the same modifier.
+ */
+const SOFT_KEYBOARD_MODIFIER_NAMES: string[] = ['VK_CONTROL', 'VK_MENU', 'VK_SHIFT', 'Meta'];
+
 class RemoteSoftKeySpec {
   label: string;
   name: string;
@@ -94,15 +102,23 @@ struct RemoteSoftKeyButton {
  * A deliberately small remote keyboard. It never asks for the system IME and
  * never changes the remote surface's layout height: the panel floats above the
  * video and is collapsed by default. Keys are sent as down/up pairs directly
- * through the RustDesk bridge; modifier keys remain latched until released or
- * the panel disappears.
+ * through the RustDesk bridge.
+ *
+ * The modifier latches are not this panel's own state: they are the keys the
+ * page was told the engine accepted a Down for, so a latch the engine refused
+ * leaves the key unlit instead of decorating the next key the operator presses,
+ * and asking to release a modifier reaches the owner that really holds it.
  */
 @ComponentV2
 export struct RemoteSoftKeyboard {
   @Param keyboardWidth: number = 360;
   @Param dockTop: boolean = false;
-  @Event onKey: (name: string, down: boolean, alt: boolean, ctrl: boolean, shift: boolean, command: boolean) => void =
-    (_name: string, _down: boolean, _alt: boolean, _ctrl: boolean, _shift: boolean, _command: boolean) => {};
+  @Param altActive: boolean = false;
+  @Param ctrlActive: boolean = false;
+  @Param shiftActive: boolean = false;
+  @Param commandActive: boolean = false;
+  @Event onKey: (name: string, down: boolean) => void =
+    (_name: string, _down: boolean) => {};
   @Event onMoveDock: () => void = () => {};
   @Event onCollapse: () => void = () => {};
   @Event onKeyboardMoveStart: () => void = () => {};
@@ -111,10 +127,6 @@ export struct RemoteSoftKeyboard {
   @Event onKeyboardMoveEnd: () => void = () => {};
 
   @Local layer: number = 0;
-  @Local altActive: boolean = false;
-  @Local ctrlActive: boolean = false;
-  @Local shiftActive: boolean = false;
-  @Local commandActive: boolean = false;
 
   aboutToDisappear(): void {
     this.releaseAllKeys();
@@ -328,7 +340,6 @@ export struct RemoteSoftKeyboard {
       [
         new RemoteSoftKeySpec('Print', 'VK_SNAPSHOT'),
         new RemoteSoftKeySpec('Pause', 'VK_PAUSE'),
-        new RemoteSoftKeySpec('Num', 'VK_NUMLOCK'),
         new RemoteSoftKeySpec('Caps', 'VK_CAPITAL'),
         new RemoteSoftKeySpec('Scroll', 'VK_SCROLL'),
       ],
@@ -371,49 +382,34 @@ export struct RemoteSoftKeyboard {
     return false;
   }
 
-  private setModifier(name: string, active: boolean): void {
-    if (name === 'VK_CONTROL') {
-      this.ctrlActive = active;
-    } else if (name === 'VK_MENU') {
-      this.altActive = active;
-    } else if (name === 'VK_SHIFT') {
-      this.shiftActive = active;
-    } else if (name === 'Meta') {
-      this.commandActive = active;
-    }
-  }
-
   private emitKey(name: string, down: boolean): void {
-    this.onKey(name, down, this.altActive, this.ctrlActive, this.shiftActive, this.commandActive);
+    this.onKey(name, down);
   }
 
+  /**
+   * Asks for the opposite of the state the peer really holds.
+   *
+   * The latch this control shows is the page's accepted ownership, so a press
+   * whose Down was refused leaves the key unlit — the panel asks again from the
+   * state it was told, and never from a latch of its own that was never sent.
+   */
   private toggleModifier(name: string): void {
-    const active = this.modifierActive(name);
-    if (active) {
-      this.onKey(name, false, this.altActive, this.ctrlActive, this.shiftActive, this.commandActive);
-      this.setModifier(name, false);
-      return;
-    }
-    this.onKey(name, true, this.altActive, this.ctrlActive, this.shiftActive, this.commandActive);
-    this.setModifier(name, true);
+    this.onKey(name, !this.modifierActive(name));
   }
 
+  /**
+   * Asks the page to let go of every modifier this panel shows as held.
+   *
+   * A modifier no Down was accepted for is not one this panel may release, and a
+   * name a physical key still holds belongs to that owner: the page sends the Up
+   * only when the asking owner was the last one holding the key.
+   */
   private releaseModifiers(): void {
-    if (this.ctrlActive) {
-      this.onKey('VK_CONTROL', false, this.altActive, true, this.shiftActive, this.commandActive);
-      this.ctrlActive = false;
-    }
-    if (this.altActive) {
-      this.onKey('VK_MENU', false, this.altActive, this.ctrlActive, this.shiftActive, this.commandActive);
-      this.altActive = false;
-    }
-    if (this.shiftActive) {
-      this.onKey('VK_SHIFT', false, this.altActive, this.ctrlActive, this.shiftActive, this.commandActive);
-      this.shiftActive = false;
-    }
-    if (this.commandActive) {
-      this.onKey('Meta', false, this.altActive, this.ctrlActive, this.shiftActive, this.commandActive);
-      this.commandActive = false;
+    for (let index = 0; index < SOFT_KEYBOARD_MODIFIER_NAMES.length; index += 1) {
+      const name = SOFT_KEYBOARD_MODIFIER_NAMES[index];
+      if (this.modifierActive(name)) {
+        this.onKey(name, false);
+      }
     }
   }
 

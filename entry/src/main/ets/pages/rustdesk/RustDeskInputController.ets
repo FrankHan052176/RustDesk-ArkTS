@@ -23,7 +23,7 @@ import {
   RustDeskTouchAction,
   RustDeskTouchGestureState,
   RustDeskTouchInteractionMode,
-  TOUCH_THREE_FINGER_SCROLL_DIVISOR,
+  DEFAULT_TOUCH_SCROLL_DIVISOR,
   TOUCH_TRANSFORM_PAN_SLOP,
   TOUCH_TRANSFORM_SCALE_SLOP,
   TOUCH_TWO_FINGER_TAP_MAX_MS,
@@ -42,6 +42,8 @@ const LOCK_MODE_SCROLL = 1 << 3;
 
 export interface RustDeskInputControllerCallbacks {
   isSessionActive: () => boolean;
+  // Only Core consumes raw Flutter keys; other sessions use the legacy bridge.
+  usesCoreRawKeyRoute: () => boolean;
   isMouseMode: () => boolean;
   isPeerMacOS: () => boolean;
   isPeerAndroid: () => boolean;
@@ -68,11 +70,27 @@ export interface RustDeskInputControllerCallbacks {
 }
 
 export class RustDeskInputController {
+  /**
+   * How long a `MouseEvent` keeps a new pointer-sourced touch sequence from
+   * opening. Long enough to cover the gap between a real pointer's mouse and
+   * touch deliveries, short enough that an injected pointer still gets through.
+   */
+  private static readonly POINTER_TOUCH_LATCH_MS = 250;
   private callbacks: RustDeskInputControllerCallbacks;
   private mouseModeActive: boolean;
+  /** Set while a pointer-sourced touch sequence is open and owns its own events. */
+  private pointerTouchSequence: boolean = false;
+  /** Timestamp until which no new pointer-sourced touch sequence may open. */
+  private pointerTouchLatchUntil: number = 0;
   private relativeModeActive: boolean;
   private activeModifiers: Set<RustDeskModifierKey> = new Set();
-  private interceptedKeysDown: Set<number> = new Set();
+  /**
+   * The key codes this controller has sent down and has not released: the Core
+   * interceptor's keys, and the hardware keys of a session that takes the legacy
+   * route, which the interceptor never sees. A key-up removes its own entry, so a
+   * release pass sends only the holds still owed.
+   */
+  private heldKeyCodes: Set<number> = new Set();
   private touchGestureState: RustDeskTouchGestureState = new RustDeskTouchGestureState();
   private touchPrimaryId: number = -1;
   private touchSecondaryId: number = -1;
@@ -106,6 +124,7 @@ export class RustDeskInputController {
   private relativePendingY: number = 0;
   private relativeFlushTimer: number = -1;
   private relativeSuppressMoveUntil: number = 0;
+  private inputSuppressed: boolean = false;
   private pressedButtons: RustDeskPressedButtonState = new RustDeskPressedButtonState();
   // Flutter-mobile style local virtual cursor, in REMOTE coordinates.
   // This is the single source of truth for the cursor overlay position, so a
@@ -129,9 +148,56 @@ export class RustDeskInputController {
     this.clearTouchPointerState();
     this.touchSuppressedIds.clear();
     this.releasePressedButtons();
-    this.releaseInterceptedKeys();
+    this.releaseHeldKeys();
     this.activeModifiers.clear();
     this.virtualCursorValid = false;
+  }
+
+  /**
+   * Stops every mouse and keyboard emission. This is the local half of the
+   * "input off" mode: the remote side is never told, because nothing is sent.
+   */
+  setInputSuppressed(suppressed: boolean): void {
+    if (this.inputSuppressed === suppressed) {
+      return;
+    }
+    this.cancelTouchTimers();
+    this.applyTouchActions(this.touchGestureState.reset());
+    this.clearTouchPointerState();
+    this.touchSuppressedIds.clear();
+    this.releasePressedButtons();
+    this.releaseHeldKeys();
+    this.inputSuppressed = suppressed;
+    this.callbacks.log('mode', `input=${suppressed ? 'off' : 'on'}`);
+  }
+
+  isInputSuppressed(): boolean {
+    return this.inputSuppressed;
+  }
+
+  /**
+   * Every emission path consults this, so turning input off is a single switch
+   * rather than a condition repeated at a dozen call sites. Releasing a held
+   * button after the switch is flipped is not delivered on purpose: the remote
+   * keeps the button it already saw, which is the same state it is left in when
+   * a session drops.
+   */
+  private inputAllowed(): boolean {
+    return !this.inputSuppressed;
+  }
+
+  private sendMouseIfAllowed(payload: RustDeskMousePayload): void {
+    if (this.inputAllowed()) {
+      this.callbacks.sendMouse(payload);
+    }
+  }
+
+  private sendFlutterKeyIfAllowed(payload: RustDeskFlutterKeyPayload): boolean {
+    return this.inputAllowed() ? this.callbacks.sendFlutterKey(payload) : false;
+  }
+
+  private sendKeyIfAllowed(payload: RustDeskKeyPayload): boolean {
+    return this.inputAllowed() ? this.callbacks.sendKey(payload) : false;
   }
 
   setMouseMode(active: boolean): void {
@@ -176,7 +242,7 @@ export class RustDeskInputController {
   }
 
   handleMouseEvent(event: MouseEvent): void {
-    if (!this.callbacks.isSessionActive()) {
+    if (!this.callbacks.isSessionActive() || !this.inputAllowed()) {
       return;
     }
     event.stopPropagation();
@@ -191,7 +257,7 @@ export class RustDeskInputController {
   }
 
   handleAxisEvent(event: AxisEvent): void {
-    if (!this.callbacks.isSessionActive()) {
+    if (!this.callbacks.isSessionActive() || !this.inputAllowed()) {
       return;
     }
     const isTrackpad = event.sourceTool === SourceTool.TOUCHPAD;
@@ -220,49 +286,83 @@ export class RustDeskInputController {
     payload.type = isTrackpad ? 'trackpad' : 'wheel';
     payload.x = String(deltaX);
     payload.y = String(deltaY);
-    this.callbacks.sendMouse(payload);
+    this.sendMouseIfAllowed(payload);
   }
 
+  /**
+   * Routes one hardware key event to the vocabulary this session admits.
+   *
+   * Its diagnostics name the route, the event type and the outcome, never the key:
+   * a key code, key text, character or USB usage identifies a key, and the sequence
+   * of them reconstructs what was typed, which on a remote desktop can be a
+   * password. The same rule holds for the direct wire's keys, which now take the
+   * legacy route below.
+   */
   handleKeyEvent(event: KeyEvent): boolean {
+    if (!this.inputAllowed()) {
+      return false;
+    }
     if (!this.callbacks.isSessionActive()) {
-      this.callbacks.log('keyboard_ignored', `inactive keyCode=${event.keyCode} type=${this.keyEventTypeName(event.type)}`);
+      this.callbacks.log('keyboard_ignored', `inactive type=${this.keyEventTypeName(event.type)}`);
       return false;
     }
     const isDown = event.type === KeyType.Down;
     const isUp = event.type === KeyType.Up;
     if (!isDown && !isUp) {
-      this.callbacks.log('keyboard_ignored', `unsupported_type keyCode=${event.keyCode} type=${this.keyEventTypeName(event.type)}`);
+      this.callbacks.log('keyboard_ignored', `unsupported_type type=${this.keyEventTypeName(event.type)}`);
       return false;
     }
     const mapping = mapHarmonyKeyCode(event.keyCode);
     if (!mapping) {
-      this.callbacks.log(
-        'keyboard_unmapped',
-        `keyCode=${event.keyCode} type=${this.keyEventTypeName(event.type)} keyText=${String(event.keyText ?? '')} unicode=${String(event.unicode ?? '')}`,
-      );
+      this.callbacks.log('keyboard_unmapped', `type=${this.keyEventTypeName(event.type)}`);
       return false;
     }
     if (mapping.modifier && isUp) {
       this.activeModifiers.delete(mapping.modifier);
     }
     let sent = false;
-    const flutterPayload = this.buildFlutterKeyPayload(event, isDown);
+    let rawRouteAttempted = false;
+    // A session that does not take the Core's raw key route never constructs this
+    // payload: its key goes straight to the legacy vocabulary below.
+    const flutterPayload = this.callbacks.usesCoreRawKeyRoute()
+      ? this.buildFlutterKeyPayload(event, isDown)
+      : undefined;
     if (flutterPayload) {
-      sent = this.callbacks.sendFlutterKey(flutterPayload);
+      rawRouteAttempted = true;
+      sent = this.sendFlutterKeyIfAllowed(flutterPayload);
       this.callbacks.log(
         'keyboard_flutter',
-        `sent=${sent} keyCode=${event.keyCode} type=${this.keyEventTypeName(event.type)} name=${mapping.name} usb=${flutterPayload.usb_hid} charLen=${flutterPayload.character.length}`,
+        `sent=${sent} type=${this.keyEventTypeName(event.type)}`,
       );
+    }
+    if (!sent && rawRouteAttempted) {
+      // The raw key route was chosen for this event and the native side refused it,
+      // so its generation is what refused it. Re-sending the same event through the
+      // legacy route would launder it into the newly adopted generation; only an
+      // event whose raw route was never chosen falls through.
+      this.callbacks.log('keyboard_legacy_skipped',
+        `type=${this.keyEventTypeName(event.type)}`);
+      return false;
     }
     if (!sent) {
       sent = this.sendLegacyKey(mapping, isDown);
       this.callbacks.log(
         'keyboard_legacy',
-        `sent=${sent} keyCode=${event.keyCode} type=${this.keyEventTypeName(event.type)} name=${mapping.name}`,
+        `sent=${sent} type=${this.keyEventTypeName(event.type)}`,
       );
     }
     if (!sent) {
       return false;
+    }
+    if (!this.callbacks.usesCoreRawKeyRoute()) {
+      // A direct wire's hardware key takes the legacy route above, and the Core
+      // interceptor never sees it, so the hold is owned here. The release pass runs
+      // before input is suppressed, while this key's own up is refused afterwards.
+      if (isDown) {
+        this.heldKeyCodes.add(event.keyCode);
+      } else {
+        this.heldKeyCodes.delete(event.keyCode);
+      }
     }
     if (mapping.modifier && isDown) {
       this.activeModifiers.add(mapping.modifier);
@@ -272,46 +372,62 @@ export class RustDeskInputController {
   }
 
   handleInterceptedKeyEvent(keyCode: number, action: number): boolean {
+    if (!this.inputAllowed()) {
+      return false;
+    }
     if (!this.callbacks.isSessionActive()) {
-      this.callbacks.log('keyboard_intercepted_ignored', `inactive keyCode=${keyCode} action=${action}`);
+      this.callbacks.log('keyboard_intercepted_ignored', `inactive action=${action}`);
       return false;
     }
     const isDown = action === 1;
     const isUp = action === 0 || action === 2;
     if (!isDown && !isUp) {
-      this.callbacks.log('keyboard_intercepted_ignored', `unsupported keyCode=${keyCode} action=${action}`);
+      this.callbacks.log('keyboard_intercepted_ignored', `unsupported action=${action}`);
       return false;
     }
     const mapping = mapHarmonyKeyCode(keyCode);
     if (!mapping) {
-      this.callbacks.log('keyboard_intercepted_unmapped', `keyCode=${keyCode} action=${action}`);
+      this.callbacks.log('keyboard_intercepted_unmapped', `action=${action}`);
       return false;
     }
     if (mapping.modifier && isUp) {
       this.activeModifiers.delete(mapping.modifier);
     }
     let sent = false;
-    const usbHid = mapHarmonyKeyCodeToUsbHid(keyCode);
+    let rawRouteAttempted = false;
+    // Same rule as handleKeyEvent: a session that does not take the Core's raw key
+    // route is not asked for a USB HID code, so the key falls through to the legacy
+    // vocabulary rather than being dropped by a route that cannot carry it.
+    const usbHid = this.callbacks.usesCoreRawKeyRoute() ? mapHarmonyKeyCodeToUsbHid(keyCode) : undefined;
     if (usbHid !== undefined) {
       const flutterPayload = new RustDeskFlutterKeyPayload('', this.mapUsbHidForPeer(usbHid), 0, isDown);
-      sent = this.callbacks.sendFlutterKey(flutterPayload);
+      rawRouteAttempted = true;
+      sent = this.sendFlutterKeyIfAllowed(flutterPayload);
       this.callbacks.log(
         'keyboard_intercepted_flutter',
-        `sent=${sent} keyCode=${keyCode} action=${action} name=${mapping.name} usb=${flutterPayload.usb_hid}`,
+        `sent=${sent} action=${action}`,
       );
+    }
+    if (!sent && rawRouteAttempted) {
+      // The raw key route was chosen for this event and the native side refused it,
+      // so its generation is what refused it. Re-sending the same event through the
+      // legacy route would launder it into the newly adopted generation; only an
+      // event whose raw route was never chosen falls through.
+      this.callbacks.log('keyboard_intercepted_legacy_skipped', `action=${action}`);
+      return false;
     }
     if (!sent) {
       sent = this.sendLegacyKey(mapping, isDown);
       this.callbacks.log(
         'keyboard_intercepted_legacy',
-        `sent=${sent} keyCode=${keyCode} action=${action} name=${mapping.name}`,
+        `sent=${sent} action=${action}`,
       );
     }
     if (sent) {
       if (isDown) {
-        this.interceptedKeysDown.add(keyCode);
+        this.heldKeyCodes.add(keyCode);
       } else {
-        this.interceptedKeysDown.delete(keyCode);
+        this.heldKeyCodes.delete(keyCode);
       }
       if (mapping.modifier && isDown) {
         this.activeModifiers.add(mapping.modifier);
@@ -320,16 +436,21 @@ export class RustDeskInputController {
     return sent;
   }
 
-  releaseInterceptedKeys(): void {
-    if (this.interceptedKeysDown.size === 0) {
+  /**
+   * Releases every key this controller still owns, in the vocabulary it was sent
+   * in. It must run before input is suppressed: the gate is what refuses releases
+   * afterwards, and a hold the peer was left with is never taken back.
+   */
+  releaseHeldKeys(): void {
+    if (this.heldKeyCodes.size === 0) {
       return;
     }
     const keyCodes: number[] = [];
-    this.interceptedKeysDown.forEach((keyCode: number) => keyCodes.push(keyCode));
+    this.heldKeyCodes.forEach((keyCode: number) => keyCodes.push(keyCode));
     for (let index = 0; index < keyCodes.length; index++) {
       this.handleInterceptedKeyEvent(keyCodes[index], 2);
     }
-    this.interceptedKeysDown.clear();
+    this.heldKeyCodes.clear();
     this.activeModifiers.clear();
   }
 
@@ -354,7 +475,7 @@ export class RustDeskInputController {
       payload.command = payload.command || payload.ctrl;
       payload.ctrl = false;
     }
-    return this.callbacks.sendKey(payload);
+    return this.sendKeyIfAllowed(payload);
   }
 
   private buildFlutterKeyPayload(event: KeyEvent, isDown: boolean): RustDeskFlutterKeyPayload | undefined {
@@ -446,11 +567,18 @@ export class RustDeskInputController {
   }
 
   handleTouchEvent(event: TouchEvent): void {
+    if (!this.inputAllowed()) {
+      return;
+    }
     if (!this.callbacks.isSessionActive()) {
       return;
     }
     event.stopPropagation();
-    if (event.sourceTool === SourceTool.MOUSE || event.sourceTool === SourceTool.TOUCHPAD || event.sourceTool === SourceTool.JOYSTICK) {
+    const isPointerSource =
+      event.sourceTool === SourceTool.MOUSE ||
+      event.sourceTool === SourceTool.TOUCHPAD ||
+      event.sourceTool === SourceTool.JOYSTICK;
+    if (isPointerSource && !this.shouldAcceptPointerTouch(event.type)) {
       return;
     }
     switch (event.type) {
@@ -469,7 +597,57 @@ export class RustDeskInputController {
     }
   }
 
+  /**
+   * Decide whether a pointer-sourced touch may use the touch path.
+   *
+   * A real pointer that is delivered through `onMouse` must not be handled here
+   * as well, so a recent mouse event latches this arm closed against the *next*
+   * sequence. The latch never decides the fate of a sequence that is already
+   * open: a sequence's own Move/Up/Cancel belong to it, and refusing its release
+   * would leave the touch state, the mouse mode and the gesture state behind. An
+   * injected or synthesized pointer that only ever arrives as a touch event is
+   * therefore taken over by the touch path once the latch expires, and drives the
+   * desktop from the absolute position it reports.
+   */
+  private shouldAcceptPointerTouch(type: TouchType): boolean {
+    if (type !== TouchType.Down) {
+      return this.pointerTouchSequence;
+    }
+    if (Date.now() < this.pointerTouchLatchUntil) {
+      return false;
+    }
+    this.pointerTouchSequence = true;
+    return true;
+  }
+
+  /**
+   * Ends a pointer-sourced sequence and whatever gesture it was driving.
+   *
+   * A sequence that is superseded rather than released goes through here, so it
+   * cannot leave a forced mouse mode, a touch id or a gesture down behind: the
+   * next sequence would otherwise be read as a second finger.
+   */
+  private abandonPointerTouchSequence(): void {
+    this.cancelTouchTimers();
+    this.applyTouchActions(this.touchGestureState.reset());
+    this.clearTouchPointerState();
+  }
+
+  /**
+   * A delivered mouse event is proof that the pointer has its own path here, so it
+   * claims the pointer: a pointer-sourced sequence that had already opened is
+   * abandoned without emitting, and no new one may open until the latch expires.
+   * A real finger's own gesture is left alone.
+   */
+  private claimPointerForMouse(): void {
+    this.pointerTouchLatchUntil = Date.now() + RustDeskInputController.POINTER_TOUCH_LATCH_MS;
+    if (this.pointerTouchSequence) {
+      this.abandonPointerTouchSequence();
+    }
+  }
+
   private handleMouseMove(event: MouseEvent): void {
+    this.claimPointerForMouse();
     if (this.relativeModeActive) {
       const rawDeltaX = event.rawDeltaX ?? 0;
       const rawDeltaY = event.rawDeltaY ?? 0;
@@ -519,6 +697,7 @@ export class RustDeskInputController {
   }
 
   private handleMouseButton(event: MouseEvent): void {
+    this.claimPointerForMouse();
     const button = mapMouseButton(event.button);
     if (!button) {
       return;
@@ -526,6 +705,7 @@ export class RustDeskInputController {
     const isPress = event.action === MouseAction.Press;
     const inside = this.isInsideContent(event.x, event.y);
     if (isPress && !inside) {
+      this.callbacks.log('mouse_press_skipped', `outside_content x=${event.x} y=${event.y}`);
       return;
     }
     if (!isPress && !this.pressedButtons.hasOwner(button, 'physical_mouse')) {
@@ -554,6 +734,7 @@ export class RustDeskInputController {
       const touch = changedTouches[index];
       if (this.touchPrimaryId === -1) {
         if (!this.mouseModeActive && !this.isInsideContent(touch.x, touch.y)) {
+          this.callbacks.log('touch_dropped', `outside_content x=${touch.x} y=${touch.y}`);
           continue;
         }
         this.touchPrimaryId = touch.id;
@@ -640,7 +821,7 @@ export class RustDeskInputController {
     if (!this.touchGestureState.isHoldPending()) {
       this.cancelHoldTimer();
     }
-    if (this.mouseModeActive || this.relativeModeActive) {
+    if (this.isTouchpadGesture() || this.relativeModeActive) {
       const deltaX = primaryTouch.x - this.touchLastX;
       const deltaY = primaryTouch.y - this.touchLastY;
       this.touchLastX = primaryTouch.x;
@@ -754,7 +935,7 @@ export class RustDeskInputController {
     if (this.callbacks.isPeerAndroid()) {
       return;
     }
-    this.touchThreeFingerScrollIntegral += deltaY / TOUCH_THREE_FINGER_SCROLL_DIVISOR;
+    this.touchThreeFingerScrollIntegral += deltaY / DEFAULT_TOUCH_SCROLL_DIVISOR;
     if (this.touchThreeFingerScrollIntegral > 1) {
       this.sendTouchWheelStep(1);
       this.touchThreeFingerScrollIntegral = 0;
@@ -765,7 +946,19 @@ export class RustDeskInputController {
   }
 
   private interactionMode(): RustDeskTouchInteractionMode {
-    return this.mouseModeActive ? 'mouse' : 'touch';
+    return this.isTouchpadGesture() ? 'mouse' : 'touch';
+  }
+
+  /**
+   * Whether the open touch gesture is a touchpad drag: its movement is sent as
+   * relative deltas and its tap lands on the local virtual cursor.
+   *
+   * A pointer-sourced sequence is excluded even while mouse mode is on, because
+   * the positions it reports are absolute: its tap and drag belong to the point
+   * it names, not to the cursor the touchpad would be nudging.
+   */
+  private isTouchpadGesture(): boolean {
+    return this.mouseModeActive && !this.pointerTouchSequence;
   }
 
   private touchDistance(firstX: number, firstY: number, secondX: number, secondY: number): number {
@@ -797,7 +990,7 @@ export class RustDeskInputController {
     const payload = new RustDeskMousePayload();
     payload.type = 'wheel';
     payload.y = String(step);
-    this.callbacks.sendMouse(payload);
+    this.sendMouseIfAllowed(payload);
   }
 
   private beginTouchSuppression(): void {
@@ -895,7 +1088,14 @@ export class RustDeskInputController {
     if (primaryReleased) {
       this.cancelHoldTimer();
       this.applyTouchActions(this.touchGestureState.onRelease(primaryX, primaryY, Date.now(), false));
-      this.syncTouchTapTimeout(Date.now());
+      if (this.pointerTouchSequence) {
+        // A synthetic pointer's tap has no second tap of its own to be merged
+        // with, so it is resolved here rather than left pending: the click is
+        // emitted while this sequence still owns the absolute mapping.
+        this.applyTouchActions(this.touchGestureState.resolvePendingTap());
+      } else {
+        this.syncTouchTapTimeout(Date.now());
+      }
       this.clearTouchPointerState();
       return;
     }
@@ -963,7 +1163,7 @@ export class RustDeskInputController {
         }
         return;
       case 'drag_start':
-        if (this.mouseModeActive) {
+        if (this.isTouchpadGesture()) {
           if (this.relativeModeActive) {
             this.flushRelativeMouseMove();
           } else {
@@ -983,7 +1183,7 @@ export class RustDeskInputController {
   }
 
   private applyTouchClick(localX: number, localY: number, button: string): void {
-    if (this.mouseModeActive) {
+    if (this.isTouchpadGesture()) {
       if (!this.relativeModeActive) {
         this.sendVirtualCursorAbsoluteMove();
       }
@@ -994,7 +1194,7 @@ export class RustDeskInputController {
   }
 
   private applyTouchDoubleClick(localX: number, localY: number): void {
-    if (this.mouseModeActive) {
+    if (this.isTouchpadGesture()) {
       if (!this.relativeModeActive) {
         this.sendVirtualCursorAbsoluteMove();
       }
@@ -1015,13 +1215,14 @@ export class RustDeskInputController {
   private moveRemoteCursorToLocalPoint(localX: number, localY: number): boolean {
     const space = this.callbacks.getCoordinateSpace();
     if (!space || !isLocalPointInsidePaintRect(space, localX, localY)) {
+      this.callbacks.log('cursor_move_skipped', `space=${space !== undefined} x=${localX} y=${localY}`);
       return false;
     }
     const position = mapLocalToRemote(space, localX, localY);
     const payload = new RustDeskMousePayload();
     payload.x = String(position.x);
     payload.y = String(position.y);
-    this.callbacks.sendMouse(payload);
+    this.sendMouseIfAllowed(payload);
     this.setVirtualCursorRemote(position.x, position.y);
     return true;
   }
@@ -1079,7 +1280,7 @@ export class RustDeskInputController {
     const payload = new RustDeskMousePayload();
     payload.type = isDown ? 'down' : 'up';
     payload.buttons = button;
-    this.callbacks.sendMouse(payload);
+    this.sendMouseIfAllowed(payload);
   }
 
   private sendRelativeMouseButton(button: string, isDown: boolean, flushPending: boolean = true): void {
@@ -1089,7 +1290,7 @@ export class RustDeskInputController {
     const payload = new RustDeskMousePayload();
     payload.type = isDown ? 'down' : 'up';
     payload.buttons = button;
-    this.callbacks.sendMouse(payload);
+    this.sendMouseIfAllowed(payload);
   }
 
   private sendRelativeModeMarker(active: boolean): void {
@@ -1100,7 +1301,7 @@ export class RustDeskInputController {
       payload.x = '0';
       payload.y = '0';
     }
-    this.callbacks.sendMouse(payload);
+    this.sendMouseIfAllowed(payload);
   }
 
   private queueRelativeMouseMove(deltaX: number, deltaY: number): void {
@@ -1139,7 +1340,7 @@ export class RustDeskInputController {
     payload.type = 'move_relative';
     payload.x = String(moveX);
     payload.y = String(moveY);
-    this.callbacks.sendMouse(payload);
+    this.sendMouseIfAllowed(payload);
     if (Math.abs(this.relativePendingX) >= 1 || Math.abs(this.relativePendingY) >= 1) {
       this.scheduleRelativeMouseFlush();
     }
@@ -1174,7 +1375,13 @@ export class RustDeskInputController {
     this.relativeSuppressMoveUntil = 0;
   }
 
+  /**
+   * Ends the touch pointer state, and with it any pointer-sourced sequence: every
+   * path that finishes a sequence reaches this, so the ownership flag cannot
+   * outlive the state it protects.
+   */
   private clearTouchPointerState(): void {
+    this.pointerTouchSequence = false;
     this.touchPrimaryId = -1;
     this.touchSecondaryId = -1;
     this.touchThirdId = -1;
@@ -1335,7 +1542,7 @@ export class RustDeskInputController {
     const payload = new RustDeskMousePayload();
     payload.x = String(Math.round(this.virtualCursorX));
     payload.y = String(Math.round(this.virtualCursorY));
-    this.callbacks.sendMouse(payload);
+    this.sendMouseIfAllowed(payload);
   }
 
   // Move by a remote-space delta, clamped to the display (Flutter's maxCursorCanMove).

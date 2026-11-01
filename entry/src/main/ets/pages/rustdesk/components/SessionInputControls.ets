@@ -2,6 +2,7 @@ import { RustDeskInputMode, RustDeskRightClickGesture } from '../RustDeskDirecto
 import { ToolbarTripleSelector } from './ToolbarTripleSelector';
 
 export interface SessionInputControlsProps {
+  inputEnabled: boolean;
   touchMode: boolean;
   relativeMouseMode: boolean;
   relativeModeSupported: boolean;
@@ -13,6 +14,7 @@ export interface SessionInputControlsProps {
 
 @ComponentV2
 export struct SessionInputControls {
+  @Param inputEnabled: boolean = true;
   @Param touchMode: boolean = true;
   @Param relativeMouseMode: boolean = false;
   @Param relativeModeSupported: boolean = false;
@@ -28,6 +30,11 @@ export struct SessionInputControls {
   aboutToAppear(): void {
     this.syncModeIndex();
     this.syncRightClickIndex();
+  }
+
+  @Monitor('inputEnabled')
+  private onInputEnabledChanged(_monitor: IMonitor): void {
+    this.syncModeIndex();
   }
 
   @Monitor('touchMode')
@@ -46,7 +53,13 @@ export struct SessionInputControls {
   }
 
   private syncModeIndex(): void {
-    this.selectedModeIndex = this.touchMode ? 0 : (this.relativeMouseMode ? 2 : 1);
+    if (!this.inputEnabled) {
+      this.selectedModeIndex = 0;
+      return;
+    }
+    // Relative mouse remains reachable from the input sheet; the compact
+    // toolbar selector trades it for an explicit off switch.
+    this.selectedModeIndex = this.touchMode ? 1 : 2;
   }
 
   private syncRightClickIndex(): void {
@@ -60,11 +73,8 @@ export struct SessionInputControls {
   }
 
   private selectMode(index: number): void {
-    if (index === 2 && !this.relativeModeSupported) {
-      return;
-    }
     this.selectedModeIndex = index;
-    const mode: RustDeskInputMode = index === 0 ? 'touch' : (index === 1 ? 'mouse' : 'relative');
+    const mode: RustDeskInputMode = index === 0 ? 'off' : (index === 1 ? 'touch' : 'mouse');
     this.onSelectMode(mode);
   }
 
@@ -86,8 +96,7 @@ export struct SessionInputControls {
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.neu_text_secondary'));
           ToolbarTripleSelector({
-            labels: ['触控', '鼠标', '相对'],
-            enabledItems: [true, true, this.relativeModeSupported],
+            labels: ['关闭', '触控', '鼠标'],
             selectedIndex: this.selectedModeIndex,
             controlWidth: this.selectorWidth(),
             controlHeight: 36,
@@ -125,8 +134,7 @@ export struct SessionInputControls {
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.neu_text_secondary'));
           ToolbarTripleSelector({
-            labels: ['触控', '鼠标', '相对'],
-            enabledItems: [true, true, this.relativeModeSupported],
+            labels: ['关闭', '触控', '鼠标'],
             selectedIndex: this.selectedModeIndex,
             controlWidth: this.selectorWidth(),
             controlHeight: 36,
@@ -153,7 +161,10 @@ export struct SessionInputControls {
         }
         .alignItems(VerticalAlign.Center);
       }
-      .width('100%');
+      .width('100%')
+      // The toolbar's own groups end at its right edge, and this block is one of
+      // them when it sits in the home body.
+      .alignItems(HorizontalAlign.End);
     }
   }
 }

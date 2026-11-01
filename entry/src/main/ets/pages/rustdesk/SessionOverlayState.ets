@@ -1,5 +1,5 @@
 export type SessionOverlayPanel =
-  'home' | 'input' | 'chat' | 'display' | 'quality';
+  'home' | 'input' | 'display' | 'quality';
 
 export class SessionOverlayState {
   private activePanel: SessionOverlayPanel = 'home';

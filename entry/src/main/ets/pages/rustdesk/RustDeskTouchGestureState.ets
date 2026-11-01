@@ -23,7 +23,12 @@ export const TOUCH_DOUBLE_TAP_SLOP: number = 100;
 export const TOUCH_TWO_FINGER_TAP_MAX_MS: number = 350;
 export const TOUCH_TRANSFORM_PAN_SLOP: number = 8;
 export const TOUCH_TRANSFORM_SCALE_SLOP: number = 0.02;
-export const TOUCH_THREE_FINGER_SCROLL_DIVISOR: number = 4;
+export const DEFAULT_TOUCH_SCROLL_DIVISOR: number = 4;
+export const TOUCH_SCROLL_DIVISOR_CHOICES: number[] = [2, 4, 8];
+
+export function isValidTouchScrollDivisor(value: number): boolean {
+  return Number.isInteger(value) && TOUCH_SCROLL_DIVISOR_CHOICES.indexOf(value) >= 0;
+}
 
 /**
  * Flutter-mobile compatible one-finger gesture state.
@@ -208,6 +213,21 @@ export class RustDeskTouchGestureState {
 
   onTapTimeout(at: number): Array<RustDeskTouchAction> {
     if (!this.pendingTap || at - this.pendingTapAt < TOUCH_DOUBLE_TAP_MAX_MS) {
+      return [];
+    }
+    return this.resolvePendingTap();
+  }
+
+  /**
+   * Resolves a pending tap without waiting out the double-tap window.
+   *
+   * A synthetic pointer's tap has no second tap of its own to be merged with, and
+   * the peer runs its own double-click detection on the events it receives, so the
+   * click is emitted at the release instead of being held back for a merge that
+   * cannot happen.
+   */
+  resolvePendingTap(): Array<RustDeskTouchAction> {
+    if (!this.pendingTap) {
       return [];
     }
     const actions: Array<RustDeskTouchAction> = [

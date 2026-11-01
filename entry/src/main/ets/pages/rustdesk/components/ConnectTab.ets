@@ -10,10 +10,19 @@ import {
   LuminousTone,
 } from 'luminous_neo';
 import { EasyTierInstanceSummary } from '../../../services/EasyTierApiService';
-import { DirectorySnapshot, PeerRecord } from '../RustDeskDirectoryTypes';
+import { DirectorySnapshot, PeerProtocol, PeerRecord } from '../RustDeskDirectoryTypes';
+import { TargetFieldIssue, targetFieldIssue, targetFieldIssueText } from '../DirectWireCredentials';
 import { RustDeskLayoutTokens } from '../RustDeskLayoutTokens';
-import { peerDisplaySubtitle, peerDisplayTitle } from '../RustDeskPeerDirectoryModel';
+import {
+  peerDisplaySubtitle,
+  peerDisplayTitle,
+  peerOnlineState,
+  peerReachability,
+  peerProtocolName,
+  peerProtocolOf,
+} from '../RustDeskPeerDirectoryModel';
 import { FloatingActionSurface } from './FloatingSurface';
+import { deviceConnectionTarget } from '../SavedDeviceModel';
 
 export interface ConnectTabProps {
   target: string;
@@ -21,8 +30,8 @@ export interface ConnectTabProps {
   scroller: Scroller;
   onTargetChange: (value: string) => void;
   onConnectRemote: () => void;
-  onViewOnly: () => void;
-  onViewCamera: () => void;
+  onConnectVnc: () => void;
+  onConnectRdp: () => void;
   onOpenTransfer: () => void;
   onDisconnect: () => void;
   canDisconnect: boolean;
@@ -56,11 +65,14 @@ export struct ConnectTab {
   @Param directorySnapshot: DirectorySnapshot = new DirectorySnapshot();
   @Param scroller: Scroller = new Scroller();
   @Local viewportWidth: number = 390;
-  @Local connectionMode: number = 0;
+  // The page owns the selected protocol, like the target text, so the choice
+  // survives this tab being rebuilt around a session.
+  @Param connectionMode: number = 0;
+  @Event onConnectionModeChange: (index: number) => void = (_index: number) => {};
   @Event onTargetChange: (value: string) => void = (_value: string) => {};
   @Event onConnectRemote: () => void = () => {};
-  @Event onViewOnly: () => void = () => {};
-  @Event onViewCamera: () => void = () => {};
+  @Event onConnectVnc: () => void = () => {};
+  @Event onConnectRdp: () => void = () => {};
   @Event onOpenTransfer: () => void = () => {};
   @Event onDisconnect: () => void = () => {};
   @Event onEasyTierModeChange: (instanceId: string) => void = (_instanceId: string) => {};
@@ -118,25 +130,47 @@ export struct ConnectTab {
     return Math.max(120, this.recentCardFrameWidth() - 4);
   }
 
+  /** The session kind the selected mode dials; the file workspace is a RustDesk target. */
+  private modeKind(): string {
+    if (this.connectionMode === 1) {
+      return 'vnc';
+    }
+    return this.connectionMode === 2 ? 'rdp' : 'remote_control';
+  }
+
+  private targetIssue(): TargetFieldIssue {
+    return targetFieldIssue(this.modeKind(), this.target);
+  }
+
   private targetReady(): boolean {
-    return this.target.trim().length > 0;
+    return this.target.trim().length > 0 && this.targetIssue() === '';
+  }
+
+  private targetPlaceholder(): string {
+    if (this.connectionMode === 1) {
+      return '主机或 IP[:端口]，默认 5900';
+    }
+    if (this.connectionMode === 2) {
+      return '主机或 IP[:端口]，默认 3389';
+    }
+    return '输入设备 ID';
   }
 
   private modeItems(): LuminousSelectionItem[] {
     return [
-      new LuminousSelectionItem('control', '远程控制', '控制远端设备'),
-      new LuminousSelectionItem('view_only', '只看屏幕', '观看远端屏幕，不发送输入'),
-      new LuminousSelectionItem('camera', '查看相机', '查看远端摄像头'),
-      new LuminousSelectionItem('files', '文件传输', '浏览并传输文件'),
+      new LuminousSelectionItem('control', '远控', '使用 RustDesk 协议完整控制远端'),
+      new LuminousSelectionItem('vnc', 'VNC', '连接标准 VNC 服务端'),
+      new LuminousSelectionItem('rdp', 'RDP', '连接 Windows 远程桌面'),
+      new LuminousSelectionItem('files', '文件', '浏览并传输文件'),
     ];
   }
 
   private modeSymbol(): Resource {
     if (this.connectionMode === 1) {
-      return $r('sys.symbol.display');
+      return $r('sys.symbol.link');
     }
     if (this.connectionMode === 2) {
-      return $r('sys.symbol.video');
+      return $r('sys.symbol.square');
     }
     if (this.connectionMode === 3) {
       return $r('sys.symbol.folder');
@@ -146,10 +180,10 @@ export struct ConnectTab {
 
   private modeTitle(): ResourceStr {
     if (this.connectionMode === 1) {
-      return '观看远端屏幕';
+      return '连接 VNC 服务端';
     }
     if (this.connectionMode === 2) {
-      return '查看远端相机';
+      return '连接远程桌面';
     }
     if (this.connectionMode === 3) {
       return '打开文件工作区';
@@ -159,23 +193,23 @@ export struct ConnectTab {
 
   private modeDescription(): ResourceStr {
     if (this.connectionMode === 1) {
-      return '只查看远端画面，不发送键鼠、触摸或剪贴板输入';
+      return '用标准 RFB 协议连接路由器、开发板或虚拟机上的 VNC 服务端';
     }
     if (this.connectionMode === 2) {
-      return '只查看视频，不发送键鼠输入';
+      return '用 RDP 协议连接 Windows 远程桌面，适合企业内网与服务器';
     }
     if (this.connectionMode === 3) {
       return '在本机与远端之间浏览和传输文件';
     }
-    return '连接后使用触摸、键鼠或触控板操作远端';
+    return '使用 RustDesk 协议连接，支持触摸、键鼠与剪贴板';
   }
 
   private primaryActionLabel(): ResourceStr {
     if (this.connectionMode === 1) {
-      return '只看屏幕';
+      return this.canDisconnect ? '建立新 VNC 连接' : '连接 VNC';
     }
     if (this.connectionMode === 2) {
-      return '查看相机';
+      return this.canDisconnect ? '建立新 RDP 连接' : '连接 RDP';
     }
     if (this.connectionMode === 3) {
       return this.transferActive ? '返回文件传输' : '开始文件传输';
@@ -248,11 +282,11 @@ export struct ConnectTab {
 
   private activatePrimaryAction(): void {
     if (this.connectionMode === 1) {
-      this.onViewOnly();
+      this.onConnectVnc();
       return;
     }
     if (this.connectionMode === 2) {
-      this.onViewCamera();
+      this.onConnectRdp();
       return;
     }
     if (this.connectionMode === 3) {
@@ -260,6 +294,21 @@ export struct ConnectTab {
       return;
     }
     this.onConnectRemote();
+  }
+
+  /**
+   * The mode a record's own protocol selects.
+   *
+   * The mode indexes the segmented control and picks the primary action
+   * (0 RustDesk, 1 VNC, 2 RDP), so a selected record's protocol has to be
+   * remembered here: the target field only keeps the bare address, and the
+   * address of a VNC or RDP peer may be spelled exactly like a RustDesk one.
+   */
+  private connectionModeForProtocol(protocol: PeerProtocol): number {
+    if (protocol === 'vnc') {
+      return 1;
+    }
+    return protocol === 'rdp' ? 2 : 0;
   }
 
   private recentPreview(): PeerRecord[] {
@@ -280,15 +329,30 @@ export struct ConnectTab {
     return starts;
   }
 
+  /**
+   * One (protocol, target) tuple per card, JSON-encoded.
+   *
+   * Joining the fields with a character cannot be inverted while the fields may
+   * contain that character, so `a-rustdesk-b` + `c` and `a` + `b-rustdesk-c`
+   * used to spell the same key. ArkUI leaves the rendering of duplicate keys
+   * unspecified, so the encoding has to be unambiguous.
+   */
   private recentPeerRenderKey(peer: PeerRecord): string {
-    return peer.id;
+    return JSON.stringify([peerProtocolOf(peer), peer.id]);
   }
 
+  /**
+   * One rendered row of the recent grid, keyed by its revision and both cards.
+   *
+   * Rows change identity when the row's own contents change, and the key has to
+   * distinguish the two cards of the row for the same reason the cards are
+   * tuple-encoded above.
+   */
   private recentRowRenderKey(start: number): string {
     const peers = this.recentPreview();
     const first = this.recentPeerRenderKey(peers[start]);
-    const second = start + 1 < peers.length ? this.recentPeerRenderKey(peers[start + 1]) : 'empty';
-    return `recent-row-${this.directorySnapshot.revision}-${first}-${second}`;
+    const second = start + 1 < peers.length ? this.recentPeerRenderKey(peers[start + 1]) : '';
+    return JSON.stringify(['recent-row', `${this.directorySnapshot.revision}`, first, second]);
   }
 
   private recentPeerName(peer: PeerRecord): string {
@@ -296,7 +360,7 @@ export struct ConnectTab {
   }
 
   private recentPeerTarget(peer: PeerRecord): string {
-    return peer.id.trim();
+    return deviceConnectionTarget(peer);
   }
 
   private recentPeerSubtitle(peer: PeerRecord): string {
@@ -304,13 +368,21 @@ export struct ConnectTab {
   }
 
   private recentPeerStatus(peer: PeerRecord): ResourceStr {
-    return peer.online
+    const state = peerOnlineState(peerReachability(peer));
+    if (state === 'unknown') {
+      return $r('app.string.device_status_checking');
+    }
+    return state === 'online'
       ? $r('app.string.device_status_online')
       : $r('app.string.device_status_offline');
   }
 
   private recentPeerStatusColor(peer: PeerRecord): ResourceColor {
-    return peer.online
+    const state = peerOnlineState(peerReachability(peer));
+    if (state === 'unknown') {
+      return $r('app.color.info');
+    }
+    return state === 'online'
       ? $r('app.color.success')
       : $r('app.color.neu_text_secondary');
   }
@@ -355,7 +427,7 @@ export struct ConnectTab {
         controlHeight: 50,
         motionEnabled: true,
         onChange: (index: number): void => {
-          this.connectionMode = index;
+          this.onConnectionModeChange(index);
         },
       })
         .margin({ top: -6 })
@@ -363,7 +435,7 @@ export struct ConnectTab {
 
       LuminousTextField({
         value: this.target,
-        placeholder: '输入设备 ID',
+        placeholder: this.targetPlaceholder(),
         fieldWidth: this.controlWidth(),
         fieldHeight: 54,
         motionEnabled: true,
@@ -371,6 +443,17 @@ export struct ConnectTab {
       })
         .margin({ top: -26 })
         .translate({ x: this.compactControlVisualOffsetX() })
+
+      if (this.targetIssue() !== '') {
+        Text(targetFieldIssueText(this.modeKind(), this.targetIssue()))
+          .width(this.controlWidth())
+          .padding({ left: 4, right: 4 })
+          .fontSize(12)
+          .lineHeight(18)
+          .fontColor($r('app.color.error'))
+          .margin({ top: -20, bottom: 20 })
+          .translate({ x: this.compactControlVisualOffsetX() })
+      }
 
       LuminousButton({
         label: this.primaryActionLabel(),
@@ -496,6 +579,7 @@ export struct ConnectTab {
           actionEnabled: this.recentPeerTarget(peer).length > 0,
           accessibilityLabel: `选择设备 ${this.recentPeerName(peer)}，填入 ${this.recentPeerTarget(peer)}`,
           onActivate: (): void => {
+            this.onConnectionModeChange(this.connectionModeForProtocol(peerProtocolOf(peer)));
             this.onTargetChange(this.recentPeerTarget(peer));
           },
         }) {
@@ -519,12 +603,24 @@ export struct ConnectTab {
                 .fontColor($r('app.color.neu_text_primary'))
                 .maxLines(1)
                 .textOverflow({ overflow: TextOverflow.Ellipsis });
-              Text(this.recentPeerSubtitle(peer))
-                .width('100%')
-                .fontSize(12)
-                .fontColor($r('app.color.neu_text_secondary'))
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis });
+              Row({ space: 6 }) {
+                Text(this.recentPeerSubtitle(peer))
+                  .layoutWeight(1)
+                  .fontSize(12)
+                  .fontColor($r('app.color.neu_text_secondary'))
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis });
+                Text(peerProtocolName(peerProtocolOf(peer)))
+                  .fontSize(10)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor(peerProtocolOf(peer) === 'vnc'
+                    ? $r('app.color.brand_secondary') : $r('app.color.brand_primary'))
+                  .padding({ left: 6, right: 6, top: 1, bottom: 1 })
+                  .borderRadius($r('app.float.radius_6'))
+                  .backgroundColor($r('app.color.mica_control'));
+              }
+              .width('100%')
+              .alignItems(VerticalAlign.Center);
             }
             .width('100%')
             .alignItems(HorizontalAlign.Start)

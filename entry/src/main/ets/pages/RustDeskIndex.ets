@@ -8,7 +8,7 @@ import {
   hdsMaterial,
 } from '@kit.UIDesignKit';
 import { rustDeskNativeApi as native } from './rustdesk/RustDeskNativeApi';
-import { common, OpenLinkOptions } from '@kit.AbilityKit';
+import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { BusinessError, Callback, deviceInfo } from '@kit.BasicServicesKit';
 import { display, window } from '@kit.ArkUI';
@@ -22,6 +22,7 @@ import {
 import { ConnectTab } from './rustdesk/components/ConnectTab';
 import { DeviceDirectoryPanel } from './rustdesk/components/DeviceDirectoryPanel';
 import { AuthDialogMode, PasswordDialog } from './rustdesk/components/PasswordDialog';
+import { DirectCredentialsDialog } from './rustdesk/components/DirectCredentialsDialog';
 import { ConnectionAttemptOverlay } from './rustdesk/components/ConnectionAttemptOverlay';
 import { InsecureConnectionDialog } from './rustdesk/components/InsecureConnectionDialog';
 import { SettingsTab } from './rustdesk/components/SettingsTab';
@@ -41,33 +42,58 @@ import {
   REMOTE_SOFT_KEYBOARD_PANEL_HEIGHT,
   RemoteSoftKeyboard,
 } from './rustdesk/components/RemoteSoftKeyboard';
-import { ChatDrawer } from './rustdesk/components/ChatDrawer';
 import { DisplaySelectorSheet } from './rustdesk/components/DisplaySelectorSheet';
-import { QualityControlSheet, QualityPreset } from './rustdesk/components/QualityControlSheet';
+import { QualityControlSheet } from './rustdesk/components/QualityControlSheet';
 import { SessionPanelFrame } from './rustdesk/components/SessionPanelFrame';
 import { TransferDrawer } from './rustdesk/components/TransferDrawer';
-import { ChatStore } from './rustdesk/ChatStore';
 import { RustDeskPreferences } from './rustdesk/RustDeskPreferences';
+import {
+  defaultRefreshRateFor,
+  isValidRefreshRate,
+  resolveRefreshRateChoices,
+} from './rustdesk/RustDeskRefreshRate';
 import { RustDeskLayoutTokens } from './rustdesk/RustDeskLayoutTokens';
+import {
+  DirectWireCredentials,
+  DirectWireProtocol,
+  checkRdpUser,
+  directDialTarget,
+  isDirectWireKind,
+  targetFieldIssue,
+  targetFieldIssueText,
+} from './rustdesk/DirectWireCredentials';
+import { RdpCertificateChallenge, rdpCertificateChallengeFromEvent, rdpCertificateTrustKey } from './rustdesk/RdpCertificateTrust';
 import { RustDeskMainBridge } from './rustdesk/RustDeskMainBridge';
 import {
-  AccountActionResult,
-  AccountLoginProvider,
-  AccountState,
+  RustDeskRuntimeObserver,
+  RustDeskRuntimeState,
+  rustDeskRuntimeController,
+} from '../services/RustDeskRuntimeController';
+import {
+  ApprovedServerProfile,
   DirectorySnapshot,
+  DirectoryWriteReply,
+  PeerProtocol,
   PeerRecord,
   RustDeskInputMode,
   RustDeskRightClickGesture,
   ServerConfig,
+  ServerProfileReply,
+  ServerProfileState,
   SessionDefaults,
 } from './rustdesk/RustDeskDirectoryTypes';
 import {
   applyPeerOnlineStates,
+  bareTargetAddress,
   buildFavoritePeers,
   collectPeerOnlineIds,
   peerProjectionListsEqual,
   preservePeerOnlineStates,
 } from './rustdesk/RustDeskPeerDirectoryModel';
+import { computeRdpDesktopSize, computeRdpScaleFactor, copySessionDefaults, swapDefaultDirectPort } from './rustdesk/DirectSessionSettings';
+import { invalidatesRdpUsernameCache, migrateDeviceRecord, savedDeviceKey } from './rustdesk/SavedDeviceModel';
+import { DeviceLivenessProbe } from '../services/DeviceLivenessProbe';
+import { copyPeerRecord, peerProtocolOf } from './rustdesk/RustDeskPeerDirectoryModel';
 import { RustDeskSurfaceController } from './rustdesk/RustDeskSurfaceController';
 import { RustDeskInputController } from './rustdesk/RustDeskInputController';
 import {
@@ -79,6 +105,9 @@ import { RustDeskCursorModel } from './rustdesk/RustDeskCursorModel';
 import {
   RustDeskClipboardController,
   RustDeskRemoteClipboardPayload,
+  RustDeskSystemClipboardHost,
+  carriesRichClipboard,
+  clipboardTextSyncAllowed,
 } from './rustdesk/RustDeskClipboardController';
 import {
   RustDeskCoordinateSpace,
@@ -87,7 +116,11 @@ import {
   RustDeskMousePayload,
   RustDeskSize,
 } from './rustdesk/RustDeskInputMapper';
-import { RustDeskViewportModel } from './rustdesk/RustDeskViewportModel';
+import {
+  computeSurfaceGeometry,
+  RustDeskDisplayMode,
+  RustDeskViewportModel,
+} from './rustdesk/RustDeskViewportModel';
 import {
   RemoteSessionOrientationMode,
   RemoteSessionOrientationPolicy,
@@ -105,16 +138,21 @@ import {
   FloatingActionSurface,
   FloatingGlassSurface,
 } from './rustdesk/components/FloatingSurface';
-import { SessionDisplayController } from './rustdesk/SessionDisplayController';
+import { DEFAULT_REFRESH_RATE, matchesResolutionRefusal, SessionDisplayController } from './rustdesk/SessionDisplayController';
+import { FrameRateTelemetry } from '../services/FrameRateTelemetry';
 import { SessionOverlayPanel, SessionOverlayState } from './rustdesk/SessionOverlayState';
 import { formatSessionToolbarMetrics, SessionToolbarMetrics } from './rustdesk/SessionToolbarMetrics';
 import {
-  ChatMessage,
+  applyFrameRateSnapshot,
+  clearQualityFrameMetrics,
+  emptyQualityTelemetry,
+  mergeQualityStatus,
   DownloadRoot,
   LocalFileEntry,
   QualityTelemetry,
   RemoteAudioState,
   RemoteFileEntry,
+  SessionStartOptions,
   TransferItem,
 } from './rustdesk/RustDeskSessionTypes';
 import {
@@ -172,7 +210,6 @@ const REMOTE_CURSOR_OPTION_REAPPLY_MS = 1000;
 const WAITING_FOR_IMAGE_TEXT = 'Connected, waiting for image...';
 const PREVIEW_INPUT_FOCUS_ID = 'rustdesk-preview-input-layer';
 const SYSTEM_IME_INPUT_FOCUS_ID = 'rustdesk-system-ime-input';
-const SESSION_OVERLAY_TRANSITION_CHAT = 'rustdesk-session-overlay-chat';
 const SESSION_OVERLAY_TRANSITION_DISPLAY = 'rustdesk-session-overlay-display';
 const SESSION_OVERLAY_TRANSITION_QUALITY = 'rustdesk-session-overlay-quality';
 const MAIN_PAGE_TRANSITION_DURATION_MS = 280;
@@ -190,13 +227,63 @@ const PREVIEW_MIN_USER_SCALE = 0.5;
 const PREVIEW_MAX_USER_SCALE = 4.0;
 const PREVIEW_SURFACE_WAIT_ATTEMPTS = 100;
 const PREVIEW_SURFACE_WAIT_INTERVAL_MS = 50;
+/**
+ * How often an unconfirmed XComponent detach is retried.
+ *
+ * The native side keeps the binding and the same instance for exactly this, so
+ * the id is retried rather than dropped on an unconfirmed unregistration.
+ */
+const COMPONENT_DETACH_RETRY_LIMIT = 20;
+const COMPONENT_DETACH_RETRY_INTERVAL_MS = 250;
+/**
+ * How long a close waits for a producer that still owes a join.
+ *
+ * The Surface may only be destroyed once every destination is released, and a
+ * producer that has not finished its own teardown keeps its destination held, so
+ * the caller polls instead of claiming a release nobody reported.
+ */
+const SURFACE_RELEASE_WAIT_ATTEMPTS = 40;
+const SURFACE_RELEASE_WAIT_INTERVAL_MS = 100;
 const ANDROID_NAVIGATION_BOTTOM_OFFSET = 80;
 const ANDROID_NAVIGATION_EDGE_MARGIN = 12;
+/**
+ * The floating session toolbar's collapsed entry. Every device and orientation
+ * shows the same vertical grab tab, docked to the pane's right edge. The tab is
+ * 28 wide; the node that carries it is 44 so the touch target is not narrow.
+ */
+const MINI_BAR_COLLAPSED_WIDTH = 28;
+const MINI_BAR_COLLAPSED_HEIGHT = 68;
+const MINI_BAR_COLLAPSED_TOUCH_WIDTH = 44;
+/**
+ * The collapsed entry's top baseline, and the offset the status-bar band adds to
+ * it, so the tab never lands under the system bar.
+ */
+const MINI_BAR_TOP_BASELINE = 80;
+const MINI_BAR_TOP_AVOID_OFFSET = 60;
+/** The gap the toolbar keeps below the pane's bottom edge. */
+const MINI_BAR_BOTTOM_MARGIN = 8;
+/** The expanded panel keeps the toolbar's responsive width. */
+const MINI_BAR_EXPANDED_WIDTH_RATIO = 0.95;
+/** The expanded panel's own inset, on all four sides. */
+const MINI_BAR_EXPANDED_PADDING = 10;
+/**
+ * The toolbar chrome (header row, the gaps between sections, the session tab
+ * bar) used before the toolbar has reported what it measured.
+ *
+ * It only covers the first layout of the first expansion, and it is the
+ * layout's own numbers rather than a guess: a 32 tall header, two 6 gaps and
+ * the 50 tall tab bar.
+ */
+const SESSION_TOOLBAR_CHROME_FALLBACK_HEIGHT = 94;
 const ANDROID_RECENT_PRESS_DURATION_MS = 500;
 const BACKGROUND_SESSION_POLL_INTERVAL_MS = 250;
 const NEW_REMOTE_SESSION_SWITCH_TARGET = '__new_remote_session__';
 
-type PrimarySessionKind = 'remote_control' | 'view_only' | 'view_camera';
+
+// Every session this client opens is interactive: VNC and RDP are selected by the
+// connection mode bar, not by a scheme typed into the target, so they render and
+// take input through the same path as a RustDesk session.
+type PrimarySessionKind = 'remote_control' | 'vnc' | 'rdp';
 type PasswordSessionKind = 'primary' | 'file_transfer';
 type PeerLaunchKind = EasyTierConnectionKind;
 type ConnectionUiPhase = 'idle' | 'waiting_for_easytier' | 'connecting'
@@ -219,9 +306,22 @@ interface InputInterceptorResponse {
   ok: boolean;
   action: string;
   message?: string;
+  /** This module owns an installed interceptor. */
   active?: boolean;
+  /** A key arriving now would really be captured; the phase `active` alone does not say. */
+  admitting?: boolean;
+  /**
+   * Capture was closed on purpose (stop or a revocation).
+   *
+   * A sealed poll answers `ok:false` and discards its queue: keys captured before
+   * the seal must not be forwarded, so the caller releases what it still holds and
+   * stops instead of reading events.
+   */
+  sealed?: boolean;
   result?: number;
   events?: InterceptedKeyEvent[];
+  /** True when the bounded native callback queue overflowed; admission is then closed. */
+  overflow?: boolean;
 }
 
 @Entry
@@ -235,7 +335,6 @@ struct RustDeskIndex {
     this.nativeSessionBridge,
     () => this.nextTransferSessionId(),
   );
-  private chatStore: ChatStore = new ChatStore();
   private sessionDisplayController: SessionDisplayController = new SessionDisplayController(
     this.viewportModel,
     this.nativeSessionBridge,
@@ -251,6 +350,16 @@ struct RustDeskIndex {
   private systemImeTextController: TextInputController = new TextInputController();
   private clipboardController?: RustDeskClipboardController;
   private clipboardFileRootSessionId: string = '';
+  /**
+   * Sessions whose peer clipboard was updated while they were not the active tab.
+   *
+   * A direct wire's take is non-consuming and its notification is emitted once per
+   * peer revision, so the notification the background poll consumes is remembered
+   * here: the session's retained mailbox is retrieved and applied when that session
+   * becomes active, before its own local clipboard is read. Only the fact is kept,
+   * never a payload — the text stays in the session's own mailbox.
+   */
+  private readonly clipboardPeerUpdateSessions: Set<string> = new Set();
   private preferences?: RustDeskPreferences;
   private connectScroller: Scroller = new Scroller();
   private deviceRecentScroller: Scroller = new Scroller();
@@ -270,6 +379,7 @@ struct RustDeskIndex {
   private activeSessionPassword: string = '';
   private activeSessionShareTarget: string = '';
   private activeSessionShareTargetKind: string = 'target';
+  private activeSessionRustdeskIdOnly: boolean = false;
   private activeSessionServerConfig: ServerConfig = new ServerConfig();
   private activeSessionPasswordEphemeral: boolean = false;
   private handoffPasswordAutoSubmitAttempted: boolean = false;
@@ -280,25 +390,36 @@ struct RustDeskIndex {
   private previewKeyboardBlurTimer: number = -1;
   private systemImeBlurTimer: number = -1;
   private softKeyboardPressedKeys: string[] = [];
-  private softKeyboardAltActive: boolean = false;
-  private softKeyboardCtrlActive: boolean = false;
-  private softKeyboardShiftActive: boolean = false;
-  private softKeyboardCommandActive: boolean = false;
+  /**
+   * The modifier latches the remote soft keyboard draws.
+   *
+   * They are the keys the engine accepted a Down for, so they have to be
+   * observable: the panel toggles a modifier from the state it is told here,
+   * and a latch that never reached the panel would keep asking for a Down.
+   */
+  @Local softKeyboardAltActive: boolean = false;
+  @Local softKeyboardCtrlActive: boolean = false;
+  @Local softKeyboardShiftActive: boolean = false;
+  @Local softKeyboardCommandActive: boolean = false;
   private lanScanGeneration: number = 0;
   private lanScanActive: boolean = false;
   private lanScanPollTimer: number = -1;
   private serverTestTimer: number = -1;
   private serverTestGeneration: number = 0;
   private systemImeCaretTimer: number = -1;
-  private accountPollTimer: number = -1;
-  private accountOptionsPollTimer: number = -1;
-  private addressBookPollTimer: number = -1;
   private peerOnlinePollTimer: number = -1;
   private peerOnlinePollGeneration: number = 0;
   private peerOnlinePollInFlight: boolean = false;
-  private peerOnlineQueryCount: number = 0;
-  private accountOidcActive: boolean = false;
-  private accountOidcOpenedUrl: string = '';
+  private deviceLivenessProbe: DeviceLivenessProbe = new DeviceLivenessProbe();
+  private savedDevices: PeerRecord[] | undefined = undefined;
+  private rdpFollowResizeTimer: number = -1;
+  private lastPeerProbeStartedAt: number = 0;
+  private directoryMigrationOwner: string = '';
+  private directoryMigrationInFlight: boolean = false;
+  // The route captured for the attempt being registered, frozen from the page's approval.
+  private activeSessionApprovedProfile: ApprovedServerProfile | undefined = undefined;
+  @Local directAudioCapability: string = '';
+  @Local directQualityDefaults: SessionDefaults = new SessionDefaults();
   private sessionReturnTabIndex: number = 0;
   private lastBackgroundSessionPollAt: number = 0;
   private remoteSessionTabsController: RemoteSessionTabsController = new RemoteSessionTabsController(6);
@@ -313,7 +434,6 @@ struct RustDeskIndex {
   @Local rotationTransitionScale: number = 1;
   @Local windowTopAvoidInset: number = 0;
   @Local windowBottomAvoidInset: number = 0;
-  @Local windowCutoutTopHeight: number = 0;
   @Local windowCutoutLeftWidth: number = 0;
   @Local windowCutoutRightWidth: number = 0;
   @Local rootFocusedControl: string = '';
@@ -325,16 +445,17 @@ struct RustDeskIndex {
   @Local decoderCapabilities: DecoderCapability[] = [];
   @Local errorText: string = '';
   @Local serverConfig: ServerConfig = new ServerConfig();
+  /** The approval this page holds; the editable draft in `serverConfig` never changes it. */
+  @Local serverProfile: ServerProfileState = new ServerProfileState();
   @Local serverValidating: boolean = false;
   @Local serverSaving: boolean = false;
   @Local directorySnapshot: DirectorySnapshot = new DirectorySnapshot();
   private directoryRevision: number = 0;
   @Local sessionDefaults: SessionDefaults = new SessionDefaults();
-  @Local accountState: AccountState = new AccountState();
-  @Local accountLoginProviders: AccountLoginProvider[] = [];
   @Local clipboardSyncEnabled: boolean = true;
 
   @Local peerTarget: string = '';
+  @Local connectPageMode: number = 0;
   @Local passwordDraft: string = '';
   @Local rememberPassword: boolean = false;
 
@@ -348,7 +469,6 @@ struct RustDeskIndex {
   @Local connectionUiPhase: ConnectionUiPhase = 'idle';
   @Local connectionUiTarget: string = '';
   @Local connectionUiMessage: string = '';
-  @Local qualitySummary: string = 'Remote fps -- | delay -- | codec --';
   @Local isPolling: boolean = false;
   @Local frameStatus: string = 'Surface not ready';
   @Local frameWidth: number = 0;
@@ -359,9 +479,25 @@ struct RustDeskIndex {
   @Local previewSurfaceGeneration: number = 0;
   @Local touchMode: boolean = true;
   @Local relativeMouseMode: boolean = false;
+  // Input is a local switch: turning it off stops every pointer and keyboard
+  // emission without telling the peer, so it can be flipped back instantly.
+  @Local inputEnabled: boolean = true;
   @Local rightClickGesture: RustDeskRightClickGesture = 'two_finger_tap';
   @Local previewViewWidth: number = 0;
   @Local previewViewHeight: number = 0;
+  // How the remote frame is fitted into the pane.
+  //
+  // `fit` is the default because the video Surface is a fixed-size native
+  // producer: its frame is composited into whatever rectangle it is measured at,
+  // with no aspect correction. A surface laid out at the pane's size is
+  // therefore a stretch by construction, and the mode has to change the measured
+  // rectangle rather than a render hint.
+  @Local previewDisplayMode: RustDeskDisplayMode = 'fit';
+  // The rate the panel reports while a session runs, in Hz, or 0 when unknown.
+  // The telemetry rows count what the decoder produced; this is the ceiling the
+  // picture is actually shown at, and the two differ whenever the request is not
+  // honoured.
+  @Local panelRefreshRate: number = 0;
   @Local previewUserScale: number = 1;
   @Local previewUserOffsetX: number = 0;
   @Local previewUserOffsetY: number = 0;
@@ -378,10 +514,19 @@ struct RustDeskIndex {
   @Local foldHoverUpperHeight: number = 0;
   @Local foldHoverCreaseHeight: number = 0;
 
+  // Private app readiness/admission only; not host, transfer or media success.
   private runtimeInitialized: boolean = false;
+  private pagePreferencesInitialized: boolean = false;
+  private runtimeObserverBound: boolean = false;
+  private runtimeOwnerGeneration: string = '';
+  private decoderCapabilityReport: string = '';
+  private readonly onRuntimeStateChanged: RustDeskRuntimeObserver = (state: RustDeskRuntimeState): void => {
+    this.applyRuntimeState(state);
+  };
   private connectionGeneration: number = 0;
   private connectionTimeoutId: number = -1;
   private lastConnectionKind: PrimarySessionKind = 'remote_control';
+  private lastConnectionRustdeskIdOnly: boolean = false;
   private connectionAttemptKind: PasswordSessionKind = 'primary';
   private sessionCloseInFlight: boolean = false;
   private sessionConnectInFlight: boolean = false;
@@ -395,6 +540,34 @@ struct RustDeskIndex {
   private previewFrameInFlight: boolean = false;
   private performanceTuningApplied: boolean = false;
   private previewSurfaceId: string = '';
+  /** The SurfaceHolder node binding id, separate from the decoder's Surface lease id. */
+  private previewComponentId: string = '';
+  private previewComponentDetachTimer: number = -1;
+  private previewComponentDetachAttempts: number = 0;
+  private previewComponentDetachIds: string[] = [];
+  /**
+   * Whether the current Surface's destroy was authorized by a confirmed release.
+   *
+   * A destroy without this flag is reported to the native side, which seals the
+   * destinations that still held it rather than being told a release happened.
+   */
+  private previewSurfaceDestroyAuthorized: boolean = false;
+  /**
+   * The native side's own message for a refused Surface bind.
+   *
+   * A bind refusal carries only that message, so it is kept to be rendered as-is
+   * instead of being replaced by a synthesized reason.
+   */
+  private previewSurfaceBindFailure: string = '';
+  /** Native lifecycle epoch of the active session; bind/ACK echo it verbatim. */
+  private activeSessionLifecycleEpoch: string = '';
+  /** Engine input generation the active viewer published; RustDesk leaves it empty. */
+  private activeInputGeneration: string = '';
+  /**
+   * Holds whose release this session attempted and the peer refused, as native
+   * reported it. Empty means unknown: it is never assumed to be zero.
+   */
+  private activeInputHoldsOwed: string = '';
   private previewSurfaceSetupInFlight: boolean = false;
   private previewSurfaceSetupGeneration: number = -1;
   private pendingPreviewPeerInfo?: NativeEvent;
@@ -411,15 +584,190 @@ struct RustDeskIndex {
   @Local peerDisplays: PeerDisplayInfo[] = [];
   @Local supportedResolutions: ResolutionInfo[] = [];
   @Local currentDisplayIndex: number = 0;
-  private qualityTelemetry: QualityTelemetry = {
-    fps: '--',
-    delay: '--',
-    codec: '--',
-    speed: '--',
-    targetBitrate: '--',
-    chroma: '--',
-  };
+  @Local qualityTelemetry: QualityTelemetry = emptyQualityTelemetry();
+
+  /** The XComponent id that carries the video Surface, for node lookups. */
+  private previewSurfaceNodeId(): string {
+    return `rustdesk-preview-surface-${this.previewSurfaceGeneration.toString()}`;
+  }
+
+  /** Declares the live node's expected draw rate, not measured rendering or scanout FPS. */
+  private declarePanelFrameRate(): void {
+    const componentId = this.previewComponentId;
+    if (componentId.length === 0) {
+      hilog.warn(DOMAIN, TAG, 'panel frame rate request skipped: no native XComponent scope');
+      return;
+    }
+    const range: ExpectedFrameRateRange = this.previewFrameRateRange();
+    try {
+      const raw = native.xcomponentSetFrameRateRangeNative(componentId, range.expected, range.min, range.max);
+      const response: ESObject = JSON.parse(raw);
+      hilog.info(DOMAIN, TAG, 'panel_frame_rate_response=%{public}s', raw);
+      const code = response.result === undefined ? 'unavailable' : String(response.result);
+      this.panelRefreshRate = this.currentPanelRefreshRate();
+      hilog.info(
+        DOMAIN,
+        TAG,
+        'panel_frame_rate component=%{public}s expected=%{public}d min=%{public}d max=%{public}d code=%{public}s callbacks=%{public}d panel=%{public}d',
+        componentId,
+        range.expected,
+        range.min,
+        range.max,
+        code,
+        Number(response.frameCallbacks ?? 0),
+        this.panelRefreshRate,
+      );
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'panel frame rate request failed: %{public}s', String(error));
+    }
+  }
+
+  /** Adopts the attached FrameNode through the native SurfaceHolder API. */
+  private adoptPreviewSurfaceComponent(nodeId: string, controller: RustDeskSurfaceController): void {
+    const frameNode = this.getUIContext().getAttachedFrameNodeById(nodeId);
+    if (!frameNode) {
+      hilog.warn(DOMAIN, TAG, 'panel node attach failed: no FrameNode for %{public}s', nodeId);
+      return;
+    }
+    try {
+      const raw = native.xcomponentAttach(nodeId, frameNode, controller.handleNativeSurfaceEvent);
+      hilog.info(DOMAIN, TAG, 'panel_holder_attach=%{public}s', raw);
+      const response: ESObject = JSON.parse(raw);
+      const componentId = String(response.componentId ?? '');
+      const adopted = response.ok === true && componentId.length > 0;
+      // The native holder exists from the moment attach allocated it. When that
+      // attach failed and its own cleanup is not confirmed (released is not true),
+      // the componentId stays on this instance: a later detach is the only thing
+      // that may release it, and dropping the id would lose the holder. A failed
+      // attach never clears a component that already worked.
+      if (adopted || (componentId.length > 0 && response.released !== true)) {
+        controller.adoptedComponentId = componentId;
+      }
+      if (adopted) {
+        this.previewComponentId = componentId;
+      }
+      if (!adopted && controller.adoptedComponentId.length > 0) {
+        hilog.warn(DOMAIN, TAG, 'panel_holder_attach retained component=%{public}s for detach',
+          controller.adoptedComponentId);
+      }
+      hilog.info(
+        DOMAIN,
+        TAG,
+        'panel_native_attach ok=%{public}s adopted=%{public}s already=%{public}s component=%{public}s result=%{public}d',
+        String(response.ok === true),
+        String(adopted),
+        String(response.alreadyAdopted === true),
+        this.previewComponentId.length > 0 ? this.previewComponentId : '-',
+        Number(response.result ?? -1),
+      );
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'panel native attach failed: %{public}s', String(error));
+    }
+    this.declarePanelFrameRate();
+  }
+
+  /**
+   * Retries a detach the native side did not confirm.
+   *
+   * Bounded: the binding and its instance are kept for the retry, and once the
+   * attempts run out the id stays for the next lifecycle callback to retry.
+   */
+  private scheduleComponentDetachRetry(): void {
+    if (this.previewComponentDetachTimer >= 0
+      || this.previewComponentDetachAttempts >= COMPONENT_DETACH_RETRY_LIMIT
+      || this.previewComponentDetachIds.length === 0) {
+      return;
+    }
+    this.previewComponentDetachAttempts += 1;
+    this.previewComponentDetachTimer = setTimeout((): void => {
+      this.previewComponentDetachTimer = -1;
+      const pendingIds = this.previewComponentDetachIds.slice();
+      for (const id of pendingIds) {
+        this.detachPreviewSurfaceComponent(id);
+      }
+    }, COMPONENT_DETACH_RETRY_INTERVAL_MS) as number;
+  }
+
+  /**
+   * Releases the native XComponent scope.
+   *
+   * The id is dropped only when the native side confirms the drop: an
+   * unconfirmed unregistration keeps the binding and the same instance exactly so
+   * the detach can be retried, and a component that was never bound is a no-op.
+   */
+  private detachPreviewSurfaceComponent(componentId: string): void {
+    if (componentId.length === 0) {
+      return;
+    }
+    if (!this.previewComponentDetachIds.includes(componentId)) {
+      this.previewComponentDetachIds.push(componentId);
+    }
+    try {
+      const response: ESObject = JSON.parse(native.xcomponentDetach(componentId));
+      // Only an explicit released:true is a completed detach. A held holder or an
+      // unproven answer keeps the id so a later detach is still possible; the
+      // native answer has no detached/alreadyDetached/unregisterResult field.
+      const released = response.released === true;
+      if (released) {
+        if (this.previewComponentId === componentId) {
+          this.previewComponentId = '';
+        }
+        this.previewComponentDetachIds = this.previewComponentDetachIds.filter((id: string): boolean => id !== componentId);
+        if (this.previewComponentDetachIds.length === 0) {
+          this.previewComponentDetachAttempts = 0;
+        }
+      } else {
+        this.scheduleComponentDetachRetry();
+      }
+      hilog.info(
+        DOMAIN,
+        TAG,
+        'panel_native_detach component=%{public}s ok=%{public}s released=%{public}s held=%{public}s error=%{public}s',
+        componentId,
+        String(response.ok === true),
+        String(released),
+        String(response.held === true),
+        String(response.error ?? ''),
+      );
+    } catch (error) {
+      this.scheduleComponentDetachRetry();
+      hilog.warn(DOMAIN, TAG, 'panel native detach failed: %{public}s', String(error));
+    }
+  }
+
+  /** The rate the panel is running at right now, or 0 when it cannot be read. */
+  private currentPanelRefreshRate(): number {
+    try {
+      const rate = Number(display.getDefaultDisplaySync().refreshRate);
+      return Number.isFinite(rate) && rate > 0 ? Math.round(rate) : 0;
+    } catch (_error) {
+      return 0;
+    }
+  }
+
+  /**
+   * The rate to ask for: the operator's choice, bounded by what the panel can
+   * show, with the minimum left at 0 so the system may still drop for power.
+   */
+  private previewFrameRateRange(): ExpectedFrameRateRange {
+    const choices = this.refreshRateChoices.length > 0
+      ? this.refreshRateChoices
+      : [DEFAULT_REFRESH_RATE];
+    const maximum = choices[choices.length - 1];
+    const wanted = Math.round(this.selectedRefreshRate);
+    const expected = wanted > 0 && wanted <= maximum ? wanted : maximum;
+    return { expected, min: 0, max: maximum };
+  }
+
   private preferredCodec: string = 'auto';
+  /**
+   * Turns the engine's cumulative counters into per-second rates.
+   *
+   * The rows in the quality panel read the rates this produced, not the raw
+   * counters: a cumulative total is not a frame rate, and the sampler is the
+   * only place that owns the observation window.
+   */
+  private frameRateTelemetry: FrameRateTelemetry = new FrameRateTelemetry();
   private codecPreferenceApplied: boolean = false;
   @Local passwordDialogVisible: boolean = false;
   @Local authDialogMode: AuthDialogMode = 'password';
@@ -432,6 +780,59 @@ struct RustDeskIndex {
   @Local insecureConnectionMessage: string = '';
   private insecureConnectionSessionId: string = '';
   private passwordSessionKind: PasswordSessionKind = 'primary';
+  @Local directCredentialsVisible: boolean = false;
+  @Local directCredentialsProtocol: DirectWireProtocol = 'vnc';
+  @Local directCredentialsTarget: string = '';
+  @Local directCredentialsUsername: string = '';
+  @Local directCredentialPassword: string = '';
+  @Local directCredentialsError: ResourceStr = '';
+  @Local rdpCertificateDialogVisible: boolean = false;
+  @Local rdpCertificateChallenge: RdpCertificateChallenge | undefined = undefined;
+  @Local rdpCertificateReplaceConfirmation: boolean = false;
+  @Local rdpCertificateBusy: boolean = false;
+  @Local rdpCertificateError: ResourceStr = '';
+  private rdpCertificateSessionId: string = '';
+  private rdpCertificateDecisionGeneration: number = 0;
+  private rdpCredentialGeneration: number = 0;
+  private rdpDialCredentials: DirectWireCredentials | undefined = undefined;
+  private rdpCredentialPinOverride: string = '';
+  private rdpCredentialPinOverrideTarget: string = '';
+  private rdpCertificateCredentials: Map<string, DirectWireCredentials> = new Map<string, DirectWireCredentials>();
+  private rdpCertificateRejectedSessions: Set<string> = new Set<string>();
+  /**
+   * The credentials one direct dial has already been given, held between the
+   * dialog and the start call that consumes them.
+   *
+   * A direct viewer reads its password once, when it dials, so the answer cannot
+   * arrive later: it waits here, is taken exactly once, and is dropped when the
+   * session closes, when the dialog is cancelled and when a different request
+   * replaces it. It is never persisted and never written into a target.
+   */
+  private pendingDirectCredentials: DirectWireCredentials | undefined = undefined;
+  /**
+   * The endpoint an answered RDP account belongs to.
+   *
+   * The account is not a secret, and this only lets the same endpoint offer it
+   * back when it asks again; a different endpoint is never given another's.
+   */
+  private directWireUsernameTarget: string = '';
+  /**
+   * The failure one direct poll envelope reported, and the session it came from.
+   *
+   * The two travel together so the text can only ever be read for the session that
+   * reported it: the poll walks every tab, and one wire's cause must never be
+   * presented as another session's.
+   */
+  private directWireFailureText: string = '';
+  private directWireFailureSessionId: string = '';
+  /**
+   * A retry that arrived while the failed attempt was still releasing its wire.
+   *
+   * A wrong credential is answered by closing and dialling a fresh viewer, so a
+   * retry that lands during that close is remembered here and run once the
+   * transition finishes instead of being dropped.
+   */
+  private pendingConnectionRetry: string = '';
   private sessionFullscreenApplied: boolean = false;
   private sessionOrientationMode: RemoteSessionOrientationMode = RemoteSessionOrientationMode.FOLLOW_DESKTOP;
   private landscapeMultiWindowEnabled: boolean = false;
@@ -481,6 +882,26 @@ struct RustDeskIndex {
   @Local remoteCursorHotX: number = 0;
   @Local remoteCursorHotY: number = 0;
   @Local isMiniBarExpanded: boolean = false;
+  /**
+   * The floating toolbar's anchor: the top-right corner it hangs from. Collapsed
+   * and expanded share it, so the panel opens inward from where the tab sits and
+   * a drag survives either state. Page-local only; never persisted.
+   */
+  @Local miniBarAnchorRight: number = 0;
+  @Local miniBarAnchorTop: number = 0;
+  /** The expanded panel's measured height, the bound that keeps it on screen. */
+  @Local miniBarExpandedHeight: number = 0;
+  /**
+   * What the toolbar reports it spends on its own chrome: header row, the gaps
+   * between sections and the session tab bar. The body budget is what is left
+   * after it, so the value is measured rather than assumed.
+   */
+  @Local sessionToolbarChromeHeight: number = 0;
+  private miniBarAnchorInitialized: boolean = false;
+  private miniBarDragged: boolean = false;
+  /** Where the visible state actually sits when the current drag began. */
+  private miniBarDragStartX: number = 0;
+  private miniBarDragStartY: number = 0;
   @Local androidNavigationVisible: boolean = true;
   @Local androidNavigationX: number = 0;
   @Local androidNavigationY: number = 0;
@@ -491,11 +912,10 @@ struct RustDeskIndex {
   @Local remoteKeyboardPermissionAllowed: boolean = true;
   private overlayState: SessionOverlayState = new SessionOverlayState();
   @Local activeOverlayPanel: SessionOverlayPanel = 'home';
-  @Local chatDraft: string = '';
-  @Local chatRevision: number = 0;
-  @Local selectedQualityPreset: QualityPreset = 'balanced';
-  @Local customQualityDraft: number = 50;
-  @Local customFpsDraft: number = 30;
+  // The capture rate is the only picture control. Encoding quality is the
+  // encoder's business: it spends whatever bandwidth the path can carry.
+  @Local selectedRefreshRate: number = DEFAULT_REFRESH_RATE;
+  @Local refreshRateChoices: number[] = [DEFAULT_REFRESH_RATE];
   @Local transferRootPath: string = '';
   @Local transferRootStatus: string = '选择下载位置后可传输';
   @Local transferConnectionStatus: string = '文件传输未连接';
@@ -553,15 +973,26 @@ struct RustDeskIndex {
   private onRemoteSessionAppState = (foreground: boolean): void => {
     this.appForeground = foreground;
     if (foreground && this.pageVisible) {
-      this.peerOnlineQueryCount = 0;
-      this.schedulePeerOnlineProbe(0);
+      this.refreshDirectorySnapshot(true);
+      if (this.showPreviewModal && this.activeSessionId.length > 0) {
+        this.applyRemoteAudioPollingForKind(this.activeSessionKind);
+        this.scheduleRdpFollowResize();
+      }
     } else {
+      this.discardAllRdpCertificateSecrets();
+      this.discardDirectCredentialSecrets();
+      this.directCredentialsVisible = false;
       this.stopPeerOnlinePolling();
+      this.clearRdpFollowResize();
     }
+    // Backgrounding is a clipboard admission change of its own: the page may stay
+    // visible while the ability is no longer in front, and neither the peer's text
+    // may be written to the system pasteboard nor a local read forwarded then.
+    this.syncClipboardController();
     this.syncRemoteSessionSharing();
   };
   private onRemoteSessionContinueHandoff = (): void => {
-    if (this.activeSessionId.length === 0 || this.activeSessionKind !== 'remote_control') {
+    if (this.activeSessionId.length === 0) {
       return;
     }
     hilog.info(DOMAIN, TAG, 'continuation payload delivered; closing source session');
@@ -582,13 +1013,13 @@ struct RustDeskIndex {
 
   aboutToAppear(): void {
     this.pageVisible = true;
-    this.appForeground = true;
+    this.appForeground = rustDeskRuntimeController.state().foreground;
     this.detectHdsMaterialCapability();
     this.previewController = this.createPreviewSurfaceController(
       this.previewSurfaceGeneration,
       this.activeSessionId,
     );
-    this.initializeRuntime();
+    void this.initializeRuntime();
     this.registerRemoteSessionHandoffListener();
     this.registerEasyTierResultListener();
     this.registerWindowAvoidAreaListener();
@@ -598,6 +1029,8 @@ struct RustDeskIndex {
   }
 
   aboutToDisappear(): void {
+    this.pageVisible = false;
+    this.discardAllRdpCertificateSecrets();
     this.rejectPendingInsecureConnection();
     this.clearActiveSessionHandoffState();
     this.unregisterRemoteSessionHandoffListener();
@@ -605,25 +1038,19 @@ struct RustDeskIndex {
     this.clearConnectionTimeout();
     this.clearPasswordTimeout();
     this.clearPreviewKeyboardBlurTimer();
+    this.clearRdpFollowResize();
     this.clearSystemImeCaretTimer();
-    this.cancelLanScan();
+    this.detachRuntimeObserver();
     this.serverTestGeneration += 1;
     this.clearServerTestTimer();
-    this.clearAccountPollTimer();
-    this.clearAccountOptionsPollTimer();
-    this.clearAddressBookPollTimer();
     this.stopPeerOnlinePolling();
-    if (this.accountOidcActive) {
-      this.mainBridge.cancelAccountOidc();
-      this.accountOidcActive = false;
-      this.accountOidcOpenedUrl = '';
-    }
     this.previewKeyboardCaptureFocused = false;
     this.hideSystemIme(false);
     this.releaseSoftKeyboardKeys();
     this.stopInputInterceptor();
     this.clipboardController?.reset();
     this.clipboardFileRootSessionId = '';
+    this.clipboardPeerUpdateSessions.clear();
     this.setSessionKeyboardEntered(false);
     this.unregisterWindowAvoidAreaListener();
     this.unregisterFoldHoverListeners();
@@ -641,21 +1068,19 @@ struct RustDeskIndex {
 
   onPageShow(): void {
     this.pageVisible = true;
-    this.appForeground = true;
+    this.appForeground = rustDeskRuntimeController.state().foreground;
+    void this.initializeRuntime();
     this.syncClipboardController();
     this.syncInputInterceptor();
     this.refreshFreeWindowChrome();
     this.refreshSessionOrientation();
-    if (this.accountOidcActive) {
-      this.scheduleAccountPoll(200);
-    }
-    this.peerOnlineQueryCount = 0;
-    this.schedulePeerOnlineProbe(0);
+    this.refreshDirectorySnapshot(true);
     this.scheduleFirstLaunchTutorial();
     this.syncRemoteSessionSharing();
     this.startPolling();
     if (this.showPreviewModal && this.activeSessionId.length > 0) {
       this.syncSurfaceBinding();
+      this.applyRemoteAudioPollingForKind(this.activeSessionKind);
       const activeTab = this.remoteSessionTabsController.get(this.activeSessionId);
       if (activeTab !== undefined && activeTab.audioPreferenceCaptured) {
         this.nativeSessionBridge.setRemoteAudioMuted(activeTab.sessionId, activeTab.audioMuted);
@@ -666,9 +1091,14 @@ struct RustDeskIndex {
 
   onPageHide(): void {
     this.pageVisible = false;
+    this.detachRuntimeObserver();
+    this.discardAllRdpCertificateSecrets();
+    this.discardDirectCredentialSecrets();
+    this.directCredentialsVisible = false;
     this.hideSystemIme(false);
     this.disableRemoteSessionSharing(true);
     this.stopPeerOnlinePolling();
+    this.clearRdpFollowResize();
     this.clipboardController?.stop();
     this.stopInputInterceptor();
     this.stopPolling();
@@ -739,8 +1169,9 @@ struct RustDeskIndex {
   private getInputController(): RustDeskInputController {
     if (!this.inputController) {
       this.inputController = new RustDeskInputController({
-        isSessionActive: () => this.isRemoteControlSessionActive(),
-        isMouseMode: () => !this.touchMode,
+        isSessionActive: () => this.isInteractiveSessionActive(),
+        usesCoreRawKeyRoute: () => this.isRemoteControlSessionActive(),
+        isMouseMode: () => this.inputEnabled && !this.touchMode,
         isPeerMacOS: () => this.isPeerMacOS(),
         isPeerAndroid: () => this.isPeerAndroid(),
         isPeerMobile: () => this.isPeerMobile(),
@@ -807,6 +1238,9 @@ struct RustDeskIndex {
   }
 
   private relativeMouseModeSupported(): boolean {
+    if (!this.isRemoteControlSessionActive()) {
+      return false;
+    }
     const platform = this.peerPlatform.toLowerCase().replace(/[\s_-]/g, '');
     return platform !== 'linux' && this.isPeerVersionAtLeast(1, 4, 5);
   }
@@ -968,13 +1402,10 @@ struct RustDeskIndex {
     }, ANDROID_RECENT_PRESS_DURATION_MS);
   }
 
-  private initializeRuntime(): void {
-    if (this.runtimeInitialized) {
-      controlledHostCoordinator.onRuntimeReady();
-      this.refreshNativeState();
-      this.refreshDirectorySnapshot();
-      if (!this.accountState.loggedIn) {
-        this.loadAccountLoginOptions();
+  private async initializeRuntime(): Promise<void> {
+    if (this.pagePreferencesInitialized) {
+      if (this.pageVisible) {
+        this.bindRuntimeObserver();
       }
       return;
     }
@@ -985,15 +1416,21 @@ struct RustDeskIndex {
         this.firstLaunchTutorialPending = true;
         this.scheduleFirstLaunchTutorial();
       }
-      this.clipboardController = new RustDeskClipboardController(hostContext, {
-        sendText: (sessionId: string, content: string) =>
-          sessionId === this.activeSessionId && this.sendClipboardText(content),
-        sendImage: (sessionId: string, content: Uint8Array) =>
-          sessionId === this.activeSessionId && this.sendClipboardImage(content),
-        sendFiles: (sessionId: string, paths: Array<string>) =>
-          sessionId === this.activeSessionId && this.sendClipboardFiles(paths),
-        log: (label: string, payload: string) => this.logRelativeDebug(label, payload),
-      });
+      this.clipboardController = new RustDeskClipboardController(
+        new RustDeskSystemClipboardHost(hostContext, (label: string, payload: string) =>
+          this.logRelativeDebug(label, payload)),
+        {
+          sendText: (sessionId: string, content: string) =>
+            sessionId === this.activeSessionId && this.sendClipboardText(content),
+          sendImage: (sessionId: string, content: Uint8Array) =>
+            sessionId === this.activeSessionId && this.sendClipboardImage(content),
+          sendFiles: (sessionId: string, paths: Array<string>) =>
+            sessionId === this.activeSessionId && this.sendClipboardFiles(paths),
+          supportsRichClipboard: (sessionId: string): boolean =>
+            sessionId === this.activeSessionId && carriesRichClipboard(this.activeSessionKind),
+          log: (label: string, payload: string) => this.logRelativeDebug(label, payload),
+        },
+      );
       this.applySavedSettings(this.preferences.load());
       const easyTierSettings = this.preferences.loadEasyTier();
       this.easyTierPreconnectEnabled = easyTierSettings.enabled;
@@ -1003,6 +1440,7 @@ struct RustDeskIndex {
       this.easyTierStatusText = easyTierSettings.instanceId.length > 0
         ? '已保存实例；可刷新状态或直接连接' : '';
       this.sessionDefaults = this.preferences.loadSessionDefaults();
+      this.refreshRefreshRateChoices();
       const androidNavigationState = this.preferences.loadAndroidNavigationState();
       this.androidNavigationVisible = androidNavigationState.visible;
       this.androidNavigationPositionInitialized = androidNavigationState.positionInitialized;
@@ -1017,30 +1455,175 @@ struct RustDeskIndex {
       }
       this.activeSessionDefaults = this.copySessionDefaults(this.sessionDefaults);
       this.clipboardSyncEnabled = this.sessionDefaults.clipboardEnabled;
+      this.touchMode = this.sessionDefaults.touchMode;
+      this.relativeMouseMode = !this.touchMode && this.sessionDefaults.relativeMouseMode;
+      this.inputEnabled = this.sessionDefaults.inputEnabled;
+      this.rightClickGesture = this.sessionDefaults.rightClickGesture;
+      this.selectedRefreshRate = this.defaultRefreshRate(this.sessionDefaults);
+      // Preserve the user's request, not an invented decoder recommendation.
+      this.preferredCodec = this.sessionDefaults.preferredCodec;
+      this.isMiniBarExpanded = this.sessionDefaults.toolbarExpanded;
 
-      const response = JSON.parse(native.runtimeInit(hostContext.filesDir, 'RustDesk HMOS')) as Record<string, string>;
-      this.runtimeInitialized = true;
-      controlledHostCoordinator.onRuntimeReady();
-      this.apiServer = native.runtimeGetApiServer();
-      let decoderCapabilityResponse: ESObject = JSON.parse(native.runtimeGetDecoderCapabilities());
-      let decoderCapabilityRows: ESObject = decoderCapabilityResponse.capabilities;
-      const decoderCapabilities = this.copyDecoderCapabilities(decoderCapabilityRows);
-      this.decoderCapabilities = decoderCapabilities;
-      this.applySessionDefaultsToIdleState(decoderCapabilities);
-      this.serverConfig = this.mainBridge.loadServerConfig();
-      this.refreshAccountState();
+      this.pagePreferencesInitialized = true;
+      if (this.pageVisible) {
+        this.bindRuntimeObserver();
+      }
       this.refreshDirectorySnapshot();
-      if (this.accountState.loggedIn) {
-        this.startAddressBookSync(true);
-      }
-      this.sessionMessage = String(response['message'] ?? 'Runtime initialized');
-      this.refreshNativeState();
-      if (!this.accountState.loggedIn) {
-        this.loadAccountLoginOptions();
-      }
+      // EntryAbility alone calls appInit. Its ready bit is not evidence for
+      // the absent host/transfer APIs or a decoder recommendation. No generic
+      // onRuntimeReady callback or synthetic 'Runtime initialized' message.
     } catch (error) {
       this.errorText = `Runtime init failed: ${String(error)}`;
       hilog.error(DOMAIN, TAG, 'initializeRuntime failed: %{public}s', this.errorText);
+    }
+  }
+
+  private bindRuntimeObserver(): void {
+    if (this.runtimeObserverBound || !this.pageVisible) {
+      return;
+    }
+    this.runtimeObserverBound = true;
+    rustDeskRuntimeController.bind(this.onRuntimeStateChanged);
+  }
+
+  private detachRuntimeObserver(): void {
+    this.lanScanGeneration += 1;
+    this.clearLanScanPollTimer();
+    this.lanScanActive = false;
+    this.runtimeInitialized = false;
+    this.runtimeOwnerGeneration = '';
+    if (!this.runtimeObserverBound) {
+      return;
+    }
+    this.runtimeObserverBound = false;
+    void rustDeskRuntimeController.unbind(this.onRuntimeStateChanged).catch((error: Error): void => {
+      // Retain native ownership on failure; a hidden page cannot declare stop
+      // or session/Surface release. A later Ability fence remains authoritative.
+      hilog.warn(DOMAIN, TAG, 'LAN page-exit cleanup failed: %{public}s', String(error));
+    });
+  }
+
+  private runtimeLanCanScan(state: RustDeskRuntimeState): boolean {
+    return this.pageVisible && this.runtimeObserverBound && !state.pending &&
+      state.ready && state.discoveryAllowed && !state.lanPending &&
+      state.scanId !== undefined && !this.lanScanActive;
+  }
+
+  private applyRuntimeState(state: RustDeskRuntimeState): void {
+    if (!this.pageVisible || !this.runtimeObserverBound) {
+      return;
+    }
+    const ownerChanged = state.ownerGeneration !== this.runtimeOwnerGeneration;
+    if (ownerChanged || state.pending) {
+      this.lanScanGeneration += 1;
+      this.clearLanScanPollTimer();
+    }
+    this.runtimeOwnerGeneration = state.ownerGeneration;
+    this.runtimeInitialized = !state.pending && state.ready && state.discoveryAllowed;
+    this.appForeground = state.foreground;
+    const reply = state.lan;
+    this.lanScanActive = state.lanPending || (reply !== undefined && reply.ok &&
+      (reply.state === 'scanning' || reply.state === 'stopping' || reply.state === 'removing'));
+    if (!this.lanScanActive || !this.runtimeInitialized) {
+      this.clearLanScanPollTimer();
+    }
+    let message = state.error;
+    if (message.length === 0 && state.pending) {
+      message = '正在同步隐私与前台状态';
+    } else if (message.length === 0 && !state.privacyAccepted) {
+      message = '尚未取得系统隐私同意';
+    } else if (message.length === 0 && !state.foreground) {
+      message = '应用不在前台';
+    } else if (message.length === 0 && !state.ready) {
+      message = '内核私有存储尚未就绪';
+    } else if (message.length === 0 && state.lanPending) {
+      message = '正在等待局域网操作回执';
+    } else if (message.length === 0 && this.lanScanActive) {
+      message = '正在扫描局域网设备';
+    } else if (message.length === 0 && reply !== undefined && reply.ok && reply.terminal !== undefined) {
+      message = `局域网扫描已结束（${reply.terminal}）`;
+    }
+    const snapshot = this.directoryScanSnapshot(this.lanScanActive, message);
+    snapshot.lan = this.mainBridge.listLanPeers();
+    this.mergeSavedLanMetadata(snapshot.lan);
+    preservePeerOnlineStates(snapshot.lan, [this.directorySnapshot.lan, snapshot.saved]);
+    snapshot.favorite = buildFavoritePeers(snapshot.saved, snapshot.lan);
+    snapshot.lanCanScan = this.runtimeLanCanScan(state);
+    this.directorySnapshot = snapshot;
+    if (!this.runtimeInitialized) {
+      this.stopPeerOnlinePolling();
+    }
+    if (ownerChanged && this.runtimeInitialized) {
+      // A query consumes an existing owner. It must never mint/adopt one.
+      void this.pollLanScanSnapshot(this.lanScanGeneration);
+      void this.refreshNativeState();
+    }
+    if (this.runtimeInitialized) {
+      void this.migrateEngineDirectory();
+    }
+  }
+
+  /**
+   * One-time migration of the engine's own directory into the saved list.
+   *
+   * The local store stays the owner, so this runs only while it has never been
+   * written, needs both engine reads to really succeed, and writes nothing on a
+   * read failure: a partial write would close the migration for good.
+   */
+  private async migrateEngineDirectory(): Promise<void> {
+    const preferences = this.preferences;
+    const owner = this.runtimeOwnerGeneration;
+    if (!this.runtimeInitialized || owner.length === 0 || preferences === undefined) {
+      return;
+    }
+    if (this.directoryMigrationInFlight || this.directoryMigrationOwner === owner) {
+      return;
+    }
+    if (preferences.hasSavedPeers()) {
+      this.directoryMigrationOwner = owner;
+      return;
+    }
+    this.directoryMigrationInFlight = true;
+    try {
+      const favorites = await this.mainBridge.listFavorites();
+      const recent = await this.mainBridge.listRecentPeers(favorites.ok ? favorites.favorites : []);
+      if (!this.runtimeInitialized || this.runtimeOwnerGeneration !== owner || !this.pageVisible) {
+        return;
+      }
+      if (!favorites.ok || !recent.ok) {
+        const detail = (recent.ok ? favorites.error : recent.error).trim();
+        this.mainBridge.recordDirectoryMessage('设备迁移',
+          detail.length > 0 ? detail : '读取引擎目录失败');
+        this.refreshDirectorySnapshot();
+        return;
+      }
+      const legacy = recent.peers;
+      for (const id of favorites.favorites) {
+        if (!legacy.some((peer: PeerRecord): boolean => peer.id === id)) {
+          const peer = new PeerRecord();
+          peer.id = id;
+          peer.favorite = true;
+          legacy.push(peer);
+        }
+      }
+      if (legacy.length === 0) {
+        // Both reads succeeded and the engine had no rows: nothing to migrate, so
+        // the store keeps its absent state instead of being written empty.
+        this.directoryMigrationOwner = owner;
+        this.refreshDirectorySnapshot();
+        return;
+      }
+      this.savedDevices = preferences.loadSavedPeers(legacy);
+      this.directoryMigrationOwner = owner;
+      this.refreshDirectorySnapshot();
+    } catch (error) {
+      if (this.runtimeOwnerGeneration !== owner) {
+        return;
+      }
+      this.mainBridge.recordDirectoryMessage('设备迁移', String(error));
+      this.refreshDirectorySnapshot();
+    } finally {
+      this.directoryMigrationInFlight = false;
     }
   }
 
@@ -1093,26 +1676,45 @@ struct RustDeskIndex {
     }, 400);
   }
 
+  /**
+   * Reads the rates this panel can actually show.
+   *
+   * `supportedRefreshRates` is API 20+, so a device that predates it falls back
+   * to whatever rate the panel is running at plus the low-bandwidth option. The
+   * list is a property of the device rather than a constant, which is why the
+   * panel offers exactly these numbers and nothing else.
+   */
+  private refreshRefreshRateChoices(): void {
+    let supported: number[] | undefined = undefined;
+    let current = DEFAULT_REFRESH_RATE;
+    try {
+      const displayInfo = display.getDefaultDisplaySync();
+      current = Number(displayInfo.refreshRate);
+      const rates = displayInfo.supportedRefreshRates;
+      if (rates !== undefined && rates !== null) {
+        supported = [];
+        for (let index = 0; index < rates.length; index += 1) {
+          supported.push(Number(rates[index]));
+        }
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'display refresh query failed: %{public}s', String(error));
+    }
+    const choices = resolveRefreshRateChoices(supported, current);
+    this.refreshRateChoices = choices;
+    if (!choices.includes(this.selectedRefreshRate)) {
+      this.selectedRefreshRate = defaultRefreshRateFor(choices, current);
+    }
+  }
+
   private applySavedSettings(settings: SavedConnectionSettings): void {
-    this.peerTarget = settings.target;
+    this.peerTarget = bareTargetAddress(settings.target);
+    this.connectPageMode = settings.mode;
     this.rememberPassword = settings.rememberPassword;
   }
 
   private copySessionDefaults(source: SessionDefaults): SessionDefaults {
-    const defaults = new SessionDefaults();
-    defaults.touchMode = source.touchMode;
-    defaults.relativeMouseMode = source.relativeMouseMode;
-    defaults.rightClickGesture = source.rightClickGesture;
-    defaults.audioEnabled = source.audioEnabled;
-    defaults.clipboardEnabled = source.clipboardEnabled;
-    defaults.qualityPreset = source.qualityPreset;
-    defaults.customQuality = source.customQuality;
-    defaults.customFps = source.customFps;
-    defaults.preferredCodec = source.preferredCodec;
-    defaults.gesturesEnabled = source.gesturesEnabled;
-    defaults.toolbarExpanded = source.toolbarExpanded;
-    defaults.sessionSharingEnabled = source.sessionSharingEnabled;
-    return defaults;
+    return copySessionDefaults(source);
   }
 
   private copyServerConfig(source: ServerConfig): ServerConfig {
@@ -1127,6 +1729,25 @@ struct RustDeskIndex {
     config.remoteReachable = source.remoteReachable;
     config.accountAvailable = source.accountAvailable;
     config.message = source.message;
+    return config;
+  }
+
+  /**
+   * The route a new ID connection may use: the explicitly saved profile, never the
+   * draft the settings card is still editing. A saved official profile keeps the
+   * `public` dial spelling this client already uses for the pinned public route.
+   */
+  private savedRouteConfig(approved: ApprovedServerProfile | undefined): ServerConfig {
+    const config = new ServerConfig();
+    if (approved === undefined) {
+      config.message = '服务器配置尚未明确保存';
+      return config;
+    }
+    config.mode = approved.mode;
+    config.idServer = approved.mode === 'official' ? '' : approved.idServer;
+    config.relayServer = approved.relayServer;
+    config.key = approved.key;
+    config.usingPublicServer = approved.mode === 'official';
     return config;
   }
 
@@ -1173,7 +1794,6 @@ struct RustDeskIndex {
   private syncRemoteSessionSharing(): void {
     const snapshot = this.createRemoteSessionShareSnapshot();
     const continuationEligible = this.sessionDefaults.sessionSharingEnabled
-      && this.activeSessionKind === 'remote_control'
       && this.activeSessionId.length > 0
       && this.sessionPhase === 'connected'
       && snapshot !== undefined;
@@ -1209,12 +1829,29 @@ struct RustDeskIndex {
     }
   }
 
-  private clearActiveSessionHandoffState(): void {
+  private clearActiveSessionHandoffState(preserveRdpCertificateDecision: boolean = false): void {
     this.disableRemoteSessionSharing();
     this.activeSessionPassword = '';
+    // A credential answered for a wire that is being closed is not this client's
+    // to keep: the next dial asks again rather than spending a secret on a
+    // session the operator has already left.
+    this.discardDirectCredentialSecrets();
+    if (!preserveRdpCertificateDecision) {
+      this.forgetRdpCertificateCredentials(this.activeSessionId);
+      this.rdpDialCredentials?.wipePassword();
+      this.rdpDialCredentials = undefined;
+      if (this.rdpCertificateSessionId === this.activeSessionId) {
+        this.discardRdpCertificateDecision();
+      }
+    }
+    // The cause reported for this session goes with it: the text was already used
+    // as the close reason, and a later session must not inherit it.
+    this.clearDirectWireFailure();
     this.activeSessionShareTarget = '';
     this.activeSessionShareTargetKind = 'target';
+    this.activeSessionRustdeskIdOnly = false;
     this.activeSessionServerConfig = new ServerConfig();
+    this.activeSessionApprovedProfile = undefined;
     this.activeSessionPasswordEphemeral = false;
     this.handoffPasswordAutoSubmitAttempted = false;
     this.activeSessionForceRelay = false;
@@ -1252,30 +1889,25 @@ struct RustDeskIndex {
     return this.selectPreferredCodec(capabilities);
   }
 
-  private qualityPresetFor(defaults: SessionDefaults): QualityPreset {
-    const preset = defaults.qualityPreset.trim().toLowerCase();
-    if (preset === 'best') {
-      return 'best';
+  /**
+   * The rate a session starts from. It is remembered per device but re-derived
+   * from the panel on every start, so a default saved on a 60 Hz device stays
+   * meaningful when the same session is reopened from a 120 Hz one.
+   */
+  private defaultRefreshRate(defaults: SessionDefaults): number {
+    if (!isValidRefreshRate(defaults.refreshRate)) {
+      return defaultRefreshRateFor(this.refreshRateChoices, this.selectedRefreshRate);
     }
-    if (preset === 'speed' || preset === 'low') {
-      return 'low';
-    }
-    if (preset === 'custom') {
-      return 'custom';
-    }
-    return 'balanced';
-  }
-
-  private defaultQualityPreset(): QualityPreset {
-    return this.qualityPresetFor(this.sessionDefaults);
+    return Math.round(defaults.refreshRate);
   }
 
   private applySessionDefaultsToIdleState(capabilities: DecoderCapability[]): void {
     this.touchMode = this.sessionDefaults.touchMode;
     this.relativeMouseMode = !this.touchMode && this.sessionDefaults.relativeMouseMode;
+    this.inputEnabled = this.sessionDefaults.inputEnabled;
     this.rightClickGesture = this.sessionDefaults.rightClickGesture;
     this.clipboardSyncEnabled = this.sessionDefaults.clipboardEnabled;
-    this.selectedQualityPreset = this.defaultQualityPreset();
+    this.selectedRefreshRate = this.defaultRefreshRate(this.sessionDefaults);
     this.preferredCodec = this.resolvePreferredCodec(this.sessionDefaults.preferredCodec, capabilities);
     this.isMiniBarExpanded = this.sessionDefaults.toolbarExpanded;
   }
@@ -1289,440 +1921,6 @@ struct RustDeskIndex {
       this.activeSessionDefaults = this.copySessionDefaults(nextDefaults);
       this.applySessionDefaultsToIdleState(this.decoderCapabilities);
     }
-  }
-
-  private copyAccountState(source: AccountState): AccountState {
-    const state = new AccountState();
-    state.loggedIn = source.loggedIn;
-    state.apiServer = source.apiServer;
-    state.name = source.name;
-    state.displayName = source.displayName;
-    state.email = source.email;
-    state.busy = source.busy;
-    state.syncing = source.syncing;
-    state.challengeId = source.challengeId;
-    state.challengeType = source.challengeType;
-    state.emailHint = source.emailHint;
-    state.oidcProvider = source.oidcProvider;
-    state.message = source.message;
-    return state;
-  }
-
-  private updateServerAccountAvailability(loggedIn: boolean): void {
-    const config = new ServerConfig();
-    config.mode = this.serverConfig.mode;
-    config.idServer = this.serverConfig.idServer;
-    config.relayServer = this.serverConfig.relayServer;
-    config.apiServer = this.serverConfig.apiServer;
-    config.key = this.serverConfig.key;
-    config.effectiveApiServer = this.serverConfig.effectiveApiServer;
-    config.usingPublicServer = this.serverConfig.usingPublicServer;
-    config.remoteReachable = this.serverConfig.remoteReachable;
-    config.accountAvailable = loggedIn;
-    config.resultState = this.serverConfig.resultState;
-    config.message = this.serverConfig.message;
-    this.serverConfig = config;
-  }
-
-  private refreshAccountState(preserveTransient: boolean = true): void {
-    const previous = this.accountState;
-    const state = this.mainBridge.loadAccountState();
-    if (preserveTransient) {
-      state.busy = previous.busy;
-      state.syncing = previous.syncing;
-      state.challengeId = previous.challengeId;
-      state.challengeType = previous.challengeType;
-      state.emailHint = previous.emailHint;
-      state.oidcProvider = previous.oidcProvider;
-      if (state.message.length === 0) {
-        state.message = previous.message;
-      }
-    }
-    this.accountState = state;
-    this.updateServerAccountAvailability(state.loggedIn);
-  }
-
-  private loadAccountLoginOptions(): void {
-    this.clearAccountOptionsPollTimer();
-    if (!this.runtimeInitialized || this.accountState.loggedIn) {
-      this.accountLoginProviders = [];
-      return;
-    }
-    const result = this.mainBridge.startAccountLoginOptions();
-    if (!result.ok || result.state !== 'pending') {
-      this.accountLoginProviders = [];
-      const state = this.copyAccountState(this.accountState);
-      state.message = result.message || '无法获取浏览器登录方式';
-      this.accountState = state;
-      return;
-    }
-    this.scheduleAccountOptionsPoll();
-  }
-
-  private scheduleAccountOptionsPoll(): void {
-    this.clearAccountOptionsPollTimer();
-    this.accountOptionsPollTimer = setTimeout(() => {
-      this.accountOptionsPollTimer = -1;
-      this.pollAccountLoginOptions();
-    }, 350) as number;
-  }
-
-  private pollAccountLoginOptions(): void {
-    const result = this.mainBridge.pollAccountLoginOptions();
-    if (result.state === 'pending') {
-      this.scheduleAccountOptionsPoll();
-      return;
-    }
-    if (result.ok && result.state === 'ready') {
-      if (result.apiServer.length > 0 && this.accountState.apiServer.length > 0
-        && result.apiServer !== this.accountState.apiServer) {
-        this.loadAccountLoginOptions();
-        return;
-      }
-      this.accountLoginProviders = result.providers;
-      return;
-    }
-    this.accountLoginProviders = [];
-    if (!this.accountOidcActive) {
-      const state = this.copyAccountState(this.accountState);
-      state.message = result.message || '当前账户服务未提供浏览器登录方式';
-      this.accountState = state;
-    }
-  }
-
-  private clearAccountOptionsPollTimer(): void {
-    if (this.accountOptionsPollTimer < 0) {
-      return;
-    }
-    clearTimeout(this.accountOptionsPollTimer);
-    this.accountOptionsPollTimer = -1;
-  }
-
-  private findAccountProvider(provider: string): AccountLoginProvider | undefined {
-    const normalizedProvider = provider.trim().toLowerCase();
-    for (let index = 0; index < this.accountLoginProviders.length; index += 1) {
-      if (this.accountLoginProviders[index].name.trim().toLowerCase() === normalizedProvider) {
-        return this.accountLoginProviders[index];
-      }
-    }
-    return undefined;
-  }
-
-  private oidcStateMessage(stateMessage: string, hasUrl: boolean): string {
-    const normalized = stateMessage.trim().toLowerCase();
-    if (normalized === 'requesting account auth') {
-      return '正在向账户服务申请授权链接…';
-    }
-    if (normalized === 'login account auth') {
-      return '授权已确认，正在完成登录…';
-    }
-    if (normalized === 'waiting account auth' || hasUrl) {
-      return '已打开系统浏览器，请完成授权后返回。';
-    }
-    return '正在等待浏览器授权…';
-  }
-
-  private failAccountOidcAuthorization(message: string): void {
-    this.clearAccountPollTimer();
-    if (this.accountOidcActive) {
-      this.mainBridge.cancelAccountOidc();
-    }
-    this.accountOidcActive = false;
-    this.accountOidcOpenedUrl = '';
-    const state = this.copyAccountState(this.accountState);
-    state.busy = false;
-    state.oidcProvider = '';
-    state.message = message;
-    this.accountState = state;
-  }
-
-  private openAccountAuthorizationUrl(url: string): void {
-    const normalizedUrl = url.trim();
-    if (normalizedUrl.length === 0 || normalizedUrl === this.accountOidcOpenedUrl) {
-      return;
-    }
-    this.accountOidcOpenedUrl = normalizedUrl;
-    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    const options: OpenLinkOptions = {
-      appLinkingOnly: false,
-    };
-    try {
-      void context.openLink(normalizedUrl, options).catch((error: BusinessError) => {
-        if (!this.accountOidcActive || this.accountOidcOpenedUrl !== normalizedUrl) {
-          return;
-        }
-        this.failAccountOidcAuthorization(`无法打开系统浏览器：${error.message}`);
-      });
-    } catch (error) {
-      this.failAccountOidcAuthorization(`无法打开系统浏览器：${String(error)}`);
-    }
-  }
-
-  private startAccountOidc(provider: string): void {
-    const resolvedProvider = this.findAccountProvider(provider);
-    if (this.accountState.busy || this.accountState.syncing || resolvedProvider === undefined) {
-      return;
-    }
-    const providerName = resolvedProvider.name.trim();
-    this.clearAccountPollTimer();
-    const result = this.mainBridge.startAccountOidc(providerName);
-    if (!result.ok || result.state !== 'pending') {
-      const failed = this.copyAccountState(this.accountState);
-      failed.message = result.message || '无法启动浏览器授权';
-      this.accountState = failed;
-      return;
-    }
-    this.accountOidcActive = true;
-    this.accountOidcOpenedUrl = '';
-    const state = this.copyAccountState(this.accountState);
-    state.busy = true;
-    state.challengeId = '';
-    state.challengeType = '';
-    state.emailHint = '';
-    state.oidcProvider = providerName;
-    state.message = '正在向账户服务申请授权链接…';
-    this.accountState = state;
-    this.scheduleAccountPoll(500);
-  }
-
-  private pollAccountOidcAction(): void {
-    const result = this.mainBridge.pollAccountOidc();
-    if (result.ok && result.state === 'pending') {
-      this.openAccountAuthorizationUrl(result.url);
-      const state = this.copyAccountState(this.accountState);
-      state.busy = true;
-      state.message = this.oidcStateMessage(result.stateMessage, result.url.length > 0);
-      this.accountState = state;
-      this.scheduleAccountPoll(800);
-      return;
-    }
-    this.accountOidcActive = false;
-    this.accountOidcOpenedUrl = '';
-    const state = this.copyAccountState(this.accountState);
-    state.busy = false;
-    state.oidcProvider = '';
-    if (result.ok && result.state === 'authenticated') {
-      this.accountState = state;
-      this.refreshAccountState(false);
-      if (!this.accountState.loggedIn) {
-        const failed = this.copyAccountState(this.accountState);
-        failed.message = '浏览器授权完成，但登录状态读取失败';
-        this.accountState = failed;
-        return;
-      }
-      const authenticated = this.copyAccountState(this.accountState);
-      authenticated.message = '登录成功，正在同步通讯簿';
-      this.accountState = authenticated;
-      this.startAddressBookSync(true);
-      return;
-    }
-    state.message = result.message || '浏览器授权失败';
-    this.accountState = state;
-  }
-
-  private cancelAccountOidc(): void {
-    this.clearAccountPollTimer();
-    const cancelled = !this.accountOidcActive || this.mainBridge.cancelAccountOidc();
-    this.accountOidcActive = false;
-    this.accountOidcOpenedUrl = '';
-    const state = this.copyAccountState(this.accountState);
-    state.busy = false;
-    state.oidcProvider = '';
-    state.message = cancelled ? '已取消浏览器授权' : '无法取消浏览器授权';
-    this.accountState = state;
-  }
-
-  private startAccountLogin(username: string, password: string): void {
-    if (this.accountState.busy || this.accountState.syncing) {
-      return;
-    }
-    const normalizedUsername = username.trim();
-    if (normalizedUsername.length === 0 || password.trim().length === 0) {
-      const invalid = this.copyAccountState(this.accountState);
-      invalid.busy = false;
-      invalid.message = '请输入用户名和密码';
-      this.accountState = invalid;
-      this.clearAccountPollTimer();
-      return;
-    }
-    const result = this.mainBridge.startAccountLogin(normalizedUsername, password);
-    if (!result.ok || result.state !== 'pending') {
-      const state = this.copyAccountState(this.accountState);
-      state.message = result.message || '无法启动登录请求';
-      this.accountState = state;
-      return;
-    }
-    const state = this.copyAccountState(this.accountState);
-    state.busy = true;
-    state.challengeId = '';
-    state.challengeType = '';
-    state.emailHint = '';
-    state.message = '';
-    this.accountState = state;
-    this.scheduleAccountPoll();
-  }
-
-  private startAccountVerification(code: string): void {
-    if (this.accountState.busy || this.accountState.challengeId.length === 0) {
-      return;
-    }
-    const result = this.mainBridge.startAccountVerification(this.accountState.challengeId, code);
-    if (!result.ok || result.state !== 'pending') {
-      const state = this.copyAccountState(this.accountState);
-      state.message = result.message || '无法提交验证码';
-      this.accountState = state;
-      return;
-    }
-    const state = this.copyAccountState(this.accountState);
-    state.busy = true;
-    state.message = '';
-    this.accountState = state;
-    this.scheduleAccountPoll();
-  }
-
-  private cancelAccountChallenge(): void {
-    if (!this.mainBridge.cancelAccountChallenge()) {
-      const failed = this.copyAccountState(this.accountState);
-      failed.message = '无法取消本次账户验证';
-      this.accountState = failed;
-      return;
-    }
-    const state = this.copyAccountState(this.accountState);
-    state.challengeId = '';
-    state.challengeType = '';
-    state.emailHint = '';
-    state.message = '';
-    this.accountState = state;
-  }
-
-  private scheduleAccountPoll(delayMs: number = 300): void {
-    this.clearAccountPollTimer();
-    this.accountPollTimer = setTimeout(() => {
-      this.accountPollTimer = -1;
-      this.pollAccountAction();
-    }, delayMs) as number;
-  }
-
-  private pollAccountAction(): void {
-    if (this.accountOidcActive) {
-      this.pollAccountOidcAction();
-      return;
-    }
-    const result = this.mainBridge.pollAccountAction();
-    if (result.state === 'pending') {
-      this.scheduleAccountPoll();
-      return;
-    }
-    const state = this.copyAccountState(this.accountState);
-    state.busy = false;
-    if (result.state === 'authenticated' && result.ok) {
-      this.accountState = state;
-      this.refreshAccountState(false);
-      if (!this.accountState.loggedIn) {
-        const failed = this.copyAccountState(this.accountState);
-        failed.message = failed.message || '登录状态读取失败';
-        this.accountState = failed;
-        return;
-      }
-      const authenticated = this.copyAccountState(this.accountState);
-      authenticated.message = '登录成功，正在同步通讯簿';
-      this.accountState = authenticated;
-      this.startAddressBookSync(true);
-      return;
-    }
-    if (result.state === 'challenge' && result.ok) {
-      state.challengeId = result.challengeId;
-      state.challengeType = result.challengeType;
-      state.emailHint = result.emailHint;
-      state.message = result.challengeType === 'totp'
-        ? '请输入双重验证动态码'
-        : '请输入邮箱验证码';
-      this.accountState = state;
-      return;
-    }
-    state.message = result.message || '账户请求失败';
-    this.accountState = state;
-  }
-
-  private clearAccountPollTimer(): void {
-    if (this.accountPollTimer < 0) {
-      return;
-    }
-    clearTimeout(this.accountPollTimer);
-    this.accountPollTimer = -1;
-  }
-
-  private logoutAccount(): void {
-    if (!this.mainBridge.logoutAccount()) {
-      const failed = this.copyAccountState(this.accountState);
-      failed.message = '退出账户失败';
-      this.accountState = failed;
-      return;
-    }
-    this.clearAccountPollTimer();
-    this.clearAddressBookPollTimer();
-    this.refreshAccountState(false);
-    const state = this.copyAccountState(this.accountState);
-    state.message = '已退出账户';
-    this.accountState = state;
-    this.refreshDirectorySnapshot();
-    this.loadAccountLoginOptions();
-  }
-
-  private startAddressBookSync(silent: boolean = false): void {
-    if (!this.accountState.loggedIn || this.accountState.syncing) {
-      return;
-    }
-    const result = this.mainBridge.startAddressBookSync();
-    if (!result.ok || result.state !== 'pending') {
-      const state = this.copyAccountState(this.accountState);
-      const message = result.message || '无法启动通讯簿同步';
-      state.message = silent ? `通讯簿自动同步未启动：${message}` : message;
-      this.accountState = state;
-      return;
-    }
-    const state = this.copyAccountState(this.accountState);
-    state.syncing = true;
-    if (!silent) {
-      state.message = '';
-    }
-    this.accountState = state;
-    this.scheduleAddressBookPoll();
-  }
-
-  private scheduleAddressBookPoll(): void {
-    this.clearAddressBookPollTimer();
-    this.addressBookPollTimer = setTimeout(() => {
-      this.addressBookPollTimer = -1;
-      this.pollAddressBookSync();
-    }, 350) as number;
-  }
-
-  private pollAddressBookSync(): void {
-    const result = this.mainBridge.pollAddressBookSync();
-    if (result.state === 'pending') {
-      this.scheduleAddressBookPoll();
-      return;
-    }
-    const state = this.copyAccountState(this.accountState);
-    state.syncing = false;
-    if (result.state === 'synced' && result.ok) {
-      state.message = `已同步 ${result.addressBookCount} 个通讯簿、${result.peerCount} 台设备`;
-      this.accountState = state;
-      this.refreshDirectorySnapshot();
-      return;
-    }
-    state.message = result.message || '通讯簿同步失败';
-    this.accountState = state;
-    this.refreshAccountState(true);
-  }
-
-  private clearAddressBookPollTimer(): void {
-    if (this.addressBookPollTimer < 0) {
-      return;
-    }
-    clearTimeout(this.addressBookPollTimer);
-    this.addressBookPollTimer = -1;
   }
 
   private testServerConfiguration(config: ServerConfig): void {
@@ -1777,70 +1975,116 @@ struct RustDeskIndex {
   }
 
   private saveServerConfiguration(config: ServerConfig): void {
-    this.serverTestGeneration += 1;
+    const generation = ++this.serverTestGeneration;
     this.clearServerTestTimer();
     this.serverValidating = false;
-    const previousApiServer = this.serverConfig.effectiveApiServer;
     this.serverSaving = true;
+    void this.completeServerConfigurationSave(config, generation);
+  }
+
+  /**
+   * Adopts a save receipt only while this attempt is still the page's current
+   * server action: editing the draft or starting another test/save bumps the
+   * generation, so a late receipt cannot replace the newer draft or approval.
+   */
+  private async completeServerConfigurationSave(config: ServerConfig,
+    generation: number): Promise<void> {
     try {
-      const result = this.mainBridge.saveServerConfig(config);
-      this.serverConfig = result;
-      if (result.resultState !== 'save-success') {
+      const reply = await this.mainBridge.saveServerConfig(config);
+      if (generation !== this.serverTestGeneration) {
         return;
       }
-      const accountResetRequired = previousApiServer !== result.effectiveApiServer;
-      if (accountResetRequired) {
-        this.clearAccountPollTimer();
-        this.clearAccountOptionsPollTimer();
-        this.clearAddressBookPollTimer();
-        this.accountOidcActive = false;
-        this.accountOidcOpenedUrl = '';
-        this.accountLoginProviders = [];
+      if (!reply.ok || !reply.approved || !reply.committed) {
+        // The engine did not persist this draft: the approval in force stays
+        // untouched and only this draft carries the real refusal.
+        const failed = this.copyDraftServerConfig(config);
+        failed.resultState = 'error';
+        failed.message = reply.error.length > 0 ? reply.error : '保存未被引擎确认';
+        this.serverConfig = failed;
+        return;
       }
-      this.apiServer = result.effectiveApiServer;
-      this.refreshAccountState(!accountResetRequired);
+      this.serverProfile = reply.toProfileState();
+      const saved = this.copyServerConfig(reply.config);
+      saved.resultState = 'saved';
+      saved.message = reply.message;
+      this.serverConfig = saved;
+      this.apiServer = saved.effectiveApiServer;
       this.refreshDirectorySnapshot();
-      if (accountResetRequired && !this.accountState.loggedIn) {
-        this.loadAccountLoginOptions();
+    } catch (error) {
+      if (generation !== this.serverTestGeneration) {
+        return;
       }
+      const failed = this.copyDraftServerConfig(config);
+      failed.resultState = 'error';
+      failed.message = String(error);
+      this.serverConfig = failed;
     } finally {
-      this.serverSaving = false;
+      if (generation === this.serverTestGeneration) {
+        this.serverSaving = false;
+      }
     }
   }
 
-  private refreshDirectorySnapshot(): void {
-    if (!this.runtimeInitialized) {
-      return;
+  /** The draft a save or test was asked to persist; nothing here is an approval. */
+  private copyDraftServerConfig(source: ServerConfig): ServerConfig {
+    const config = new ServerConfig();
+    config.mode = source.mode;
+    config.idServer = source.idServer;
+    config.relayServer = source.relayServer;
+    config.key = source.key;
+    return config;
+  }
+
+  private applyServerProfileReply(reply: ServerProfileReply): void {
+    // A read failure cannot revoke the last confirmed explicit save.
+    if (reply.ok) {
+      this.serverProfile = reply.toProfileState();
     }
+  }
+
+  /** The card's values for a read receipt: an unsaved store stays visibly unsaved. */
+  private serverConfigFromReply(reply: ServerProfileReply): ServerConfig {
+    if (!reply.ok) {
+      const failed = this.copyServerConfig(this.serverConfig);
+      failed.resultState = 'error';
+      failed.message = reply.error;
+      return failed;
+    }
+    const config = this.copyServerConfig(reply.config);
+    config.message = reply.message;
+    return config;
+  }
+
+  private refreshDirectorySnapshot(forceProbe: boolean = false): void {
+    this.stopPeerOnlinePolling();
     const snapshot = new DirectorySnapshot();
     snapshot.revision = ++this.directoryRevision;
-    if (!this.lanScanActive) {
-      this.mainBridge.resetDirectoryMessage();
+    this.mainBridge.resetDirectoryMessage();
+    if (this.savedDevices === undefined && this.preferences !== undefined) {
+      try {
+        // The local store owns the list. The engine directory is only a migration
+        // source, read once per owner by migrateEngineDirectory.
+        this.savedDevices = this.preferences.loadSavedPeers(undefined);
+      } catch (error) {
+        snapshot.message = String(error);
+      }
     }
-    snapshot.favorites = this.mainBridge.listFavorites();
-    snapshot.recent = this.mainBridge.listRecentPeers(snapshot.favorites);
-    snapshot.lan = this.mainBridge.listLanPeers(snapshot.favorites);
-    snapshot.addressBook = this.mainBridge.listAddressBookPeers(snapshot.favorites);
-    const previousLists: PeerRecord[][] = [
-      this.directorySnapshot.recent,
-      this.directorySnapshot.lan,
-      this.directorySnapshot.addressBook,
-    ];
-    preservePeerOnlineStates(snapshot.recent, previousLists);
-    preservePeerOnlineStates(snapshot.lan, previousLists);
-    preservePeerOnlineStates(snapshot.addressBook, previousLists);
-    snapshot.favorite = buildFavoritePeers(snapshot.recent, snapshot.lan, snapshot.favorites);
+    snapshot.saved = this.savedDevices?.slice() ?? [];
+    snapshot.recent = snapshot.saved.slice().sort((left: PeerRecord, right: PeerRecord): number =>
+      right.lastSuccessAt - left.lastSuccessAt);
+    snapshot.lan = this.mainBridge.listLanPeers();
+    this.mergeSavedLanMetadata(snapshot.lan);
+    preservePeerOnlineStates(snapshot.lan, [this.directorySnapshot.lan, snapshot.saved]);
+    snapshot.favorite = buildFavoritePeers(snapshot.saved, snapshot.lan);
     snapshot.lanScanning = this.lanScanActive;
-    snapshot.message = this.lanScanActive
-      ? '正在扫描局域网设备'
-      : this.mainBridge.getDirectoryMessage();
+    snapshot.lanCanScan = this.runtimeLanCanScan(rustDeskRuntimeController.state());
+    snapshot.message = snapshot.message.length > 0 ? snapshot.message : this.mainBridge.getDirectoryMessage();
     this.directorySnapshot = snapshot;
-    this.peerOnlineQueryCount = 0;
-    this.schedulePeerOnlineProbe(120);
+    this.schedulePeerOnlineProbe(forceProbe ? 0 : Math.max(0, 30000 - (Date.now() - this.lastPeerProbeStartedAt)));
   }
 
   private schedulePeerOnlineProbe(delayMs: number): void {
-    if (!this.runtimeInitialized || !this.pageVisible || !this.appForeground) {
+    if (!this.pageVisible || !this.appForeground) {
       return;
     }
     if (this.peerOnlinePollTimer >= 0) {
@@ -1860,49 +2104,83 @@ struct RustDeskIndex {
       this.peerOnlinePollTimer = -1;
     }
     this.peerOnlinePollInFlight = false;
+    this.deviceLivenessProbe.cancel();
   }
 
   private async performPeerOnlineProbe(generation: number): Promise<void> {
-    if (generation !== this.peerOnlinePollGeneration || !this.pageVisible || !this.appForeground) {
-      return;
-    }
-    if (this.peerOnlinePollInFlight) {
-      this.schedulePeerOnlineProbe(1000);
-      return;
-    }
-    const publicServer = this.serverConfig.usingPublicServer;
-    if (publicServer && this.peerOnlineQueryCount >= 3) {
-      return;
-    }
-    const ids = collectPeerOnlineIds([
-      this.directorySnapshot.recent,
-      this.directorySnapshot.favorite,
-      this.directorySnapshot.lan,
-      this.directorySnapshot.addressBook,
-    ]);
-    if (ids.length === 0) {
+    if (generation !== this.peerOnlinePollGeneration || !this.pageVisible || !this.appForeground ||
+      this.peerOnlinePollInFlight) {
       return;
     }
     this.peerOnlinePollInFlight = true;
-    try {
-      const result = await this.mainBridge.queryPeerOnlineStates(ids);
-      if (generation === this.peerOnlinePollGeneration && result.ok) {
-        const snapshot = this.directoryScanSnapshot(this.lanScanActive, this.directorySnapshot.message);
-        applyPeerOnlineStates([
-          snapshot.recent,
-          snapshot.lan,
-          snapshot.addressBook,
-        ], result.onlines, result.offlines);
-        snapshot.favorite = buildFavoritePeers(snapshot.recent, snapshot.lan, snapshot.favorites);
-        this.directorySnapshot = snapshot;
+    this.lastPeerProbeStartedAt = Date.now();
+    const snapshot = this.directoryScanSnapshot(this.lanScanActive, this.directorySnapshot.message);
+    const lists = [snapshot.saved, snapshot.recent, snapshot.favorite, snapshot.lan];
+    for (const list of lists) {
+      for (const peer of list) {
+        peer.online = undefined;
+        peer.directWireReachable = undefined;
       }
+    }
+    const peers = snapshot.saved.concat(snapshot.lan);
+    const tcpResult = this.deviceLivenessProbe.probe(peers);
+    const approval = this.serverProfile.captureApproved();
+    const owner = this.runtimeOwnerGeneration;
+    try {
+      const ids = collectPeerOnlineIds(lists);
+      if (approval === undefined) {
+        // Without an explicitly saved profile hbbs is never asked, and no other
+        // observation may stand in for its answer.
+        if (ids.length > 0) {
+          snapshot.message = '服务器配置尚未明确保存，未查询 RustDesk 在线状态';
+        }
+      } else {
+        for (let offset = 0; offset < ids.length && generation === this.peerOnlinePollGeneration; offset += 64) {
+          const result = await this.mainBridge.queryPeerOnlineStates(ids.slice(offset, offset + 64), approval);
+          const currentApproval = this.serverProfile.captureApproved();
+          if (generation !== this.peerOnlinePollGeneration || owner !== this.runtimeOwnerGeneration ||
+            !this.pageVisible || !this.appForeground ||
+            currentApproval === undefined || currentApproval.revision !== approval.revision) {
+            return;
+          }
+          // Each native call has its own queryGeneration, not one token for all
+          // batches. The captured page/profile generation fences this sweep.
+          if (!result.ok || result.queryGeneration.length === 0) {
+            if (result.message.length > 0) {
+              snapshot.message = result.message;
+            }
+            continue;
+          }
+          applyPeerOnlineStates(lists, result.onlines, result.offlines);
+        }
+      }
+      const observed = await tcpResult;
+      const currentApproval = this.serverProfile.captureApproved();
+      if (generation !== this.peerOnlinePollGeneration || owner !== this.runtimeOwnerGeneration ||
+        !this.pageVisible || !this.appForeground || currentApproval?.revision !== approval?.revision) {
+        return;
+      }
+      // A direct RDP/VNC socket answers only for that wire. It is never a RustDesk
+      // online claim, and an id-only peer is not probed at all.
+      for (const observation of observed) {
+        if (observation.directWireReachable === undefined) {
+          continue;
+        }
+        for (const list of lists) {
+          for (const peer of list) {
+            if (savedDeviceKey(peer) === savedDeviceKey(observation) &&
+              peerProtocolOf(peer) !== 'rustdesk') {
+              peer.directWireReachable = observation.directWireReachable;
+            }
+          }
+        }
+      }
+      snapshot.favorite = buildFavoritePeers(snapshot.saved, snapshot.lan);
+      this.directorySnapshot = snapshot;
     } finally {
       if (generation === this.peerOnlinePollGeneration) {
-        this.peerOnlineQueryCount += 1;
         this.peerOnlinePollInFlight = false;
-        if (!publicServer || this.peerOnlineQueryCount < 3) {
-          this.schedulePeerOnlineProbe(publicServer ? 20000 : 6000);
-        }
+        this.schedulePeerOnlineProbe(30000);
       }
     }
   }
@@ -1910,15 +2188,29 @@ struct RustDeskIndex {
   private directoryScanSnapshot(scanning: boolean, message: string): DirectorySnapshot {
     const snapshot = new DirectorySnapshot();
     snapshot.revision = ++this.directoryRevision;
+    snapshot.saved = this.directorySnapshot.saved.slice();
+    snapshot.lanCanScan = this.directorySnapshot.lanCanScan;
     snapshot.recent = this.directorySnapshot.recent.slice();
     snapshot.favorite = this.directorySnapshot.favorite.slice();
     snapshot.lan = this.directorySnapshot.lan.slice();
     snapshot.addressBook = this.directorySnapshot.addressBook.slice();
-    snapshot.favorites = this.directorySnapshot.favorites.slice();
     snapshot.lanScanning = scanning;
     snapshot.message = message;
     return snapshot;
   }
+  private mergeSavedLanMetadata(peers: PeerRecord[]): void {
+    for (const peer of peers) {
+      peer.protocol = 'rustdesk';
+      peer.rustdeskIdOnly = true;
+      const local = this.savedDevices?.find((record: PeerRecord): boolean => savedDeviceKey(record) === savedDeviceKey(peer));
+      if (local !== undefined) {
+        peer.alias = local.alias;
+        peer.note = local.note;
+        peer.favorite = local.favorite;
+      }
+    }
+  }
+
 
   private clearLanScanPollTimer(): void {
     if (this.lanScanPollTimer >= 0) {
@@ -1927,80 +2219,206 @@ struct RustDeskIndex {
     }
   }
 
-  private pollLanScanSnapshot(scanGeneration: number): void {
-    if (!this.lanScanActive || scanGeneration !== this.lanScanGeneration) {
+  private async pollLanScanSnapshot(scanGeneration: number): Promise<void> {
+    if (!this.pageVisible || !this.runtimeInitialized || scanGeneration !== this.lanScanGeneration) {
       return;
     }
-    const lanPeers = this.mainBridge.listLanPeers(this.directorySnapshot.favorites);
-    preservePeerOnlineStates(lanPeers, [
-      this.directorySnapshot.recent,
-      this.directorySnapshot.lan,
-      this.directorySnapshot.addressBook,
-    ]);
-    if (!peerProjectionListsEqual(lanPeers, this.directorySnapshot.lan)) {
-      const snapshot = this.directoryScanSnapshot(true, '正在扫描局域网设备');
-      snapshot.lan = lanPeers;
-      snapshot.favorite = buildFavoritePeers(snapshot.recent, snapshot.lan, snapshot.favorites);
-      this.directorySnapshot = snapshot;
+    try {
+      await this.mainBridge.queryLanPeers();
+      // The singleton observer applies only matching receipts. An undefined
+      // result is retired/pending work, never a successful empty query.
+    } catch (error) {
+      if (this.pageVisible && scanGeneration === this.lanScanGeneration) {
+        this.errorText = String(error);
+      }
     }
-    this.lanScanPollTimer = setTimeout(() => {
-      this.lanScanPollTimer = -1;
-      this.pollLanScanSnapshot(scanGeneration);
-    }, 350) as number;
+    if (this.pageVisible && this.runtimeInitialized && this.lanScanActive &&
+      scanGeneration === this.lanScanGeneration) {
+      this.clearLanScanPollTimer();
+      this.lanScanPollTimer = setTimeout(() => {
+        this.lanScanPollTimer = -1;
+        void this.pollLanScanSnapshot(scanGeneration);
+      }, 350) as number;
+    }
   }
 
   private async scanLanPeers(): Promise<void> {
-    this.cancelLanScan();
+    if (!this.runtimeLanCanScan(rustDeskRuntimeController.state())) {
+      return;
+    }
     const scanGeneration = ++this.lanScanGeneration;
-    this.lanScanActive = true;
-    this.directorySnapshot = this.directoryScanSnapshot(true, '正在扫描局域网设备');
-    this.pollLanScanSnapshot(scanGeneration);
-    const completed = await this.mainBridge.scanLan();
-    if (scanGeneration !== this.lanScanGeneration) {
-      return;
-    }
-    const nativeMessage = this.mainBridge.getDirectoryMessage().trim();
     this.clearLanScanPollTimer();
-    this.lanScanActive = false;
-    this.refreshDirectorySnapshot();
-    if (!completed) {
-      this.directorySnapshot = this.directoryScanSnapshot(
-        false,
-        nativeMessage.length > 0 ? nativeMessage : '局域网扫描失败',
-      );
-      return;
+    try {
+      const admitted = await this.mainBridge.scanLan();
+      if (!this.pageVisible || scanGeneration !== this.lanScanGeneration || admitted === undefined) {
+        return;
+      }
+      if (admitted.ok && this.lanScanActive) {
+        await this.pollLanScanSnapshot(scanGeneration);
+      }
+      // A start receipt is admission plus a snapshot, not scan completion.
+      // Only subsequent native state/terminal receipts end the spinner.
+    } catch (error) {
+      if (this.pageVisible && scanGeneration === this.lanScanGeneration) {
+        this.errorText = String(error);
+      }
     }
-    this.directorySnapshot = this.directoryScanSnapshot(false, '局域网扫描完成');
   }
 
   private cancelLanScan(): void {
-    this.lanScanGeneration += 1;
-    this.lanScanActive = false;
+    const scanGeneration = ++this.lanScanGeneration;
     this.clearLanScanPollTimer();
+    void this.mainBridge.stopLan().catch((error: Error): void => {
+      if (this.pageVisible && scanGeneration === this.lanScanGeneration) {
+        this.errorText = String(error);
+      }
+    });
+    // Do not claim stopped before the exact native stop receipt settles.
   }
 
-  private setPeerFavorite(peerId: string, favorite: boolean): void {
-    if (!this.mainBridge.setFavorite(peerId, favorite)) {
-      this.errorText = '无法更新收藏状态';
+  private setPeerFavorite(peerId: string, protocol: PeerProtocol, favorite: boolean, idOnly: boolean): void {
+    const peer = this.findDirectoryPeer(peerId, protocol, idOnly);
+    const updated = copyPeerRecord(peer);
+    updated.favorite = favorite;
+    const error = this.saveLocalDevice(peer, updated);
+    if (error !== '') {
+      this.errorText = String(error);
       return;
     }
-    this.refreshDirectorySnapshot();
+    this.mirrorDirectoryWrite(() => this.mainBridge.setFavorite(updated, favorite), '收藏设备');
   }
 
-  private removeRecentPeer(peerId: string): void {
-    if (!this.mainBridge.removeRecentPeer(peerId)) {
-      this.errorText = '无法移除最近设备';
+  private removeRecentPeer(peerId: string, protocol: PeerProtocol, idOnly: boolean): void {
+    const peer = this.findDirectoryPeer(peerId, protocol, idOnly);
+    const key = savedDeviceKey(peer);
+    const next = (this.savedDevices ?? []).filter((row: PeerRecord): boolean => savedDeviceKey(row) !== key);
+    if (!this.preferences?.saveSavedPeers(next)) {
+      this.errorText = '无法删除本机设备记录';
       return;
     }
+    this.savedDevices = next;
     this.refreshDirectorySnapshot();
+    this.mirrorDirectoryWrite(() => this.mainBridge.removeRecentPeer(peer), '最近设备');
   }
 
-  private removeDiscoveredPeer(peerId: string): void {
-    if (!this.mainBridge.removeDiscoveredPeer(peerId)) {
-      this.errorText = '无法移除局域网设备';
+  private async removeDiscoveredPeer(peerId: string): Promise<void> {
+    const scanGeneration = ++this.lanScanGeneration;
+    this.clearLanScanPollTimer();
+    try {
+      const receipt = await this.mainBridge.removeDiscoveredPeer(peerId);
+      if (!this.pageVisible || scanGeneration !== this.lanScanGeneration || receipt === undefined) {
+        return;
+      }
+      if (!receipt.ok) {
+        this.errorText = receipt.error ?? '无法移除局域网设备';
+      }
+      // Rows come from the acknowledged native snapshot, not a local deletion
+      // or a fabricated `removed`/durable-storage flag.
+    } catch (error) {
+      if (this.pageVisible && scanGeneration === this.lanScanGeneration) {
+        this.errorText = String(error);
+      }
+    }
+  }
+
+  private setPeerNote(peerId: string, protocol: PeerProtocol, note: string, idOnly: boolean): void {
+    const peer = this.findDirectoryPeer(peerId, protocol, idOnly);
+    const updated = copyPeerRecord(peer);
+    updated.note = note;
+    const error = this.saveLocalDevice(peer, updated);
+    if (error !== '') {
+      this.errorText = String(error);
+    }
+  }
+
+  /**
+   * Mirrors one directory write into the engine while the same owner is current.
+   *
+   * The local saved list stays the owner of the row; an engine refusal is a real
+   * failure reported to the operator, never dropped and never turned into success.
+   */
+  private mirrorDirectoryWrite(write: () => Promise<DirectoryWriteReply>, scope: string): void {
+    const owner = this.runtimeOwnerGeneration;
+    if (!this.runtimeInitialized || owner.length === 0) {
       return;
     }
+    void write().then((reply: DirectoryWriteReply): void => {
+      if (this.runtimeOwnerGeneration !== owner || reply.ok) {
+        return;
+      }
+      this.mainBridge.recordDirectoryMessage(scope, reply.error);
+      this.refreshDirectorySnapshot();
+    }).catch((error: Error): void => {
+      if (this.runtimeOwnerGeneration !== owner) {
+        return;
+      }
+      this.mainBridge.recordDirectoryMessage(scope, String(error));
+      this.refreshDirectorySnapshot();
+    });
+  }
+
+  private findDirectoryPeer(target: string, protocol: PeerProtocol, idOnly: boolean): PeerRecord {
+    const candidate = new PeerRecord();
+    candidate.id = target;
+    candidate.protocol = protocol;
+    candidate.rustdeskIdOnly = idOnly;
+    const normalized = migrateDeviceRecord(candidate);
+    return this.directorySnapshot.saved.concat(this.directorySnapshot.lan)
+      .find((peer: PeerRecord): boolean => savedDeviceKey(peer) === savedDeviceKey(normalized)) ?? normalized;
+  }
+
+  private saveLocalDevice(original: PeerRecord, value: PeerRecord): ResourceStr {
+    const peer = migrateDeviceRecord(value);
+    try {
+      peer.rdpCertificateSha256 = peer.protocol === 'rdp'
+        ? (this.preferences?.rdpCertificateSha256(peer.id) ?? '') : '';
+    } catch (error) {
+      return String(error);
+    }
+    const oldKey = savedDeviceKey(original);
+    const next = (this.savedDevices ?? []).filter((row: PeerRecord): boolean =>
+      savedDeviceKey(row) !== oldKey && savedDeviceKey(row) !== savedDeviceKey(peer));
+    next.push(peer);
+    if (!this.preferences?.saveSavedPeers(next)) {
+      return '无法保存本机设备记录，请重试';
+    }
+    if (invalidatesRdpUsernameCache(original, peer, this.directWireUsernameTarget)) {
+      this.directWireUsernameTarget = '';
+    }
+    this.savedDevices = next;
     this.refreshDirectorySnapshot();
+    return '';
+  }
+  private rememberConnectedDevice(event: NativeEvent): void {
+    const protocol: PeerProtocol = this.activeSessionKind === 'rdp' ? 'rdp' :
+      (this.activeSessionKind === 'vnc' ? 'vnc' : 'rustdesk');
+    const target = this.activeSessionShareTarget || this.peerTarget;
+    const original = this.findDirectoryPeer(target, protocol, this.activeSessionRustdeskIdOnly);
+    const peer = copyPeerRecord(original);
+    peer.lastSuccessAt = Date.now();
+    if (event.hostname !== undefined) {
+      peer.hostname = event.hostname;
+    }
+    if (event.platform !== undefined) {
+      peer.platform = event.platform;
+    }
+    if (protocol === 'rdp' && this.directWireUsernameTarget === target) {
+      peer.rdpUsername = this.directCredentialsUsername;
+    }
+    const error = this.saveLocalDevice(original, peer);
+    if (error !== '') {
+      this.errorText = String(error);
+      return;
+    }
+    // Only a session this client really observed reaches the engine directory.
+    this.mirrorDirectoryWrite(() => this.mainBridge.recordRecentPeer(peer), '最近设备');
+  }
+
+
+  private changeConnectPageMode(index: number): void {
+    this.updatePeerTarget(swapDefaultDirectPort(this.peerTarget, index));
+    this.connectPageMode = index;
+    this.preferences?.saveTarget(this.peerTarget, index);
   }
 
   private updatePeerTarget(value: string): void {
@@ -2011,8 +2429,8 @@ struct RustDeskIndex {
     this.peerTarget = value;
   }
 
-  private launchPeer(peerId: string, kind: PeerLaunchKind): void {
-    void this.preparePeerLaunch(peerId, kind);
+  private launchPeer(peerId: string, kind: PeerLaunchKind, rustdeskIdOnly: boolean = false): void {
+    void this.preparePeerLaunch(peerId, kind, rustdeskIdOnly);
   }
 
   private abilityContext(): common.UIAbilityContext {
@@ -2053,7 +2471,19 @@ struct RustDeskIndex {
     this.easyTierStatusText = this.easyTierInstanceStatus(instance, this.easyTierSnapshotFresh);
   }
 
-  private async preparePeerLaunch(targetValue: string, kind: PeerLaunchKind): Promise<void> {
+  /** Home's mode index for one launch kind, so the address and its protocol always travel together. */
+  private connectPageModeForKind(kind: PeerLaunchKind): number {
+    if (kind === 'vnc') {
+      return 1;
+    }
+    if (kind === 'rdp') {
+      return 2;
+    }
+    return kind === 'file_transfer' ? 3 : 0;
+  }
+
+  private async preparePeerLaunch(targetValue: string, kind: PeerLaunchKind,
+    rustdeskIdOnly: boolean = false): Promise<void> {
     if (this.sessionCloseInFlight) {
       return;
     }
@@ -2062,11 +2492,13 @@ struct RustDeskIndex {
       this.errorText = '请输入目标地址';
       return;
     }
+    rustdeskIdOnly = kind === 'remote_control' && rustdeskIdOnly;
     this.captureSessionReturnTab();
     this.updatePeerTarget(target);
-    this.preferences?.saveTarget(target);
+    this.connectPageMode = this.connectPageModeForKind(kind);
+    this.preferences?.saveTarget(target, this.connectPageMode);
     if (!this.easyTierPreconnectEnabled || !this.easyTierDataAvailable) {
-      await this.launchPeerDirect(target, kind);
+      await this.launchPeerDirect(target, kind, rustdeskIdOnly);
       return;
     }
     if (this.easyTierRequestPending) {
@@ -2075,7 +2507,7 @@ struct RustDeskIndex {
     }
 
     const context = this.abilityContext();
-    this.beginEasyTierPreconnect(target, kind, '正在读取 EasyTier 实例状态');
+    this.beginEasyTierPreconnect(target, kind, '正在读取 EasyTier 实例状态', rustdeskIdOnly);
     const snapshot = await EasyTierApiService.readSnapshot(context);
     this.easyTierRequestPending = false;
     this.applyEasyTierSnapshot(snapshot);
@@ -2083,7 +2515,7 @@ struct RustDeskIndex {
       this.connectionUiPhase = 'idle';
       this.connectionUiMessage = '';
       EasyTierApiService.clearConnectionIntent(context);
-      await this.launchPeerDirect(target, kind);
+      await this.launchPeerDirect(target, kind, rustdeskIdOnly);
       return;
     }
     if (this.easyTierSelectedInstanceId.length === 0) {
@@ -2099,28 +2531,32 @@ struct RustDeskIndex {
       this.failEasyTierPreconnect(target, kind, '已选择的 EasyTier 实例不在当前快照中，请重新选择');
       return;
     }
-    if (!EasyTierApiService.saveConnectionIntent(context, target, kind)) {
+    if (!EasyTierApiService.saveConnectionIntent(context, target, kind, rustdeskIdOnly)) {
       this.failEasyTierPreconnect(target, kind, '无法保存待恢复的 RustDesk 连接');
       return;
     }
-    await this.continueEasyTierLaunch(instance, snapshot.fresh, new EasyTierConnectionIntent(target, kind, Date.now()));
+    await this.continueEasyTierLaunch(instance, snapshot.fresh,
+      new EasyTierConnectionIntent(target, kind, Date.now(), rustdeskIdOnly));
   }
 
-  private async launchPeerDirect(target: string, kind: PeerLaunchKind): Promise<void> {
+  private async launchPeerDirect(target: string, kind: PeerLaunchKind,
+    rustdeskIdOnly: boolean = false): Promise<void> {
     this.updatePeerTarget(target);
-    this.preferences?.saveTarget(target);
+    this.preferences?.saveTarget(target, this.connectPageMode);
     if (kind === 'file_transfer') {
       await this.openTransferWorkspaceDirect();
       return;
     }
-    await this.connectSessionDirect(kind as PrimarySessionKind);
+    await this.connectSessionDirect(kind as PrimarySessionKind, undefined, rustdeskIdOnly);
   }
 
-  private beginEasyTierPreconnect(target: string, kind: PeerLaunchKind, message: string): void {
+  private beginEasyTierPreconnect(target: string, kind: PeerLaunchKind, message: string,
+    rustdeskIdOnly: boolean = false): void {
     this.clearConnectionTimeout();
     this.connectionAttemptKind = kind === 'file_transfer' ? 'file_transfer' : 'primary';
     if (kind !== 'file_transfer') {
       this.lastConnectionKind = kind as PrimarySessionKind;
+      this.lastConnectionRustdeskIdOnly = kind === 'remote_control' && rustdeskIdOnly;
     }
     this.connectionUiTarget = target;
     this.connectionUiPhase = 'waiting_for_easytier';
@@ -2174,6 +2610,7 @@ struct RustDeskIndex {
   }
 
   private async applyEasyTierApiResult(result: EasyTierApiResultEvent): Promise<void> {
+    this.lastConnectionRustdeskIdOnly = result.kind === 'remote_control' && result.rustdeskIdOnly;
     this.easyTierRequestPending = false;
     this.easyTierStatusText = result.message;
     if (result.operation === EASYTIER_OPERATION_START_INSTANCE) {
@@ -2190,7 +2627,7 @@ struct RustDeskIndex {
       this.easyTierStatusText = this.easyTierInstanceStatus(result.instance);
       this.connectionUiPhase = 'idle';
       this.connectionUiMessage = '';
-      await this.launchPeerDirect(result.target, result.kind);
+      await this.launchPeerDirect(result.target, result.kind, result.rustdeskIdOnly);
     }
   }
 
@@ -2263,7 +2700,7 @@ struct RustDeskIndex {
       this.connectionUiPhase = 'idle';
       this.connectionUiMessage = '';
       this.easyTierStatusText = this.easyTierInstanceStatus(instance, true);
-      await this.launchPeerDirect(intent.target, intent.kind);
+      await this.launchPeerDirect(intent.target, intent.kind, intent.rustdeskIdOnly);
       return;
     }
     this.beginEasyTierPreconnect(
@@ -2272,6 +2709,7 @@ struct RustDeskIndex {
       snapshotFresh
         ? `正在请求 EasyTier 启动 ${instance.instanceName}`
         : `EasyTier 状态已过期，正在请求启动 ${instance.instanceName}`,
+      intent.rustdeskIdOnly,
     );
     await this.requestEasyTierStart(instance.instanceId);
   }
@@ -2318,20 +2756,48 @@ struct RustDeskIndex {
     }
   }
 
-  private refreshNativeState(): void {
+  /**
+   * One informational line about the running session.
+   *
+   * It is a notice, not an error: it is used where the native side confirms a
+   * setting is in force but could not act on it yet, so the operator is told
+   * rather than left with a silent log entry.
+   */
+  private showSessionNotice(message: string): void {
     try {
-      this.apiServer = native.runtimeGetApiServer();
-      let decoderCapabilityResponse: ESObject = JSON.parse(native.runtimeGetDecoderCapabilities());
-      let decoderCapabilityRows: ESObject = decoderCapabilityResponse.capabilities;
-      const decoderCapabilities = this.copyDecoderCapabilities(decoderCapabilityRows);
-      if (!this.activeSessionId) {
-        this.preferredCodec = this.resolvePreferredCodec(this.sessionDefaults.preferredCodec, decoderCapabilities);
-      }
-      this.decoderCapabilities = decoderCapabilities;
-      this.serverConfig = this.mainBridge.loadServerConfig();
-      this.refreshAccountState();
-      this.errorText = '';
+      this.getUIContext().getPromptAction().showToast({ message, duration: 5000 });
     } catch (error) {
+      hilog.error(DOMAIN, TAG, 'Failed to show session notice: %{public}s', String(error));
+    }
+  }
+
+  private async refreshNativeState(): Promise<void> {
+    const state = rustDeskRuntimeController.state();
+    if (!this.pageVisible || !this.runtimeInitialized || !state.discoveryAllowed) {
+      return;
+    }
+    try {
+      const report = await rustDeskRuntimeController.queryDecoderCapabilityReport();
+      if (report === undefined || !this.pageVisible) {
+        return;
+      }
+      this.decoderCapabilityReport = report;
+      // The real HAR returns advertised_metadata with h264_decoder/hevc_decoder
+      // and not_measured throughput/HDR. It has no old recommendation rows.
+      // Do not overwrite selected codec, FPS, Surface path or measured UI state.
+      const serverGeneration = this.serverTestGeneration;
+      const serverReply = await this.mainBridge.loadServerConfig();
+      if (!this.pageVisible || serverGeneration !== this.serverTestGeneration ||
+        state.ownerGeneration !== rustDeskRuntimeController.state().ownerGeneration) {
+        return;
+      }
+      this.applyServerProfileReply(serverReply);
+      this.serverConfig = this.serverConfigFromReply(serverReply);
+      this.apiServer = this.serverConfig.effectiveApiServer;
+    } catch (error) {
+      if (!this.pageVisible || state.ownerGeneration !== rustDeskRuntimeController.state().ownerGeneration) {
+        return;
+      }
       this.errorText = String(error);
       hilog.error(DOMAIN, TAG, 'refreshNativeState failed: %{public}s', this.errorText);
     }
@@ -2352,7 +2818,9 @@ struct RustDeskIndex {
     try {
       return JSON.parse(raw) as ActionResponse;
     } catch (error) {
-      hilog.error(DOMAIN, TAG, 'parseResponse failed: %{public}s raw=%{public}s', String(error), raw);
+      // The envelope can carry clipboard text and file paths, so only its size is
+      // reported: the failure itself is what the operator needs here.
+      hilog.error(DOMAIN, TAG, 'parseResponse failed: %{public}s length=%{public}d', String(error), raw.length);
       throw new Error(String(error));
     }
   }
@@ -2363,10 +2831,10 @@ struct RustDeskIndex {
     this.lastConnectionKind = kind;
     this.connectionUiTarget = target;
     this.connectionUiPhase = 'connecting';
-    this.connectionUiMessage = kind === 'view_camera'
-      ? '正在协商摄像头会话，成功后再进入预览。'
-      : (kind === 'view_only'
-        ? '正在建立只观看会话，不会发送键鼠输入。'
+    this.connectionUiMessage = kind === 'vnc'
+      ? '正在按 RFB 协议连接 VNC 服务端。'
+      : (kind === 'rdp'
+        ? '正在协商 RDP 连接与安全通道。'
         : '正在建立安全连接，成功后再进入远控。');
   }
 
@@ -2439,7 +2907,15 @@ struct RustDeskIndex {
       void this.openTransferWorkspace();
       return;
     }
-    void this.preparePeerLaunch(target, this.lastConnectionKind);
+    if (this.sessionTransitionBusy()) {
+      // A wrong credential is answered by closing the wire and dialling a fresh
+      // viewer, so a retry that lands while that close is still releasing is
+      // remembered and run when it finishes instead of being dropped.
+      this.pendingConnectionRetry = target;
+      hilog.info(DOMAIN, TAG, 'retry deferred until the failed attempt finished releasing');
+      return;
+    }
+    void this.preparePeerLaunch(target, this.lastConnectionKind, this.lastConnectionRustdeskIdOnly);
   }
 
   private dismissConnectionAttempt(): void {
@@ -2453,12 +2929,12 @@ struct RustDeskIndex {
     await this.preparePeerLaunch(this.peerTarget, 'remote_control');
   }
 
-  private async connectCameraSession(): Promise<void> {
-    await this.preparePeerLaunch(this.peerTarget, 'view_camera');
+  private async connectVncSession(): Promise<void> {
+    await this.preparePeerLaunch(this.peerTarget, 'vnc');
   }
 
-  private async connectViewOnlySession(): Promise<void> {
-    await this.preparePeerLaunch(this.peerTarget, 'view_only');
+  private async connectRdpSession(): Promise<void> {
+    await this.preparePeerLaunch(this.peerTarget, 'rdp');
   }
 
   private syncRemoteSessionTabs(): void {
@@ -2501,6 +2977,7 @@ struct RustDeskIndex {
       tab.uiStateCaptured = true;
       tab.touchMode = this.touchMode;
       tab.relativeMouseMode = this.relativeMouseMode;
+      tab.inputEnabled = this.inputEnabled;
       tab.toolbarExpanded = this.isMiniBarExpanded;
       tab.displayIndex = this.viewportModel.getCurrentDisplayIndex();
       if (tab.peerInfo !== undefined) {
@@ -2510,23 +2987,28 @@ struct RustDeskIndex {
       tab.viewOffsetX = this.previewUserOffsetX;
       tab.viewOffsetY = this.previewUserOffsetY;
       tab.viewRotation = this.previewUserRotation;
-      tab.chatMessages = this.chatStore.messages();
-      tab.chatUnread = this.chatStore.unreadCount();
-      tab.chatDraft = this.chatDraft;
-      tab.imageQuality = this.sessionDisplayController.getImageQuality();
-      tab.customImageQuality = this.sessionDisplayController.getCustomImageQuality();
-      tab.customFps = this.sessionDisplayController.getCustomFps();
+      tab.refreshRate = this.sessionDisplayController.getRefreshRate();
       tab.sessionDefaults = this.copySessionDefaults(this.activeSessionDefaults);
       tab.serverConfig = this.copyServerConfig(this.activeSessionServerConfig);
       tab.shareTargetKind = this.activeSessionShareTargetKind;
+      tab.rustdeskIdOnly = this.activeSessionRustdeskIdOnly;
       tab.forceRelay = this.activeSessionForceRelay;
     }
     await this.clipboardController?.stopAndDrainRemoteWrite();
     this.inputController?.releasePressedButtons();
     this.hideSystemIme(false);
     this.hideSoftKeyboard();
-    this.clearSurfaceBinding();
-    this.previewSurfaceId = '';
+    const surfaceReleased = this.clearSurfaceBinding();
+    if (surfaceReleased) {
+      this.previewSurfaceId = '';
+      this.previewSurfaceDestroyAuthorized = true;
+    } else {
+      // The producer still owes a join, so the pane cannot be given back and
+      // this is not claimed as a release. The holder id stays on its controller
+      // for the real detach, and the native side keeps the viewer.
+      this.previewSurfaceDestroyAuthorized = false;
+      hilog.warn(DOMAIN, TAG, 'suspend kept session=%{public}s without a confirmed Surface release', sessionId);
+    }
     this.setSessionVideoPaused(sessionId, true);
     this.nativeSessionBridge.setRemoteAudioMuted(sessionId, true);
     this.closeRemoteAudio();
@@ -2555,6 +3037,7 @@ struct RustDeskIndex {
   private async connectSessionDirect(
     kind: PrimarySessionKind,
     handoff?: RemoteSessionHandoffEnvelope,
+    rustdeskIdOnly: boolean = false,
   ): Promise<void> {
     if (this.sessionTransitionBusy()) {
       this.connectionUiMessage = '已有连接请求正在处理，请稍候';
@@ -2562,8 +3045,12 @@ struct RustDeskIndex {
     }
     this.sessionConnectInFlight = true;
     try {
-      await this.performConnectSessionDirect(kind, handoff);
+      await this.performConnectSessionDirect(kind, handoff, rustdeskIdOnly);
     } finally {
+      this.pendingDirectCredentials?.wipePassword();
+      this.pendingDirectCredentials = undefined;
+      this.rdpDialCredentials?.wipePassword();
+      this.rdpDialCredentials = undefined;
       this.sessionConnectInFlight = false;
       this.materializePendingTransitionClose();
       this.drainPendingSessionTransitions();
@@ -2573,25 +3060,45 @@ struct RustDeskIndex {
   private async performConnectSessionDirect(
     kind: PrimarySessionKind,
     handoff?: RemoteSessionHandoffEnvelope,
+    rustdeskIdOnly: boolean = false,
   ): Promise<void> {
     if (this.sessionCloseInFlight) {
       return;
     }
     if (!this.runtimeInitialized) {
-      this.initializeRuntime();
+      void this.initializeRuntime();
     }
-    const connectionTarget = handoff === undefined
+    let connectionTarget = handoff === undefined
       ? this.peerTarget.trim()
       : RemoteSessionHandoffService.buildConnectionTarget(handoff);
     const displayTarget = handoff === undefined ? connectionTarget : handoff.target.trim();
+    const idOnly = kind === 'remote_control' && (rustdeskIdOnly ||
+      (handoff?.targetKind === 'target' && this.handoffTargetKind(displayTarget) === 'ip'));
+    this.lastConnectionRustdeskIdOnly = idOnly;
     if (connectionTarget.length === 0 || displayTarget.length === 0) {
       this.errorText = '请输入目标地址';
       return;
     }
+    if (handoff === undefined) {
+      // The mode bar names the protocol; the field holds only an address, so a
+      // typed scheme is refused rather than allowed to override the chosen mode.
+      const issue = targetFieldIssue(kind, connectionTarget);
+      if (issue !== '') {
+        this.errorText = targetFieldIssueText(kind, issue);
+        return;
+      }
+    }
     this.peerTarget = displayTarget;
-    this.preferences?.saveTarget(displayTarget);
+    this.connectPageMode = this.connectPageModeForKind(kind);
+    this.preferences?.saveTarget(displayTarget, this.connectPageMode);
+    // The selected mode is the wire: the credential dialog is only ever opened for
+    // a wire this client can speak, and the engine is given that wire's scheme.
+    const directWire: DirectWireProtocol | undefined = kind === 'rdp'
+      ? 'rdp'
+      : (kind === 'vnc' ? 'vnc' : undefined);
+    const sessionKind: PrimarySessionKind = kind;
     const existingTab = this.remoteSessionTabs.find((tab: RemoteSessionTab) =>
-      tab.target === displayTarget && tab.kind === kind && tab.phase !== 'closed');
+      tab.target === displayTarget && tab.kind === sessionKind && tab.rustdeskIdOnly === idOnly && tab.phase !== 'closed');
     if (existingTab !== undefined) {
       await this.switchRemoteSessionTab(existingTab.sessionId);
       return;
@@ -2600,19 +3107,47 @@ struct RustDeskIndex {
       this.errorText = '最多可同时保留 6 个远控会话，请先关闭一个标签页';
       return;
     }
+    // A direct VNC/RDP viewer consumes its password when it dials and its endpoint
+    // has to name the RDP account, so the answers are collected before anything is
+    // registered. Nothing is created here, which is why a cancel can leave no
+    // session, no Surface and no secret behind. The stash is matched by the wire
+    // the dial will really use, so an answer collected for one protocol is never
+    // spent on the other.
+    let directCredentials: DirectWireCredentials | undefined = undefined;
+    if (directWire !== undefined) {
+      directCredentials = this.takePendingDirectCredentials(directWire, displayTarget);
+      if (directCredentials === undefined) {
+        this.openDirectCredentialsDialog(directWire, displayTarget);
+        return;
+      }
+      connectionTarget = directCredentials.dialTarget;
+    }
+    const credentialGeneration = this.rdpCredentialGeneration;
+    this.rdpDialCredentials = directWire === 'rdp' ? directCredentials : undefined;
     if (this.activeSessionId.length > 0) {
       await this.suspendActiveSessionForNewConnection();
     }
-    this.activeSessionPassword = '';
+    // Initial RDP credentials wait in memory for TLS trust resolution. Once a
+    // certificate has been accepted, the redial clears its password immediately.
+    let sessionPassword: string = directCredentials === undefined ? '' : directCredentials.password;
+    this.activeSessionPassword = sessionPassword;
+    this.clearDirectWireFailure();
     this.trustThisDevice = false;
     this.canTrustDevice = true;
     this.activeSessionShareTarget = displayTarget;
-    const targetKind = handoff?.targetKind ?? this.handoffTargetKind(displayTarget);
+    const targetKind = handoff?.targetKind ?? (idOnly ? 'target' : this.handoffTargetKind(displayTarget));
     this.activeSessionShareTargetKind = targetKind;
+    this.activeSessionRustdeskIdOnly = idOnly;
+    this.activeSessionApprovedProfile = targetKind === 'ip'
+      ? undefined : this.serverProfile.captureApproved();
     this.activeSessionServerConfig = targetKind === 'ip'
       ? new ServerConfig()
-      : (handoff === undefined ? this.copyServerConfig(this.serverConfig) : this.serverConfigFromHandoff(handoff));
-    this.activeSessionPasswordEphemeral = handoff !== undefined;
+      : (handoff === undefined
+        ? this.savedRouteConfig(this.activeSessionApprovedProfile)
+        : this.serverConfigFromHandoff(handoff));
+    // The peer ID stays bare. Only approvedServerProfile selects its server;
+    // the retired id@server?key spelling is not this engine's target grammar.
+    this.activeSessionPasswordEphemeral = handoff !== undefined || directWire !== undefined;
     this.handoffPasswordAutoSubmitAttempted = false;
     if (handoff !== undefined) {
       hilog.info(
@@ -2626,8 +3161,15 @@ struct RustDeskIndex {
     }
     this.activeSessionForceRelay = targetKind === 'target' ? (handoff?.forceRelay ?? false) : false;
     await this.applySessionFullscreen(false, true);
-    this.beginConnectionAttempt(kind, displayTarget);
-    this.activeSessionKind = kind;
+    if (directWire === 'rdp' && (credentialGeneration !== this.rdpCredentialGeneration ||
+      !this.pageVisible || !this.appForeground)) {
+      directCredentials?.wipePassword();
+      this.rdpDialCredentials = undefined;
+      this.activeSessionPassword = '';
+      return;
+    }
+    this.beginConnectionAttempt(sessionKind, displayTarget);
+    this.activeSessionKind = sessionKind;
     this.activeSessionDefaults = this.copySessionDefaults(this.sessionDefaults);
     this.clipboardSyncEnabled = this.activeSessionDefaults.clipboardEnabled;
     this.preferredCodec = this.resolvePreferredCodec(
@@ -2638,27 +3180,59 @@ struct RustDeskIndex {
     this.syncClipboardController();
     this.syncInputInterceptor();
     this.errorText = '';
-    this.connectionSummary = kind === 'view_camera'
-      ? '正在连接远端摄像头...'
-      : (kind === 'view_only' ? '正在连接远端屏幕（只观看）...' : '正在建立远控连接...');
-    this.sessionMessage = kind === 'view_camera'
-      ? '正在连接摄像头'
-      : (kind === 'view_only' ? '正在连接远端屏幕' : '正在连接远端');
-    hilog.info(DOMAIN, TAG, 'connectSession kind=%{public}s target=%{public}s', kind, displayTarget);
+    this.connectionSummary = sessionKind === 'vnc'
+      ? '正在连接 VNC 服务端...'
+      : (sessionKind === 'rdp' ? '正在连接远程桌面...' : '正在建立远控连接...');
+    this.sessionMessage = sessionKind === 'vnc'
+      ? '正在连接 VNC'
+      : (sessionKind === 'rdp' ? '正在连接远程桌面' : '正在连接远端');
+    hilog.info(DOMAIN, TAG, 'connectSession kind=%{public}s target=%{public}s', sessionKind, displayTarget);
     this.showTransferWorkspace = false;
     this.showPreviewModal = false;
     this.performanceTuningApplied = false;
     this.resetPreviewState();
     const connectionGeneration = this.connectionGeneration + 1;
     this.connectionGeneration = connectionGeneration;
+    if (sessionKind === 'rdp') {
+      const measured = await this.measureRdpPaneBeforeAdd(connectionGeneration);
+      if (!measured || connectionGeneration !== this.connectionGeneration ||
+        credentialGeneration !== this.rdpCredentialGeneration || !this.pageVisible || !this.appForeground) {
+        if (directCredentials !== undefined) {
+          directCredentials.password = '';
+        }
+        this.activeSessionPassword = '';
+        this.rdpDialCredentials = undefined;
+        if (connectionGeneration === this.connectionGeneration) {
+          this.failConnectionAttempt('无法测量本机预览区域，未创建 RDP 连接');
+        }
+        return;
+      }
+    }
     const sessionCreated = await this.createSession(
       connectionTarget,
-      kind,
-      this.activeSessionPassword,
+      sessionKind,
+      sessionPassword,
       this.activeSessionPasswordEphemeral,
       this.activeSessionForceRelay,
       handoff?.connToken ?? '',
+      directCredentials === undefined ? '' : directCredentials.certificateSha256,
     );
+    sessionPassword = '';
+    if (directCredentials !== undefined) {
+      if (sessionCreated && sessionKind === 'rdp') {
+        this.rdpCertificateCredentials.set(this.activeSessionId, directCredentials);
+      }
+      if (!sessionCreated || sessionKind !== 'rdp' || directCredentials.certificateAccepted) {
+        directCredentials.wipePassword();
+      }
+      this.rdpDialCredentials = undefined;
+      this.activeSessionPassword = '';
+    }
+    if (sessionKind === 'rdp' && credentialGeneration !== this.rdpCredentialGeneration) {
+      this.forgetRdpCertificateCredentials(this.activeSessionId);
+      this.failConnectionAttempt(this.certificateMessage($r('app.string.rdp_certificate_privacy_cancelled')));
+      return;
+    }
     if (connectionGeneration !== this.connectionGeneration) {
       return;
     }
@@ -2666,9 +3240,10 @@ struct RustDeskIndex {
       this.failConnectionAttempt(this.errorText || '无法创建连接会话');
       return;
     }
-    const createdTab = this.remoteSessionTabsController.add(this.activeSessionId, displayTarget, kind);
+    const createdTab = this.remoteSessionTabsController.add(this.activeSessionId, displayTarget, sessionKind);
     if (createdTab === undefined) {
       const rejectedSessionId = this.activeSessionId;
+      this.forgetRdpCertificateCredentials(rejectedSessionId);
       this.nativeSessionBridge.closeSession(rejectedSessionId);
       this.activeSessionId = '';
       this.activeCoreSessionId = '';
@@ -2682,12 +3257,34 @@ struct RustDeskIndex {
     createdTab.sessionDefaults = this.copySessionDefaults(this.activeSessionDefaults);
     createdTab.serverConfig = this.copyServerConfig(this.activeSessionServerConfig);
     createdTab.shareTargetKind = this.activeSessionShareTargetKind;
+    createdTab.rustdeskIdOnly = this.activeSessionRustdeskIdOnly;
     createdTab.forceRelay = this.activeSessionForceRelay;
     this.syncRemoteSessionTabs();
-    // Set the codec preference before the first LoginRequest is created.  The
-    // peer chooses its encoder from that request; waiting for peer_info means
-    // the default (often VP9) may already be active and can leave the first
-    // frames black while the later preference update takes effect.
+    // The engine latches its software-only path for the whole round when the first
+    // login has no Surface to reserve against, and a later bind cannot undo it. So
+    // the real Surface is created and bound before start/login rather than when the
+    // first peer_info arrives: the pane is already visible and this waits, bounded
+    // and cancelable, for the component the framework really created.
+    const surfaceBound = await this.bindPreviewSurfaceBeforeStart(connectionGeneration);
+    if (connectionGeneration !== this.connectionGeneration) {
+      return;
+    }
+    if (sessionKind === 'rdp' && credentialGeneration !== this.rdpCredentialGeneration) {
+      this.failConnectionAttempt(this.certificateMessage($r('app.string.rdp_certificate_privacy_cancelled')));
+      return;
+    }
+    if (!surfaceBound) {
+      // Without a real Surface the session is refused with its reason instead of
+      // being started into a degraded path nobody chose.
+      this.failConnectionAttempt(this.errorText || '视频 Surface 未能在连接前绑定，已取消连接');
+      return;
+    }
+    // The operator's codec preference is applied before the session starts, so the
+    // first LoginRequest already advertises the chosen codec instead of letting the
+    // peer pick a default and switching afterwards. The native side stores it in the
+    // session's own option store and answers with the value it read back; a
+    // pre-start refusal is a bridge defect to be fixed there, not a reason to
+    // reorder this call.
     this.applyCodecPreference();
     const sessionStarted = await this.startSession();
     if (connectionGeneration !== this.connectionGeneration || !sessionStarted) {
@@ -2696,18 +3293,46 @@ struct RustDeskIndex {
       }
       return;
     }
+    if (sessionKind === 'rdp' && credentialGeneration !== this.rdpCredentialGeneration) {
+      this.failConnectionAttempt(this.certificateMessage($r('app.string.rdp_certificate_privacy_cancelled')));
+      return;
+    }
     this.connectionUiPhase = 'connecting';
     this.connectionUiMessage = '正在等待远端响应；可随时取消。';
     this.scheduleConnectionTimeout();
     this.publishDataTransferChanged();
-    if (kind === 'remote_control') {
-      this.refreshRemoteAudioState();
-      this.startRemoteAudioPolling();
-    } else {
-      this.closeRemoteAudio();
-    }
+    this.applyRemoteAudioPollingForKind(sessionKind);
     this.startPolling();
     void this.pollSessionEvents();
+  }
+
+  /**
+   * Creates and binds the real preview Surface before a session starts.
+   *
+   * Returns whether a real Surface was bound. The wait is bounded and cancelable:
+   * a generation change (a cancel, a newer connection, the page going away) ends
+   * it without any claim, and a bind the native side refuses is reported as its
+   * own reason rather than replaced by a fake destination or a blind delay. A
+   * session that is not a video session does not come through here at all.
+   */
+  private async bindPreviewSurfaceBeforeStart(connectionGeneration: number): Promise<boolean> {
+    this.previewSurfaceBindFailure = '';
+    try {
+      await this.preparePreviewSurface(connectionGeneration);
+    } catch (error) {
+      if (connectionGeneration === this.connectionGeneration) {
+        // A native refusal names the reason itself; only a bounded wait that ran
+        // out has no native text and uses this client's own wording.
+        this.errorText = this.previewSurfaceBindFailure.length > 0
+          ? this.previewSurfaceBindFailure
+          : `视频 Surface 未能在连接前就绪：${String(error)}`;
+        hilog.error(DOMAIN, TAG, 'bindPreviewSurfaceBeforeStart failed: %{public}s', this.errorText);
+      }
+      return false;
+    }
+    return connectionGeneration === this.connectionGeneration
+      && this.activeSessionId.length > 0
+      && this.previewComponentId.length > 0;
   }
 
   private async createSession(
@@ -2717,29 +3342,61 @@ struct RustDeskIndex {
     passwordEphemeral: boolean,
     forceRelay: boolean,
     connToken: string = '',
+    rdpCertificateSha256: string = '',
   ): Promise<boolean> {
     try {
-      const response = this.nativeSessionBridge.addSession(this.nextSessionId(), target, {
+      const options: SessionStartOptions = {
         password,
         connToken,
         forceRelay,
         isFileTransfer: false,
-        isViewCamera: kind === 'view_camera',
-        isViewOnly: kind === 'view_only',
+        isViewOnly: false,
         passwordEphemeral,
-      });
+      };
+      if (kind === 'remote_control') {
+        // The controlled host reads the rate once, from the login options, and
+        // holds it for the whole session, so the choice has to travel with the
+        // start rather than follow it. The direct VNC/RDP wires have no rate
+        // control and refuse a non-zero rate at add time, so it is only named
+        // for a Core session.
+        options.customFps = this.selectedRefreshRate;
+        options.rustdeskIdOnly = this.activeSessionRustdeskIdOnly;
+        // The route is the approval captured for this attempt, not a draft the
+        // operator may still be editing; the engine refuses an ID route without one.
+        const approvedRoute = this.activeSessionApprovedProfile;
+        if (approvedRoute !== undefined) {
+          options.approvedServerProfile = approvedRoute;
+        }
+      }
+      if (kind === 'rdp') {
+        const size = computeRdpDesktopSize(this.previewViewWidth, this.previewViewHeight,
+          this.getUIContext().vp2px(1), this.activeSessionDefaults.rdpResolution);
+        options.rdpDesktopWidth = size.width;
+        options.rdpDesktopHeight = size.height;
+        options.rdpScaleFactor = computeRdpScaleFactor(this.getUIContext().vp2px(1),
+          this.activeSessionDefaults.rdpScaleFactor);
+        options.rdpAudio = this.activeSessionDefaults.rdpAudioEnabled;
+      } else if (kind === 'vnc') {
+        options.vncQuality = this.activeSessionDefaults.vncQuality;
+      }
+      if (rdpCertificateSha256.length > 0 && kind === 'rdp') {
+        // Only a remembered certificate or an explicit decision in the current
+        // certificate dialog supplies a pin; absence keeps system-root validation.
+        options.rdpCertificateSha256 = rdpCertificateSha256;
+      }
+      const response = this.nativeSessionBridge.addSession(this.nextSessionId(), target, options);
       this.updateSessionState(response);
       if (!response.ok || this.activeSessionId.length === 0) {
         return false;
       }
       this.syncClipboardController();
-      if (kind === 'view_camera') {
+      if (kind === 'vnc' || kind === 'rdp') {
+        // The engine decides input policy for these protocols from what the
+        // server grants, so the viewer must not also force a local view-only
+        // ceiling on top of it.
         return true;
       }
-      const policy = this.nativeSessionBridge.setViewOnly(
-        this.activeSessionId,
-        kind === 'view_only',
-      );
+      const policy = this.nativeSessionBridge.setViewOnly(this.activeSessionId, false);
       this.updateSessionState(policy);
       return policy.ok;
     } catch (error) {
@@ -2748,6 +3405,32 @@ struct RustDeskIndex {
       return false;
     }
   }
+  private async measureRdpPaneBeforeAdd(generation: number): Promise<boolean> {
+    try {
+      await this.applySessionFullscreen(true);
+      await this.waitForPreviewWindowReady();
+      if (generation !== this.connectionGeneration || !this.pageVisible || !this.appForeground) {
+        return false;
+      }
+      this.previewViewWidth = 0;
+      this.previewViewHeight = 0;
+      this.showPreviewModal = true;
+      this.registerFoldHoverListeners();
+      for (let index = 0; index < PREVIEW_SURFACE_WAIT_ATTEMPTS; index += 1) {
+        if (generation !== this.connectionGeneration || !this.pageVisible || !this.appForeground) {
+          return false;
+        }
+        if (this.previewViewWidth > 0 && this.previewViewHeight > 0) {
+          return true;
+        }
+        await new Promise<void>((resolve) => setTimeout((): void => resolve(), PREVIEW_SURFACE_WAIT_INTERVAL_MS));
+      }
+    } catch (error) {
+      this.errorText = String(error);
+    }
+    return false;
+  }
+
 
   private async startSession(): Promise<boolean> {
     if (!this.activeSessionId) {
@@ -2820,6 +3503,21 @@ struct RustDeskIndex {
     this.authChallengeMode = 'password';
     this.authErrorMessage = '';
     this.clearPasswordTimeout();
+  }
+
+  /**
+   * Whether this attempt can really persist the password it collects.
+   *
+   * The remember switch writes the credential into Core's peer config on login,
+   * so it is offered only where the login carries the flag: a handoff password is
+   * explicitly one-time and Core folds that in, and a switch whose value could not
+   * be stored would be a promise this component cannot keep.
+   */
+  private canPersistSessionPassword(): boolean {
+    if (this.passwordSessionKind === 'file_transfer') {
+      return true;
+    }
+    return !this.activeSessionPasswordEphemeral;
   }
 
   private async submitPassword(passwordInput?: string, rememberPasswordInput?: boolean): Promise<void> {
@@ -2944,6 +3642,314 @@ struct RustDeskIndex {
     this.closeSession('已取消密码输入');
   }
 
+  /**
+   * Asks for the credentials one direct wire needs before it is registered.
+   *
+   * `protocol` is the wire the selected mode names, so the fields asked for are
+   * the ones that dial will use. Nothing is created here: no session id is taken,
+   * no Surface is
+   * bound and no viewer is dialled, so cancelling this dialog leaves the previous
+   * session and the credential state exactly as they were.
+   */
+  private openDirectCredentialsDialog(
+    protocol: DirectWireProtocol,
+    displayTarget: string,
+  ): void {
+    this.discardDirectCredentialSecrets();
+    this.directCredentialsProtocol = protocol;
+    this.directCredentialsTarget = displayTarget;
+    // The account last answered for this same endpoint is offered back: a retry
+    // after a refused password asks for the password alone rather than for an
+    // account that has not changed.
+    const saved = this.findDirectoryPeer(displayTarget, protocol, false);
+    const username: string = protocol === 'rdp' && this.directWireUsernameTarget === displayTarget
+      ? this.directCredentialsUsername : saved.rdpUsername;
+    this.directCredentialsUsername = username;
+    this.directCredentialPassword = '';
+    this.directCredentialsError = '';
+    this.directCredentialsVisible = true;
+    this.clearConnectionTimeout();
+    this.connectionUiPhase = 'idle';
+    this.connectionUiMessage = '';
+    hilog.info(
+      DOMAIN,
+      TAG,
+      'direct credentials requested protocol=%{public}s target=%{public}s userPresent=%{public}s',
+      protocol,
+      displayTarget,
+      String(this.directCredentialsUsername.length > 0),
+    );
+  }
+
+  /** Drops the secret copies one direct credential request had collected. */
+  private discardDirectCredentialSecrets(): void {
+    this.pendingDirectCredentials?.wipePassword();
+    this.pendingDirectCredentials = undefined;
+    this.directCredentialPassword = '';
+    this.rdpCredentialPinOverride = '';
+    this.rdpCredentialPinOverrideTarget = '';
+  }
+
+  /** Drops the request and every secret it had collected. */
+  private cancelDirectCredentials(): void {
+    this.directCredentialsVisible = false;
+    this.directCredentialsError = '';
+    this.discardDirectCredentialSecrets();
+    this.directCredentialsUsername = '';
+    this.directWireUsernameTarget = '';
+    this.directCredentialsTarget = '';
+    this.connectionUiPhase = 'idle';
+    this.connectionUiMessage = '';
+    hilog.info(DOMAIN, TAG, 'direct credentials cancelled protocol=%{public}s', this.directCredentialsProtocol);
+  }
+
+  /**
+   * Validates the answers against the engine's own rules and starts the dial.
+   *
+   * A refused answer stays in the dialog with its reason instead of being
+   * normalized into something the engine would reject later. What is accepted is
+   * held until the start call takes it, and the drafts are cleared immediately so
+   * no copy of the secret outlives the one the dial needs.
+   */
+  private submitDirectCredentials(): void {
+    if (!this.directCredentialsVisible) {
+      return;
+    }
+    const protocol = this.directCredentialsProtocol;
+    const displayTarget = this.directCredentialsTarget;
+    const password = this.directCredentialPassword;
+    const user = this.directCredentialsUsername.trim();
+    if (protocol === 'rdp') {
+      const userCheck = checkRdpUser(user);
+      if (!userCheck.ok) {
+        this.directCredentialsError = userCheck.reason === 'required'
+          ? $r('app.string.direct_credentials_username_required')
+          : (userCheck.reason === 'too_long'
+            ? $r('app.string.direct_credentials_username_too_long')
+            : $r('app.string.direct_credentials_username_invalid'));
+        return;
+      }
+    }
+    const dialTarget = directDialTarget(protocol, displayTarget, user);
+    let certificateSha256 = '';
+    const certificateAccepted = protocol === 'rdp' && this.rdpCredentialPinOverrideTarget === displayTarget;
+    if (protocol === 'rdp') {
+      try {
+        certificateSha256 = certificateAccepted ? this.rdpCredentialPinOverride
+          : (this.preferences?.rdpCertificateSha256(displayTarget) ?? '');
+      } catch (error) {
+        this.directCredentialsError = String(error);
+        return;
+      }
+    }
+    const credentials = new DirectWireCredentials();
+    credentials.kind = protocol;
+    credentials.displayTarget = displayTarget;
+    credentials.dialTarget = dialTarget;
+    credentials.username = user;
+    credentials.password = password;
+    credentials.certificateSha256 = certificateSha256;
+    credentials.certificateAccepted = certificateAccepted;
+    this.pendingDirectCredentials = credentials;
+    this.directCredentialsVisible = false;
+    this.directCredentialsError = '';
+    this.directCredentialPassword = '';
+    this.rdpCredentialPinOverride = '';
+    this.rdpCredentialPinOverrideTarget = '';
+    // The account is not a secret and is offered back if this same endpoint asks
+    // again (a refused password is answered by a fresh viewer and a fresh prompt).
+    this.directWireUsernameTarget = protocol === 'rdp' ? displayTarget : '';
+    hilog.info(
+      DOMAIN,
+      TAG,
+      'direct credentials submitted protocol=%{public}s target=%{public}s passwordPresent=%{public}s pinPresent=%{public}s',
+      protocol,
+      displayTarget,
+      String(password.length > 0),
+      String(certificateSha256.length > 0),
+    );
+    // The answers are for the wire the operator asked for; resuming through the
+    // same entry point keeps every other step (EasyTier already ran, the target
+    // was already saved) exactly where it was.
+    void this.connectSessionDirect(protocol === 'rdp' ? 'rdp' : 'vnc');
+  }
+
+  /**
+   * Takes the credentials one dial was waiting for, exactly once.
+   *
+   * Both halves of the match are what the dial will really use: the wire the
+   * target resolved to (not the button that was pressed) and the endpoint the
+   * operator typed. A stash that does not belong to this request is dropped rather
+   * than reused, so a secret answered for one target can never be spent on another.
+   */
+  private takePendingDirectCredentials(
+    protocol: string,
+    displayTarget: string,
+  ): DirectWireCredentials | undefined {
+    const pending = this.pendingDirectCredentials;
+    this.pendingDirectCredentials = undefined;
+    if (pending === undefined || pending.kind !== protocol || pending.displayTarget !== displayTarget) {
+      pending?.wipePassword();
+      return undefined;
+    }
+    return pending;
+  }
+  private certificateMessage(resource: Resource): string {
+    return this.getUIContext().getHostContext()?.resourceManager.getStringSync(resource.id) ?? '';
+  }
+
+  private forgetRdpCertificateCredentials(sessionId: string): void {
+    this.rdpCertificateCredentials.get(sessionId)?.wipePassword();
+    this.rdpCertificateCredentials.delete(sessionId);
+  }
+
+  private discardRdpCertificateDecision(): void {
+    this.rdpCertificateDecisionGeneration += 1;
+    this.forgetRdpCertificateCredentials(this.rdpCertificateSessionId);
+    this.rdpCertificateDialogVisible = false;
+    this.rdpCertificateChallenge = undefined;
+    this.rdpCertificateSessionId = '';
+    this.rdpCertificateReplaceConfirmation = false;
+    this.rdpCertificateBusy = false;
+    this.rdpCertificateError = '';
+  }
+
+  /** Page/background/privacy teardown invalidates even a redial waiting on an await. */
+  private discardAllRdpCertificateSecrets(): void {
+    this.rdpCredentialGeneration += 1;
+    this.discardRdpCertificateDecision();
+    for (const credentials of this.rdpCertificateCredentials.values()) {
+      credentials.wipePassword();
+    }
+    this.rdpCertificateCredentials.clear();
+    this.rdpCertificateRejectedSessions.clear();
+    this.rdpDialCredentials?.wipePassword();
+    this.rdpDialCredentials = undefined;
+  }
+
+  private certificateEventMatchesSession(challenge: RdpCertificateChallenge, sessionId: string): boolean {
+    const credentials = this.rdpCertificateCredentials.get(sessionId);
+    return credentials !== undefined && challenge.target === rdpCertificateTrustKey(credentials.displayTarget) &&
+      challenge.pinnedSha256 === credentials.certificateSha256;
+  }
+
+  private openRdpCertificateDialog(event: NativeEvent): void {
+    const sessionId = this.activeSessionId;
+    const challenge = rdpCertificateChallengeFromEvent(event);
+    if (this.activeSessionKind !== 'rdp' || challenge === undefined ||
+      !this.certificateEventMatchesSession(challenge, sessionId)) {
+      this.failConnectionAttempt('服务器证书信息无效或凭据已清除，未允许连接；请重新连接。');
+      return;
+    }
+    if (this.rdpCertificateDialogVisible && this.rdpCertificateSessionId === sessionId) {
+      return;
+    }
+    this.discardRdpCertificateDecision();
+    this.rdpCertificateChallenge = challenge;
+    this.rdpCertificateSessionId = sessionId;
+    this.rdpCertificateRejectedSessions.add(sessionId);
+    this.rdpCertificateDialogVisible = true;
+    this.clearConnectionTimeout();
+    const message = this.certificateMessage($r('app.string.rdp_certificate_waiting'));
+    this.connectionUiPhase = 'failed';
+    this.connectionUiMessage = message;
+    this.sessionPhase = 'failed';
+    this.sessionMessage = message;
+    this.errorText = '';
+    this.remoteInteractionReady = false;
+    this.remoteSessionTabsController.markPhase(sessionId, 'failed', message);
+    this.syncRemoteSessionTabs();
+  }
+
+  private cancelRdpCertificateDialog(): void {
+    const sessionId = this.rdpCertificateSessionId;
+    if (!this.rdpCertificateDialogVisible) {
+      return;
+    }
+    this.discardRdpCertificateDecision();
+    const message = this.certificateMessage($r('app.string.rdp_certificate_cancelled'));
+    this.connectionUiPhase = 'idle';
+    this.connectionUiMessage = message;
+    this.sessionPhase = 'failed';
+    this.sessionMessage = message;
+    this.errorText = message;
+    if (this.activeSessionId === sessionId) {
+      void this.closeSession(message, true);
+    }
+  }
+
+  private async acceptRdpCertificate(remember: boolean): Promise<void> {
+    const challenge = this.rdpCertificateChallenge;
+    const sessionId = this.rdpCertificateSessionId;
+    const credentials = this.rdpCertificateCredentials.get(sessionId);
+    if (!this.rdpCertificateDialogVisible || this.rdpCertificateBusy || challenge === undefined ||
+      credentials === undefined || this.sessionTransitionBusy()) {
+      return;
+    }
+    if (remember && challenge.reason === 'pin_mismatch' && !this.rdpCertificateReplaceConfirmation) {
+      this.rdpCertificateReplaceConfirmation = true;
+      return;
+    }
+    if (remember && !this.preferences?.rememberRdpCertificate(challenge, this.rdpCertificateReplaceConfirmation)) {
+      this.rdpCertificateError = $r('app.string.rdp_certificate_save_failed');
+      return;
+    }
+    this.rdpCertificateBusy = true;
+    const generation = this.rdpCertificateDecisionGeneration;
+    const passwordAvailable = credentials.passwordAvailable;
+    try {
+      if (remember && this.preferences !== undefined) {
+        this.savedDevices = this.preferences.loadSavedPeers(undefined);
+        this.refreshDirectorySnapshot();
+      }
+      // The rejected native wire is already stopped. Its Surface still needs the
+      // normal close/ACK path, while this explicit decision owns the only secret.
+      await this.closeSession(this.certificateMessage($r('app.string.rdp_certificate_waiting')), true, true);
+      if (generation !== this.rdpCertificateDecisionGeneration || !this.pageVisible || !this.appForeground) {
+        credentials.wipePassword();
+        return;
+      }
+      if (this.activeSessionId === sessionId) {
+        this.rdpCertificateError = $r('app.string.rdp_certificate_release_failed');
+        return;
+      }
+      this.rdpCertificateCredentials.delete(sessionId);
+      this.rdpCertificateRejectedSessions.delete(sessionId);
+      this.rdpCertificateDialogVisible = false;
+      this.rdpCertificateChallenge = undefined;
+      this.rdpCertificateSessionId = '';
+      this.peerTarget = credentials.displayTarget;
+      this.directCredentialsUsername = credentials.username;
+      this.directWireUsernameTarget = credentials.displayTarget;
+      credentials.certificateSha256 = challenge.sha256;
+      credentials.certificateAccepted = true;
+      if (!passwordAvailable) {
+        // An already accepted redial wiped its password. A second TLS rejection
+        // can display its certificate, but must collect a fresh secret, not invent one.
+        this.openDirectCredentialsDialog('rdp', credentials.displayTarget);
+        this.rdpCredentialPinOverride = challenge.sha256;
+        this.rdpCredentialPinOverrideTarget = credentials.displayTarget;
+        return;
+      }
+      this.pendingDirectCredentials = credentials;
+      await this.connectSessionDirect('rdp');
+      credentials.wipePassword();
+    } catch (error) {
+      credentials.wipePassword();
+      this.rdpCertificateError = String(error);
+    } finally {
+      this.rdpCertificateBusy = false;
+      if (!this.rdpCertificateDialogVisible) {
+        credentials.wipePassword();
+      }
+    }
+  }
+
+
+  private isDirectWireSession(): boolean {
+    return isDirectWireKind(this.activeSessionKind);
+  }
+
   private async switchRemoteSessionTab(sessionId: string): Promise<void> {
     if (this.sessionTransitionBusy()) {
       this.pendingSessionSwitchId = sessionId;
@@ -2976,6 +3982,15 @@ struct RustDeskIndex {
     }
     this.connectionGeneration += 1;
     this.passwordDialogVisible = false;
+    // A credential request that was still open belongs to the session being left:
+    // the dialog is dismissed and what it had collected is dropped with it, so no
+    // secret waits in memory for a wire this switch has already moved away from.
+    this.directCredentialsVisible = false;
+    this.directCredentialsError = '';
+    this.discardDirectCredentialSecrets();
+    if (this.rdpCertificateDialogVisible) {
+      this.discardRdpCertificateDecision();
+    }
     this.clearPasswordTimeout();
     this.authErrorMessage = '';
     this.code2faDraft = '';
@@ -2985,9 +4000,11 @@ struct RustDeskIndex {
     this.activeSessionKind = nextTab.kind;
     this.activeSessionShareTarget = nextTab.target;
     this.activeSessionShareTargetKind = nextTab.shareTargetKind;
+    this.activeSessionRustdeskIdOnly = nextTab.rustdeskIdOnly;
     this.activeSessionServerConfig = this.copyServerConfig(nextTab.serverConfig);
     this.activeSessionForceRelay = nextTab.forceRelay;
     this.peerTarget = nextTab.target;
+    this.connectPageMode = this.connectPageModeForKind(nextTab.kind);
     this.sessionPhase = nextTab.phase;
     this.sessionMessage = nextTab.message.length > 0 ? nextTab.message : nextTab.phase;
     this.connectionSummary = nextTab.connectionSummary.length > 0
@@ -3003,18 +4020,11 @@ struct RustDeskIndex {
     this.clipboardFileRootSessionId = '';
     this.resetPreviewState();
     if (nextTab.uiStateCaptured) {
-      this.chatStore.restore(nextTab.chatMessages, nextTab.chatUnread);
-      this.chatDraft = nextTab.chatDraft;
-      this.sessionDisplayController.restoreQualityState(
-        nextTab.imageQuality,
-        nextTab.customImageQuality,
-        nextTab.customFps,
-      );
-      this.selectedQualityPreset = this.sessionDisplayController.getImageQuality();
-      this.customQualityDraft = this.sessionDisplayController.getCustomImageQuality();
-      this.customFpsDraft = this.sessionDisplayController.getCustomFps();
+      this.sessionDisplayController.restoreRefreshRate(nextTab.refreshRate);
+      this.selectedRefreshRate = this.sessionDisplayController.getRefreshRate();
       this.touchMode = nextTab.touchMode;
       this.relativeMouseMode = nextTab.relativeMouseMode;
+      this.inputEnabled = nextTab.inputEnabled;
       this.isMiniBarExpanded = nextTab.toolbarExpanded;
       this.previewUserScale = nextTab.viewScale;
       this.previewUserOffsetX = nextTab.viewOffsetX;
@@ -3027,15 +4037,12 @@ struct RustDeskIndex {
         nextTab.viewRotation,
       );
     } else {
-      this.chatStore.clear();
-      this.chatDraft = '';
-      this.sessionDisplayController.restoreQualityState(
-        this.selectedQualityPreset,
-        this.customQualityDraft,
-        this.customFpsDraft,
-      );
+      this.sessionDisplayController.restoreRefreshRate(this.selectedRefreshRate);
     }
-    this.refreshChatState();
+    // The generation this tab's session last reported, so input after a switch
+    // starts from the boundary the native side gave instead of none; a stale
+    // value is refused with the current one, which the next poll adopts.
+    this.activeInputGeneration = nextTab.inputGeneration;
     this.showPreviewModal = true;
     this.syncClipboardController();
     this.syncInputInterceptor();
@@ -3052,7 +4059,7 @@ struct RustDeskIndex {
     for (const event of pendingEvents) {
       this.handleSessionEvent(event);
     }
-    if (nextTab.kind === 'remote_control') {
+    if (nextTab.kind === 'remote_control' || nextTab.kind === 'rdp') {
       this.refreshRemoteAudioState();
       if (nextTab.audioPreferenceCaptured) {
         this.nativeSessionBridge.setRemoteAudioMuted(nextTab.sessionId, nextTab.audioMuted);
@@ -3076,6 +4083,9 @@ struct RustDeskIndex {
       return;
     }
     this.sessionSwitchInFlight = true;
+    this.discardRdpCertificateDecision();
+    this.discardDirectCredentialSecrets();
+    this.directCredentialsVisible = false;
     try {
       await this.suspendActiveSessionForNewConnection();
       await this.applySessionFullscreen(false, true);
@@ -3138,6 +4148,14 @@ struct RustDeskIndex {
       });
       return;
     }
+    const retryTarget = this.pendingConnectionRetry;
+    this.pendingConnectionRetry = '';
+    if (retryTarget.length > 0) {
+      // The failed attempt has finished releasing its wire, so the retry dials a
+      // fresh viewer and asks for the credential again.
+      void this.preparePeerLaunch(retryTarget, this.lastConnectionKind, this.lastConnectionRustdeskIdOnly);
+      return;
+    }
     const pendingSessionId = this.pendingSessionSwitchId;
     this.pendingSessionSwitchId = '';
     if (pendingSessionId === NEW_REMOTE_SESSION_SWITCH_TARGET) {
@@ -3148,6 +4166,10 @@ struct RustDeskIndex {
   }
 
   private async closeRemoteSessionTab(sessionId: string): Promise<void> {
+    this.forgetRdpCertificateCredentials(sessionId);
+    if (this.rdpCertificateSessionId === sessionId) {
+      this.discardRdpCertificateDecision();
+    }
     if (this.sessionTransitionBusy()) {
       this.queueClosedSession(sessionId);
       return;
@@ -3159,12 +4181,17 @@ struct RustDeskIndex {
     this.sessionCloseInFlight = true;
     try {
       await this.clipboardController?.cleanupIncomingRootForClosedSession(sessionId);
-      try {
-        this.nativeSessionBridge.closeSession(sessionId);
-      } catch (error) {
-        hilog.warn(DOMAIN, TAG, 'close background session failed: %{public}s', String(error));
+      const tab = this.remoteSessionTabsController.get(sessionId);
+      const released = await this.releaseNativeSession(sessionId, tab === undefined ? '' : tab.lifecycleEpoch);
+      if (!released) {
+        // A destination this session still holds keeps its record and its tab: it
+        // is not presented anywhere, so there is nothing to destroy, and removing
+        // the tab would only hide a session the native side still owns.
+        hilog.warn(DOMAIN, TAG, 'closeRemoteSessionTab kept session=%{public}s: a destination is still held', sessionId);
+        return;
       }
       this.remoteSessionTabsController.remove(sessionId);
+      this.rdpCertificateRejectedSessions.delete(sessionId);
       this.syncRemoteSessionTabs();
     } finally {
       this.sessionCloseInFlight = false;
@@ -3172,7 +4199,14 @@ struct RustDeskIndex {
     }
   }
 
-  private async closeSession(reason?: string, preserveConnectionFailure: boolean = false): Promise<void> {
+  private async closeSession(reason?: string, preserveConnectionFailure: boolean = false,
+    preserveRdpCertificateDecision: boolean = false): Promise<void> {
+    if (!preserveRdpCertificateDecision) {
+      this.forgetRdpCertificateCredentials(this.activeSessionId);
+      if (this.rdpCertificateSessionId === this.activeSessionId) {
+        this.discardRdpCertificateDecision();
+      }
+    }
     if (this.sessionConnectInFlight || this.sessionSwitchInFlight) {
       if (this.activeSessionId.length > 0) {
         this.queueClosedSession(this.activeSessionId);
@@ -3193,6 +4227,7 @@ struct RustDeskIndex {
         this.connectionUiMessage = '';
       }
       const sessionId = this.activeSessionId;
+      const holdsOwedBeforeClose = this.activeInputHoldsOwed;
       this.rejectPendingInsecureConnection();
       hilog.info(DOMAIN, TAG, 'closeSession sessionId=%{public}s reason=%{public}s', sessionId, reason ?? '');
       this.hideSystemIme(false);
@@ -3210,18 +4245,49 @@ struct RustDeskIndex {
         this.clipboardController?.reset();
       }
       this.clipboardFileRootSessionId = '';
+      this.clipboardPeerUpdateSessions.delete(sessionId);
       this.clearPreviewKeyboardBlurTimer();
       this.previewKeyboardCaptureFocused = false;
       this.setSessionKeyboardEntered(false);
       await this.applySessionFullscreen(false, true);
       this.unregisterFoldHoverListeners();
       this.passwordDialogVisible = false;
-      this.showPreviewModal = false;
+      this.directCredentialsVisible = false;
+      this.directCredentialsError = '';
       const shouldRestoreMainTab = reason !== '正在切换会话';
-      this.clearActiveSessionHandoffState();
+      this.clearActiveSessionHandoffState(preserveRdpCertificateDecision);
       this.clearPasswordTimeout();
       this.inputController?.releasePressedButtons();
-      this.clearSurfaceBinding();
+      // The native media owner still holds this Surface. Request the close and
+      // wait for its join receipt before hiding the pane or unbinding, then
+      // acknowledge the epoch the native side issued.
+      let released = true;
+      if (sessionId.length > 0) {
+        released = await this.releaseNativeSession(sessionId, this.activeSessionLifecycleEpoch);
+      }
+      if (!released) {
+        // A producer still owes a join, so the Surface may not be destroyed. The
+        // component is kept and the destination given back until the native side
+        // reports nothing holds it; the close only completes on a real verdict.
+        const releasedLater = await this.awaitSurfaceRelease(sessionId);
+        if (releasedLater) {
+          released = await this.releaseNativeSession(sessionId, this.activeSessionLifecycleEpoch);
+        }
+      }
+      if (!released) {
+        hilog.warn(DOMAIN, TAG, 'closeSession kept session=%{public}s: a destination is still held', sessionId);
+        this.sessionPhase = preserveConnectionFailure ? this.sessionPhase : 'connected';
+        this.sessionMessage = '远端仍在释放画面连接，暂时保留会话';
+        this.connectionSummary = `${this.activeSessionShareTarget} · 正在关闭`;
+        return;
+      }
+      // Every destination was really released, which is what authorizes this
+      // Surface to be destroyed. The acknowledged close also retired the native
+      // session, so there is no binding left to give back: asking it would only
+      // be refused as an unknown session.
+      this.previewSurfaceDestroyAuthorized = true;
+      this.showPreviewModal = false;
+      this.previewSurfaceId = '';
       this.closeRemoteAudio();
       this.resetPreviewState();
       this.connectionSummary = preserveConnectionFailure
@@ -3230,6 +4296,11 @@ struct RustDeskIndex {
       if (reason) {
         this.sessionMessage = reason;
       }
+      if (holdsOwedBeforeClose.length > 0 && holdsOwedBeforeClose !== '0') {
+        // The connection attempted releases the peer refused: the session is not
+        // reported as cleanly stopped while that count is outstanding.
+        this.sessionMessage = `${this.sessionMessage}；仍有 ${holdsOwedBeforeClose} 个按键释放未获远端确认`;
+      }
       if (!sessionId) {
         const fallbackSessionId = this.remoteSessionTabsController.activeId();
         if (fallbackSessionId.length > 0) {
@@ -3237,8 +4308,6 @@ struct RustDeskIndex {
           return;
         }
         this.stopPolling();
-        this.chatStore.clear();
-        this.refreshChatState();
         this.sessionPhase = preserveConnectionFailure ? 'failed' : 'idle';
         this.activeSessionKind = 'remote_control';
         this.activeSessionDefaults = this.copySessionDefaults(this.sessionDefaults);
@@ -3249,31 +4318,29 @@ struct RustDeskIndex {
         }
         return;
       }
-      try {
-        const response = this.nativeSessionBridge.closeSession(sessionId);
-        this.updateSessionState(response);
-      } catch (error) {
-        this.errorText = String(error);
-      } finally {
-        this.chatStore.clear();
-        this.refreshChatState();
-        this.activeSessionId = '';
-        this.activeCoreSessionId = '';
-        const nextSessionId = this.remoteSessionTabsController.remove(sessionId);
-        this.syncRemoteSessionTabs();
-        this.publishDataTransferChanged();
-        if (nextSessionId.length > 0) {
-          await this.switchRemoteSessionTab(nextSessionId);
-        } else {
-          this.stopPolling();
-          this.sessionPhase = preserveConnectionFailure ? 'failed' : 'idle';
-          this.activeSessionKind = 'remote_control';
-          this.activeSessionDefaults = this.copySessionDefaults(this.sessionDefaults);
-          this.applySessionDefaultsToIdleState(this.decoderCapabilities);
-          this.refreshDirectorySnapshot();
-          if (shouldRestoreMainTab) {
-            this.restoreSessionReturnTab();
-          }
+      this.activeSessionId = '';
+      this.activeCoreSessionId = '';
+      this.activeSessionLifecycleEpoch = '';
+      const nextSessionId = this.remoteSessionTabsController.remove(sessionId);
+      if (!preserveRdpCertificateDecision) {
+        this.rdpCertificateRejectedSessions.delete(sessionId);
+      }
+      this.syncRemoteSessionTabs();
+      this.publishDataTransferChanged();
+      if (preserveRdpCertificateDecision) {
+        this.sessionPhase = 'failed';
+        this.refreshDirectorySnapshot();
+      } else if (nextSessionId.length > 0) {
+        await this.switchRemoteSessionTab(nextSessionId);
+      } else {
+        this.stopPolling();
+        this.sessionPhase = preserveConnectionFailure ? 'failed' : 'idle';
+        this.activeSessionKind = 'remote_control';
+        this.activeSessionDefaults = this.copySessionDefaults(this.sessionDefaults);
+        this.applySessionDefaultsToIdleState(this.decoderCapabilities);
+        this.refreshDirectorySnapshot();
+        if (shouldRestoreMainTab) {
+          this.restoreSessionReturnTab();
         }
       }
     } finally {
@@ -3282,12 +4349,104 @@ struct RustDeskIndex {
     }
   }
 
+  /**
+   * Closes one native session and acknowledges its lifecycle epoch.
+   *
+   * `sessionClose` only resolves with the native join receipt, so the epoch is
+   * acknowledged after it: a UI-close event alone is not evidence that the
+   * decoder released the surface. Returns whether every destination was really
+   * released and the epoch acknowledged; a `false` means the Surface may not be
+   * destroyed yet.
+   */
+  private async releaseNativeSession(sessionId: string, lifecycleEpoch: string): Promise<boolean> {
+    const epoch = lifecycleEpoch;
+    let release: ActionResponse;
+    try {
+      release = await this.nativeSessionBridge.closeSession(sessionId);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'native session close failed: %{public}s', String(error));
+      return false;
+    }
+    this.updateSessionState(release);
+    if (!release.ok) {
+      hilog.warn(DOMAIN, TAG, 'native session close refused action=%{public}s message=%{public}s',
+        release.action, release.message ?? '');
+      return false;
+    }
+    // The native close receipt always states `released`; an absent verdict is a
+    // protocol failure, never a release. Only an explicit true permits destroying
+    // the Surface and acknowledging the epoch.
+    const released = release.released === true;
+    if (!released) {
+      hilog.warn(DOMAIN, TAG,
+        'native session close did not release every destination session=%{public}s settle=%{public}s',
+        sessionId, release.settle ?? '');
+      return false;
+    }
+    if (epoch.length === 0) {
+      hilog.warn(DOMAIN, TAG, 'session close had no lifecycle epoch to acknowledge');
+      return false;
+    }
+    try {
+      const ack = this.nativeSessionBridge.acknowledgeClose(sessionId, epoch);
+      if (!ack.ok) {
+        hilog.warn(DOMAIN, TAG, 'session close ACK refused action=%{public}s message=%{public}s',
+          ack.action, ack.message ?? '');
+        return false;
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'session close ACK failed: %{public}s', String(error));
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Waits, bounded, for a destination the producer still owed to be released.
+   *
+   * The Surface may not be destroyed before that, so this only gives the
+   * destination back on each attempt and reports whether the native side says
+   * nothing holds it any more. It never claims a release the native side did not
+   * report.
+   */
+  private async awaitSurfaceRelease(sessionId: string): Promise<boolean> {
+    for (let attempt = 0; attempt < SURFACE_RELEASE_WAIT_ATTEMPTS; attempt += 1) {
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), SURFACE_RELEASE_WAIT_INTERVAL_MS));
+      if (sessionId !== this.activeSessionId) {
+        return false;
+      }
+      if (this.clearSurfaceBinding()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private handleRemoteDisconnect(message: string): void {
+    if (this.rdpCertificateRejectedSessions.has(this.activeSessionId)) {
+      return;
+    }
     if (this.sessionCloseInFlight) {
       return;
     }
     hilog.warn(DOMAIN, TAG, 'handleRemoteDisconnect sessionId=%{public}s message=%{public}s', this.activeSessionId, message);
     this.failConnectionAttempt(message);
+  }
+
+  /**
+   * Records a session the native side closed outside this bridge.
+   *
+   * A privacy revocation closes a VNC/RDP wire underneath the UI: the poll
+   * carries `closed_externally` and a `close` event, and the tab must not be left
+   * looking connected while its own close verdict is still pending.
+   */
+  private noteExternallyClosedSession(sessionId: string, settle: string): void {
+    this.discardAllRdpCertificateSecrets();
+    this.discardDirectCredentialSecrets();
+    this.directCredentialsVisible = false;
+    hilog.warn(DOMAIN, TAG, 'session closed externally session=%{public}s settle=%{public}s',
+      sessionId, settle.length > 0 ? settle : 'unreported');
+    this.remoteSessionTabsController.markPhase(sessionId, 'closed', '连接已由外部关闭');
   }
 
   private resetPreviewState(): void {
@@ -3315,6 +4474,8 @@ struct RustDeskIndex {
     this.clearSoftKeyboardKeyState();
     this.androidNavigationDragStartX = 0;
     this.androidNavigationDragStartY = 0;
+    this.miniBarDragStartX = 0;
+    this.miniBarDragStartY = 0;
     this.remoteKeyboardPermissionAllowed = true;
     this.isFoldHoverMode = false;
     this.foldHoverUpperHeight = 0;
@@ -3327,6 +4488,11 @@ struct RustDeskIndex {
     this.peerDisplays = [];
     this.supportedResolutions = [];
     this.currentDisplayIndex = 0;
+    // The generation belongs to one session's boundary: it is cleared with the
+    // session state and only ever refilled from a value the native side reported.
+    this.activeInputGeneration = '';
+    // The owed-hold count belongs to that same boundary; empty means unknown.
+    this.activeInputHoldsOwed = '';
     this.previewSurfaceVisible = false;
     // This is a process-local Surface epoch. Never reset it: A→B→A must not
     // accept a delayed callback from A's previous XComponent generation.
@@ -3334,17 +4500,11 @@ struct RustDeskIndex {
     this.previewSurfaceSetupGeneration = -1;
     this.pendingPreviewPeerInfo = undefined;
     this.releasePreviewFramePixelMap();
-    this.qualityTelemetry = {
-      fps: '--',
-      delay: '--',
-      codec: '--',
-      speed: '--',
-      targetBitrate: '--',
-      chroma: '--',
-    };
+    this.qualityTelemetry = emptyQualityTelemetry();
     this.codecPreferenceApplied = false;
     this.touchMode = this.activeSessionDefaults.touchMode;
-    this.relativeMouseMode = !this.touchMode && this.activeSessionDefaults.relativeMouseMode;
+    this.relativeMouseMode = !this.touchMode && !this.isDirectWireSession() && this.activeSessionDefaults.relativeMouseMode;
+    this.inputEnabled = this.activeSessionDefaults.inputEnabled;
     this.rightClickGesture = this.activeSessionDefaults.rightClickGesture;
     this.resetRemoteCursorVisualState();
     this.cursorModel.reset();
@@ -3354,29 +4514,19 @@ struct RustDeskIndex {
     this.remoteCursorEnableAttempts = 0;
     this.relativeModeActivatedAt = 0;
     this.remoteCursorEventLogCounter = 0;
-    this.chatDraft = '';
     this.overlayState.close();
     this.activeOverlayPanel = 'home';
-    this.selectedQualityPreset = this.qualityPresetFor(this.activeSessionDefaults);
-    this.customQualityDraft = this.activeSessionDefaults.customQuality;
-    this.customFpsDraft = this.activeSessionDefaults.customFps;
+    this.selectedRefreshRate = this.defaultRefreshRate(this.activeSessionDefaults);
     this.remoteAudioState = this.unavailableRemoteAudioState();
     this.remoteAudioDefaultApplied = false;
+    this.directAudioCapability = '';
+    this.clearRdpFollowResize();
     this.isMiniBarExpanded = this.activeSessionDefaults.toolbarExpanded;
     this.initialDisplayCommandIssued = false;
     this.pendingDisplayIndex = -1;
     this.pendingResolutionDisplay = -1;
     this.pendingResolutionWidth = 0;
     this.pendingResolutionHeight = 0;
-    this.refreshQualitySummary();
-  }
-
-  private refreshChatState(): void {
-    this.chatRevision += 1;
-  }
-
-  private chatMessages(): ChatMessage[] {
-    return this.chatRevision >= 0 ? this.chatStore.messages() : [];
   }
 
   private openOverlayPanel(panel: SessionOverlayPanel): void {
@@ -3407,21 +4557,6 @@ struct RustDeskIndex {
     return this.activeOverlayPanel === panel;
   }
 
-  private openChatDrawer(): void {
-    if (!this.isRemoteControlSessionActive()) {
-      return;
-    }
-    this.chatStore.markRead();
-    const activeTab = this.remoteSessionTabsController.get(this.activeSessionId);
-    if (activeTab !== undefined) {
-      activeTab.unreadCount = 0;
-      activeTab.chatUnread = 0;
-      this.syncRemoteSessionTabs();
-    }
-    this.refreshChatState();
-    this.openOverlayPanel('chat');
-  }
-
   private unavailableRemoteAudioState(): RemoteAudioState {
     return {
       available: false,
@@ -3431,21 +4566,53 @@ struct RustDeskIndex {
     };
   }
 
+  private isInteractiveSessionActive(): boolean {
+    return (this.activeSessionKind === 'remote_control' || this.isDirectWireSession())
+      && this.activeSessionId.length > 0;
+  }
+
   private isRemoteControlSessionActive(): boolean {
     return this.activeSessionKind === 'remote_control' && this.activeSessionId.length > 0;
   }
 
-  private isRemoteViewerSessionActive(): boolean {
-    return this.activeSessionKind === 'view_only' && this.activeSessionId.length > 0;
+  /**
+   * Whether the session's clipboard policy admits text at all: a selected session,
+   * the operator's switch, a wire that carries clipboard text, and the session's own
+   * `disable-clipboard` option. It says nothing about whether the app is in front,
+   * which is the transient half checked by isClipboardTextSyncAllowed().
+   */
+  private isClipboardTextAdmitted(): boolean {
+    return this.activeSessionId.length > 0 && clipboardTextSyncAllowed(
+      this.clipboardSyncEnabled,
+      this.activeSessionKind,
+      this.nativeSessionBridge.getToggleOption(this.activeSessionId, 'disable-clipboard'),
+    );
   }
 
-  private isRemoteDesktopSessionActive(): boolean {
-    return this.isRemoteControlSessionActive() || this.isRemoteViewerSessionActive();
+  /**
+   * Whether clipboard text may be synchronized with the active session right now.
+   *
+   * Policy plus the app actually being in front: the native admission deliberately
+   * does not look at foreground, and a backgrounded app must neither write the
+   * peer's text into the system pasteboard nor forward a local read. The option is
+   * read per use because it can change mid-session.
+   */
+  private isClipboardTextSyncAllowed(): boolean {
+    return this.appForeground && this.pageVisible && this.isClipboardTextAdmitted();
+  }
+
+  private applyRemoteAudioPollingForKind(kind: PrimarySessionKind): void {
+    if (kind === 'remote_control' || kind === 'rdp') {
+      this.refreshRemoteAudioState();
+      this.startRemoteAudioPolling();
+      return;
+    }
+    this.closeRemoteAudio();
   }
 
   private remoteTextInputAvailable(): boolean {
     return !this.isPcDevice()
-      && this.isRemoteControlSessionActive()
+      && this.isInteractiveSessionActive()
       && this.remoteKeyboardPermissionAllowed
       && this.showPreviewModal
       && !this.showTransferWorkspace;
@@ -3559,7 +4726,7 @@ struct RustDeskIndex {
       oldPreviewText?.value ?? '',
     );
     this.systemImeText = delta.localText;
-    if (!this.systemImeActive || !this.isRemoteControlSessionActive()) {
+    if (!this.systemImeActive || !this.isInteractiveSessionActive()) {
       return;
     }
     for (let index = 0; index < delta.backspaceCount; index += 1) {
@@ -3589,9 +4756,16 @@ struct RustDeskIndex {
 
   private sendSystemImeText(value: string): void {
     try {
-      const response = this.nativeSessionBridge.inputString(this.activeSessionId, value);
+      const response = this.nativeSessionBridge.inputString(
+        this.activeSessionId,
+        value,
+        this.currentInputGeneration(),
+      );
       this.logRelativeDebug('system_ime_text', `ok=${response.ok} length=${value.length}`);
       if (!response.ok) {
+        // A refusal names the generation the session is at now, so stale input
+        // state for a boundary that has gone is retired rather than resent.
+        this.adoptInputGeneration(response);
         this.errorText = response.message ?? '输入法文本发送失败';
       }
     } catch (error) {
@@ -3788,7 +4962,7 @@ struct RustDeskIndex {
     shift: boolean,
     command: boolean,
   ): void {
-    if (!this.isRemoteControlSessionActive()) {
+    if (!this.isInteractiveSessionActive()) {
       this.clearSoftKeyboardKeyState();
       return;
     }
@@ -3817,14 +4991,22 @@ struct RustDeskIndex {
       const character = this.softKeyboardCharacter(name, shift);
       if (character.length > 0 && !ctrl && !alt && !command) {
         try {
-          this.nativeSessionBridge.inputString(this.activeSessionId, character);
+          this.nativeSessionBridge.inputString(
+            this.activeSessionId,
+            character,
+            this.currentInputGeneration(),
+          );
           return;
         } catch (_) {
         }
       }
       if (name === 'VK_SPACE') {
         try {
-          this.nativeSessionBridge.inputString(this.activeSessionId, ' ');
+          this.nativeSessionBridge.inputString(
+            this.activeSessionId,
+            ' ',
+            this.currentInputGeneration(),
+          );
           return;
         } catch (_) {
         }
@@ -3832,7 +5014,10 @@ struct RustDeskIndex {
     }
 
     const usbHid = this.softKeyboardUsbHid(name);
-    if (!modifier && usbHid !== undefined) {
+    let rawRouteAttempted = false;
+    // Core raw keys cannot serve direct sessions. Their legacy bridge remains
+    // responsible for admitting or rejecting its supported key vocabulary.
+    if (!modifier && usbHid !== undefined && !this.isDirectWireSession()) {
       const character = down ? this.softKeyboardCharacter(name, shift) : '';
       let lockModes = 0;
       if (shift) {
@@ -3845,9 +5030,17 @@ struct RustDeskIndex {
         lockModes |= (1 << 2);
       }
       const payload = new RustDeskFlutterKeyPayload(character, usbHid, lockModes, down);
+      rawRouteAttempted = true;
       if (this.sendFlutterKeyPayloadObject(payload)) {
         return;
       }
+    }
+    if (rawRouteAttempted) {
+      // The raw key route was chosen for this event and the native side refused it,
+      // so its generation is what refused it. Re-sending the same event through the
+      // legacy route would launder it into the newly adopted generation, so it is
+      // dropped; only an event whose raw route was never chosen falls through.
+      return;
     }
     if (!modifier && !down) {
       return;
@@ -3931,7 +5124,7 @@ struct RustDeskIndex {
   }
 
   private releaseSoftKeyboardKeys(): void {
-    if (!this.isRemoteControlSessionActive()) {
+    if (!this.isInteractiveSessionActive()) {
       this.clearSoftKeyboardKeyState();
       return;
     }
@@ -3982,14 +5175,20 @@ struct RustDeskIndex {
   }
 
   private sendClipboardText(content: string): boolean {
-    if (!this.remoteInteractionReady || !this.isRemoteControlSessionActive()) {
+    if (!this.remoteInteractionReady || !this.isClipboardTextSyncAllowed()) {
       return false;
     }
     const response = this.nativeSessionBridge.sendClipboard(this.activeSessionId, content);
     if (!response.ok) {
       this.logRelativeDebug('clipboard_local', `native failed=${String(response.message ?? '')}`);
+      return false;
     }
-    return response.ok;
+    if (response.queued === true) {
+      // A direct wire's receipt is the queue, not the peer: the write verdict
+      // arrives later as `clipboard_write_result`.
+      this.logRelativeDebug('clipboard_local', `queued length=${content.length}`);
+    }
+    return true;
   }
 
   private sendClipboardImage(content: Uint8Array): boolean {
@@ -4017,7 +5216,9 @@ struct RustDeskIndex {
   private applyRemoteNativeClipboard(): void {
     const response = this.nativeSessionBridge.takeClipboard(this.activeSessionId);
     if (!response.ok) {
-      this.logRelativeDebug('clipboard_remote', `native take failed=${String(response.message ?? '')}`);
+      // No pending payload is neither a failure nor a clear: there is nothing to
+      // apply, and the peer has not said its clipboard is empty.
+      this.logRelativeDebug('clipboard_remote', `native take pending=false message=${String(response.message ?? '')}`);
       return;
     }
     const payload: RustDeskRemoteClipboardPayload = {};
@@ -4027,7 +5228,7 @@ struct RustDeskIndex {
     if (response.html !== undefined) {
       payload.html = response.html;
     }
-    if (response.image !== undefined && response.image !== null) {
+    if (response.image !== undefined && response.image !== null && this.isRemoteControlSessionActive()) {
       const bytes = this.nativeSessionBridge.takeClipboardImage(this.activeSessionId);
       if (bytes.length !== response.image.byteLength) {
         this.logRelativeDebug(
@@ -4046,6 +5247,26 @@ struct RustDeskIndex {
     this.clipboardController?.applyRemoteClipboard(this.activeSessionId, payload);
   }
 
+  /**
+   * The peer's verdict on a clipboard write that was already queued.
+   *
+   * A capability refusal is reported, never treated as a session failure: the
+   * peer's clipboard channel is optional, and the session stays usable without it.
+   * Only the verdict and the engine's own error metadata are logged, never the
+   * text that was submitted.
+   */
+  private handleClipboardWriteResult(event: NativeEvent): void {
+    if (event.ok === true) {
+      this.logRelativeDebug('clipboard_write', 'ok=true');
+      return;
+    }
+    const message = String(event.message ?? '');
+    this.logRelativeDebug('clipboard_write', `ok=false message=${message}`);
+    if (this.isClipboardTextSyncAllowed()) {
+      this.showSessionNotice(`剪贴板未同步到远端：${message.length > 0 ? message : '对端拒绝了此操作'}`);
+    }
+  }
+
   private syncClipboardController(): void {
     if (this.clipboardSyncEnabled && this.isRemoteControlSessionActive()
       && this.clipboardFileRootSessionId !== this.activeSessionId) {
@@ -4059,17 +5280,27 @@ struct RustDeskIndex {
         }
       }
     }
-    if (this.clipboardSyncEnabled && this.pageVisible && this.remoteInteractionReady && this.isRemoteControlSessionActive()) {
+    if (this.isClipboardTextSyncAllowed() && this.remoteInteractionReady) {
+      if (this.clipboardPeerUpdateSessions.has(this.activeSessionId)) {
+        // The peer's latest text is retrieved before the local clipboard is read, so
+        // this session's own — possibly stale — clipboard is not sent over it. The
+        // controller retains the payload and applies it when it starts below.
+        this.clipboardPeerUpdateSessions.delete(this.activeSessionId);
+        this.applyRemoteNativeClipboard();
+      }
       this.clipboardController?.start(this.activeSessionId);
       return;
     }
     this.clipboardController?.stop();
   }
 
+  // Hardware keys are captured at the input service for every interactive session:
+  // the ArkUI key path loses them once focus leaves the session container, and the
+  // intercepted path already routes a direct wire's key to its legacy vocabulary.
   private shouldEnableInputInterceptor(): boolean {
     return this.pageVisible &&
       this.remoteInteractionReady &&
-      this.isRemoteControlSessionActive() &&
+      this.isInteractiveSessionActive() &&
       this.showPreviewModal &&
       !this.showTransferWorkspace &&
       !this.passwordDialogVisible &&
@@ -4089,7 +5320,7 @@ struct RustDeskIndex {
       this.inputInterceptorActive = response.active === true;
       this.logRelativeDebug(
         'input_interceptor',
-        `start ok=${response.ok} active=${this.inputInterceptorActive} result=${String(response.result ?? '')} message=${String(response.message ?? '')}`,
+        `start ok=${response.ok} active=${this.inputInterceptorActive} admitting=${String(response.admitting === true)} result=${String(response.result ?? '')} message=${String(response.message ?? '')}`,
       );
     } catch (error) {
       this.inputInterceptorActive = false;
@@ -4101,7 +5332,7 @@ struct RustDeskIndex {
     if (!this.inputInterceptorActive) {
       return;
     }
-    this.inputController?.releaseInterceptedKeys();
+    this.inputController?.releaseHeldKeys();
     try {
       const response = JSON.parse(native.inputInterceptorStop()) as InputInterceptorResponse;
       this.inputInterceptorActive = response.active === true;
@@ -4121,6 +5352,25 @@ struct RustDeskIndex {
     try {
       const response = JSON.parse(native.inputInterceptorPollEvents(32)) as InputInterceptorResponse;
       this.inputInterceptorActive = response.active === true;
+      if (response.sealed === true) {
+        // Capture was closed on purpose and the queue was discarded: nothing from
+        // this poll may be forwarded. Release every key this client still holds so
+        // no key-up is lost, then stop the native owner.
+        this.inputController?.releaseHeldKeys();
+        this.stopInputInterceptor();
+        this.logRelativeDebug('input_interceptor',
+          `poll sealed: released held keys and stopped interception message=${String(response.message ?? '')}`);
+        return;
+      }
+      if (response.overflow === true) {
+        // The native queue overflowed and closed admission. Release every key
+        // this client still holds so no key-up is lost, then stop the native
+        // owner; a later start re-arms with a fresh queue.
+        this.inputController?.releaseHeldKeys();
+        this.stopInputInterceptor();
+        this.logRelativeDebug('input_interceptor', 'poll overflow: released held keys and stopped interception');
+        return;
+      }
       const events = response.events ?? [];
       for (let index = 0; index < events.length; index++) {
         const event = events[index];
@@ -4156,7 +5406,7 @@ struct RustDeskIndex {
   }
 
   private isRemoteAudioSessionActive(): boolean {
-    return this.isRemoteControlSessionActive() &&
+    return (this.isRemoteControlSessionActive() || (this.activeSessionKind === 'rdp' && this.activeSessionId.length > 0)) &&
       this.sessionPhase !== 'idle' &&
       this.sessionPhase !== 'closed' &&
       this.sessionPhase !== 'start_failed' &&
@@ -4166,14 +5416,15 @@ struct RustDeskIndex {
   }
 
   private refreshRemoteAudioState(): void {
-    if (!this.isRemoteAudioSessionActive()) {
+    if (!this.isRemoteAudioSessionActive() || !this.pageVisible || !this.appForeground) {
       this.closeRemoteAudio();
       return;
     }
     let state = this.nativeSessionBridge.getRemoteAudioState(this.activeSessionId);
     if (state.available && !this.remoteAudioDefaultApplied) {
       this.remoteAudioDefaultApplied = true;
-      const shouldMute = !this.activeSessionDefaults.audioEnabled;
+      const shouldMute = !(this.activeSessionKind === 'rdp'
+        ? this.activeSessionDefaults.rdpAudioEnabled : this.activeSessionDefaults.audioEnabled);
       if (state.muted !== shouldMute) {
         this.nativeSessionBridge.setRemoteAudioMuted(this.activeSessionId, shouldMute);
         state = this.nativeSessionBridge.getRemoteAudioState(this.activeSessionId);
@@ -4215,7 +5466,9 @@ struct RustDeskIndex {
   }
 
   private openDisplaySheet(): void {
-    if (!this.isRemoteDesktopSessionActive()) {
+    // Display mode and zoom are local presentation, so every desktop wire has
+    // them; what each wire offers for displays and sizes is the sheet's content.
+    if (!this.isInteractiveSessionActive()) {
       this.sessionMessage = '请先建立远程桌面连接';
       return;
     }
@@ -4231,11 +5484,104 @@ struct RustDeskIndex {
       this.sessionMessage = '请先建立远控连接';
       return;
     }
-    this.selectedQualityPreset = this.sessionDisplayController.getImageQuality();
-    this.customQualityDraft = this.sessionDisplayController.getCustomImageQuality();
-    this.customFpsDraft = this.sessionDisplayController.getCustomFps();
+    this.selectedRefreshRate = this.sessionDisplayController.getRefreshRate();
+    this.directQualityDefaults = this.copySessionDefaults(this.sessionDefaults);
+    if (this.activeSessionKind === 'rdp') {
+      this.directQualityDefaults.rdpResolution = this.activeSessionDefaults.rdpResolution;
+    }
     this.openOverlayPanel('quality');
   }
+  private clearRdpFollowResize(): void {
+    if (this.rdpFollowResizeTimer >= 0) {
+      clearTimeout(this.rdpFollowResizeTimer);
+      this.rdpFollowResizeTimer = -1;
+    }
+  }
+
+  private requestRdpDesktopSize(size: ResolutionInfo): boolean {
+    if (this.activeSessionKind !== 'rdp' || this.sessionPhase !== 'connected') {
+      return false;
+    }
+    const shown = this.peerDisplays[0];
+    if ((shown !== undefined && shown.width === size.width && shown.height === size.height) ||
+      (this.pendingResolutionWidth === size.width && this.pendingResolutionHeight === size.height)) {
+      return true;
+    }
+    if (!this.sessionDisplayController.requestResolution(this.activeSessionId, 0, size, this.peerPlatform)) {
+      return false;
+    }
+    this.pendingResolutionDisplay = 0;
+    this.pendingResolutionWidth = size.width;
+    this.pendingResolutionHeight = size.height;
+    this.sessionMessage = `已请求 RDP 桌面 ${size.width}×${size.height}，等待远端确认`;
+    return true;
+  }
+
+  private scheduleRdpFollowResize(): void {
+    this.clearRdpFollowResize();
+    if (this.activeSessionKind !== 'rdp' || this.activeSessionDefaults.rdpResolution !== 'follow' ||
+      this.sessionPhase !== 'connected' || !this.pageVisible || !this.appForeground || !this.showPreviewModal) {
+      return;
+    }
+    const sessionId = this.activeSessionId;
+    this.rdpFollowResizeTimer = setTimeout((): void => {
+      this.rdpFollowResizeTimer = -1;
+      if (sessionId !== this.activeSessionId || !this.pageVisible || !this.appForeground ||
+        this.activeSessionDefaults.rdpResolution !== 'follow') {
+        return;
+      }
+      this.requestRdpDesktopSize(computeRdpDesktopSize(this.previewViewWidth, this.previewViewHeight,
+        this.getUIContext().vp2px(1)));
+    }, 600) as number;
+  }
+
+  private updateDirectQualityDefaults(defaults: SessionDefaults): void {
+    const next = this.copySessionDefaults(this.sessionDefaults);
+    if (this.activeSessionKind === 'vnc') {
+      next.vncQuality = defaults.vncQuality;
+    } else if (this.activeSessionKind === 'rdp') {
+      next.rdpResolution = defaults.rdpResolution;
+      next.rdpScaleFactor = defaults.rdpScaleFactor;
+      if (defaults.rdpResolution !== this.activeSessionDefaults.rdpResolution) {
+        const size = computeRdpDesktopSize(this.previewViewWidth, this.previewViewHeight,
+          this.getUIContext().vp2px(1), defaults.rdpResolution);
+        if (this.requestRdpDesktopSize(size)) {
+          this.activeSessionDefaults.rdpResolution = defaults.rdpResolution;
+          this.scheduleRdpFollowResize();
+        }
+      }
+    }
+    this.directQualityDefaults = this.copySessionDefaults(defaults);
+    this.saveSessionDefaults(next);
+  }
+
+  private remoteAudioUnavailableText(): ResourceStr {
+    if (this.activeSessionKind === 'vnc') {
+      return $r('app.string.direct_vnc_audio_unsupported');
+    }
+    if (this.activeSessionKind !== 'rdp') {
+      return '';
+    }
+    if (this.remoteAudioState.errorText.length > 0) {
+      return this.remoteAudioState.errorText;
+    }
+    return this.directAudioCapability === 'unsupported' || !this.activeSessionDefaults.rdpAudioEnabled
+      ? $r('app.string.direct_rdp_audio_unsupported') : $r('app.string.direct_rdp_audio_waiting');
+  }
+
+  private remoteKeyboardUnavailableText(): ResourceStr {
+    if (!this.isDirectWireSession()) {
+      return '';
+    }
+    if (!this.remoteKeyboardPermissionAllowed) {
+      return $r('app.string.direct_keyboard_permission_reason');
+    }
+    if (this.isPcDevice()) {
+      return $r('app.string.direct_keyboard_pc_reason');
+    }
+    return this.isFoldHoverMode ? $r('app.string.direct_keyboard_fold_reason') : '';
+  }
+
 
   private async openTransferWorkspace(): Promise<void> {
     if (this.transferManager.isReady() && this.transferSessionTarget === this.peerTarget.trim()) {
@@ -4248,7 +5594,7 @@ struct RustDeskIndex {
 
   private async openTransferWorkspaceDirect(): Promise<void> {
     if (!this.runtimeInitialized) {
-      this.initializeRuntime();
+      void this.initializeRuntime();
     }
     const target = this.peerTarget.trim();
     if (target.length === 0) {
@@ -4256,7 +5602,7 @@ struct RustDeskIndex {
       return;
     }
     this.peerTarget = target;
-    this.preferences?.saveTarget(target);
+    this.preferences?.saveTarget(target, this.connectPageMode);
     if (this.transferManager.isReady()
       && this.transferSessionTarget.length > 0
       && this.transferSessionTarget !== target) {
@@ -5016,6 +6362,15 @@ struct RustDeskIndex {
     if (!this.activeSessionId || this.initialDisplayCommandIssued || this.pendingDisplayIndex >= 0) {
       return;
     }
+    if (this.isDirectWireSession()) {
+      // A direct wire reports exactly one display and the engine presents it into
+      // the Surface itself, so there is no switch/size/refresh to ask the Core
+      // for; issuing them here would only be refused by name. The Surface binding
+      // above already happened and is what this wire needs.
+      this.initialDisplayCommandIssued = true;
+      this.currentDisplayIndex = this.sessionDisplayController.getCurrentDisplayIndex();
+      return;
+    }
     if (!this.sessionDisplayController.selectDisplay(this.activeSessionId, display)) {
       return;
     }
@@ -5031,6 +6386,13 @@ struct RustDeskIndex {
       return;
     }
     if (display === this.sessionDisplayController.getCurrentDisplayIndex()) {
+      return;
+    }
+    if (this.isDirectWireSession()) {
+      // These wires carry one display and the engine owns its presentation, so
+      // there is no second display to switch to; saying so is honest where a
+      // refused Core command would look like a failed operation.
+      this.sessionMessage = '当前协议仅有一个显示器';
       return;
     }
     if (!this.sessionDisplayController.selectDisplay(this.activeSessionId, display)) {
@@ -5052,6 +6414,12 @@ struct RustDeskIndex {
       this.sessionMessage = '请先建立远控连接';
       return;
     }
+    if (this.activeSessionKind === 'vnc') {
+      // An RFB framebuffer is the server's own size; nothing a client sends
+      // changes it.
+      this.sessionMessage = '桌面尺寸由 VNC 服务端决定';
+      return;
+    }
     const display = this.sessionDisplayController.getCurrentDisplayIndex();
     if (!this.sessionDisplayController.requestResolution(
       this.activeSessionId,
@@ -5065,6 +6433,10 @@ struct RustDeskIndex {
       );
       return;
     }
+    if (this.activeSessionKind === 'rdp') {
+      this.activeSessionDefaults.rdpResolution = `${resolution.width}x${resolution.height}`;
+      this.clearRdpFollowResize();
+    }
     this.pendingResolutionDisplay = display;
     this.pendingResolutionWidth = resolution.width;
     this.pendingResolutionHeight = resolution.height;
@@ -5075,86 +6447,49 @@ struct RustDeskIndex {
     );
   }
 
-  private applyQualitySelection(preset: QualityPreset): void {
+  private applyRefreshRateSelection(rate: number): void {
+    this.logRelativeDebug('refresh_rate', `requested=${rate} valid=${isValidRefreshRate(rate)} session=${this.activeSessionId}`);
+    if (!isValidRefreshRate(rate)) {
+      return;
+    }
     if (!this.activeSessionId) {
       this.sessionMessage = '请先建立远控连接';
       return;
     }
-    if (!this.sessionDisplayController.applyQuality(
-      this.activeSessionId,
-      preset,
-      this.customQualityDraft,
-      this.customFpsDraft,
-    )) {
-      return;
-    }
-    this.selectedQualityPreset = this.sessionDisplayController.getImageQuality();
-    this.customQualityDraft = this.sessionDisplayController.getCustomImageQuality();
-    this.customFpsDraft = this.sessionDisplayController.getCustomFps();
-    this.sessionMessage = '已请求更新画质设置';
-  }
-
-  private updateCustomQuality(value: number): void {
-    this.customQualityDraft = value;
-    this.selectedQualityPreset = 'custom';
-    this.applyQualitySelection('custom');
-  }
-
-  private updateCustomFps(value: number): void {
-    this.customFpsDraft = value;
-    this.selectedQualityPreset = 'custom';
-    this.applyQualitySelection('custom');
-  }
-
-  private sendChatDraft(value: string): void {
-    const message = this.chatStore.send(value, Date.now());
-    if (!message) {
-      return;
-    }
-    this.chatDraft = '';
-    if (!this.activeSessionId) {
-      this.chatStore.markFailed(message.localId);
-      this.refreshChatState();
-      return;
-    }
-    try {
-      const response = this.nativeSessionBridge.sendChat(this.activeSessionId, message.text);
-      this.updateSessionState(response);
-      if (response.ok) {
-        this.chatStore.markSent(message.localId);
-      } else {
-        this.chatStore.markFailed(message.localId);
+    const remoteRateSupported = this.activeSessionKind === 'remote_control';
+    if (remoteRateSupported) {
+      const applied = this.sessionDisplayController.applyRefreshRate(this.activeSessionId, rate);
+      this.logRelativeDebug('refresh_rate', `remote=${String(applied)} stored=${this.sessionDisplayController.getRefreshRate()}`);
+      if (!applied) {
+        this.sessionMessage = '远端拒绝了此刷新率';
+        return;
       }
-    } catch (error) {
-      this.errorText = String(error);
-      this.chatStore.markFailed(message.localId);
+    } else {
+      // A direct VNC/RDP wire has no remote rate control, so only the local
+      // display expectation and the remembered choice change here: the local
+      // panel rate keeps working exactly as it did.
+      this.sessionDisplayController.restoreRefreshRate(rate);
+      this.logRelativeDebug('refresh_rate',
+        `remote=unsupported local=${this.sessionDisplayController.getRefreshRate()}`);
     }
-    this.refreshChatState();
+    this.selectedRefreshRate = this.sessionDisplayController.getRefreshRate();
+    // Remembered so the next session from this device starts where this one left
+    // off, including across an app restart.
+    this.activeSessionDefaults.refreshRate = this.selectedRefreshRate;
+    // The panel is asked for the new rate as well: it is what the picture is
+    // shown at, and a panel left at its old rate caps the session regardless of
+    // what the peer was asked to send.
+    this.declarePanelFrameRate();
+    this.sessionMessage = remoteRateSupported
+      ? `已请求 ${this.selectedRefreshRate} Hz 采集`
+      : `本机显示已设为 ${this.selectedRefreshRate} Hz；当前协议不支持远端采集帧率`;
   }
 
-  private retryChat(localId: string): void {
-    const message = this.chatStore.retry(localId);
-    if (!message) {
-      return;
+  private syncInputEnabled(enabled: boolean): void {
+    this.getInputController().setInputSuppressed(!enabled);
+    if (!enabled) {
+      this.remoteCursorVisible = false;
     }
-    if (!this.activeSessionId) {
-      this.chatStore.markFailed(message.localId);
-      this.refreshChatState();
-      return;
-    }
-    try {
-      const response = this.nativeSessionBridge.sendChat(this.activeSessionId, message.text);
-      this.updateSessionState(response);
-      if (response.ok) {
-        this.chatStore.markSent(message.localId);
-      } else {
-        this.chatStore.markFailed(message.localId);
-      }
-    } catch (error) {
-      this.errorText = String(error);
-      this.chatStore.markFailed(message.localId);
-    }
-    this.refreshChatState();
   }
 
   private syncTouchMode(active: boolean): void {
@@ -5433,20 +6768,187 @@ struct RustDeskIndex {
     } else if (type === window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR) {
       this.windowBottomAvoidInset = Math.max(Math.round(uiContext.px2vp(area.bottomRect.height)), 0);
     } else if (type === window.AvoidAreaType.TYPE_CUTOUT) {
-      this.windowCutoutTopHeight = Math.max(Math.round(uiContext.px2vp(area.topRect.height)), 0);
       this.windowCutoutLeftWidth = Math.max(Math.round(uiContext.px2vp(area.leftRect.width)), 0);
       this.windowCutoutRightWidth = Math.max(Math.round(uiContext.px2vp(area.rightRect.width)), 0);
     }
+    // The toolbar's baseline is part of the safe area, so a change re-seats it.
+    this.reclampMiniBarAnchor();
   }
 
-  private isMiniBarOnSide(): boolean {
-    if (this.isPcDevice()) {
-      return false;
+  /** The pane insets the toolbar keeps clear: side cutouts, and the gesture bar. */
+  private miniBarLeftInset(): number {
+    return Math.max(0, this.windowCutoutLeftWidth);
+  }
+
+  private miniBarRightInset(): number {
+    return Math.max(0, this.windowCutoutRightWidth);
+  }
+
+  private miniBarBottomBound(): number {
+    return Math.max(0, this.windowBottomAvoidInset) + MINI_BAR_BOTTOM_MARGIN;
+  }
+
+  /** The pane's own size, with the window as the stand-in before it is measured. */
+  private miniBarViewportWidth(): number {
+    return this.previewViewWidth > 0 ? this.previewViewWidth : this.mainViewportWidth;
+  }
+
+  private miniBarViewportHeight(): number {
+    return this.previewViewHeight > 0 ? this.previewViewHeight : this.mainViewportHeight;
+  }
+
+  /** The collapsed entry's default anchor: flush with the pane's right edge. */
+  private defaultMiniBarAnchorRight(viewportWidth: number): number {
+    return Math.max(MINI_BAR_COLLAPSED_TOUCH_WIDTH + this.miniBarLeftInset(),
+      viewportWidth - this.miniBarRightInset());
+  }
+
+  /** The top both states default to, clear of the status-bar band. */
+  private defaultMiniBarAnchorTop(): number {
+    return Math.max(MINI_BAR_TOP_BASELINE, this.windowTopAvoidInset + MINI_BAR_TOP_AVOID_OFFSET);
+  }
+
+  /**
+   * The expanded panel's width: its share of the pane, capped by what the side
+   * cutouts leave. The panel is laid out with this same value.
+   */
+  private miniBarExpandedWidth(): number {
+    const viewportWidth = this.miniBarViewportWidth();
+    if (viewportWidth <= 0) {
+      return 0;
     }
-    const width = this.previewViewWidth > 0 ? this.previewViewWidth : this.mainViewportWidth;
-    const height = this.previewViewHeight > 0 ? this.previewViewHeight : this.mainViewportHeight;
-    const isPortrait = height >= width;
-    return isPortrait || this.windowCutoutTopHeight > 0;
+    const available = Math.max(0, viewportWidth - this.miniBarLeftInset() - this.miniBarRightInset());
+    return Math.min(viewportWidth * MINI_BAR_EXPANDED_WIDTH_RATIO, available);
+  }
+
+  /**
+   * The anchor is the collapsed entry's own corner, so only the collapsed bounds
+   * may move it. A panel too wide for the pane is drawn clamped instead of
+   * dragging the tab with it, which is what lets a dragged tab keep its place.
+   */
+  private clampMiniBarAnchorRight(value: number, viewportWidth: number): number {
+    const maxRight = Math.max(0, viewportWidth - this.miniBarRightInset());
+    const minRight = Math.min(MINI_BAR_COLLAPSED_TOUCH_WIDTH + this.miniBarLeftInset(), maxRight);
+    return Math.min(Math.max(value, minRight), maxRight);
+  }
+
+  private clampMiniBarAnchorTop(value: number, viewportHeight: number): number {
+    const maxTop = Math.max(
+      0,
+      viewportHeight - MINI_BAR_COLLAPSED_HEIGHT - this.miniBarBottomBound(),
+    );
+    const minTop = Math.min(this.defaultMiniBarAnchorTop(), maxTop);
+    return Math.min(Math.max(value, minTop), maxTop);
+  }
+
+  /** Where the visible state is drawn: clamped per state, never written back. */
+  private clampMiniBarX(value: number, itemWidth: number): number {
+    const left = this.miniBarLeftInset();
+    const maxX = Math.max(left, this.miniBarViewportWidth() - itemWidth - this.miniBarRightInset());
+    return Math.min(Math.max(value, left), maxX);
+  }
+
+  private clampMiniBarY(value: number, itemHeight: number): number {
+    const maxY = Math.max(0, this.miniBarViewportHeight() - itemHeight - this.miniBarBottomBound());
+    const minY = Math.min(this.defaultMiniBarAnchorTop(), maxY);
+    return Math.min(Math.max(value, minY), maxY);
+  }
+
+  /** An unset anchor still lays out at its default, so the first frame is placed. */
+  private miniBarResolvedAnchorRight(): number {
+    if (this.miniBarAnchorInitialized) {
+      return this.miniBarAnchorRight;
+    }
+    const viewportWidth = this.miniBarViewportWidth();
+    return viewportWidth > 0 ? this.defaultMiniBarAnchorRight(viewportWidth) : viewportWidth;
+  }
+
+  private miniBarResolvedAnchorTop(): number {
+    return this.miniBarAnchorInitialized ? this.miniBarAnchorTop : this.defaultMiniBarAnchorTop();
+  }
+
+  private miniBarCollapsedX(): number {
+    return this.clampMiniBarX(
+      this.miniBarResolvedAnchorRight() - MINI_BAR_COLLAPSED_TOUCH_WIDTH,
+      MINI_BAR_COLLAPSED_TOUCH_WIDTH,
+    );
+  }
+
+  private miniBarCollapsedY(): number {
+    return this.clampMiniBarY(this.miniBarResolvedAnchorTop(), MINI_BAR_COLLAPSED_HEIGHT);
+  }
+
+  private miniBarExpandedX(): number {
+    const panelWidth = this.miniBarExpandedWidth();
+    return this.clampMiniBarX(this.miniBarResolvedAnchorRight() - panelWidth, panelWidth);
+  }
+
+  private miniBarExpandedY(): number {
+    return this.clampMiniBarY(this.miniBarResolvedAnchorTop(), this.miniBarExpandedHeight);
+  }
+
+  /**
+   * Re-seat the toolbar for the current viewport.
+   *
+   * An untouched toolbar follows the pane's right/top corner; a dragged one is
+   * only clamped, so a rotation, a resize or a safe-area change can never strand
+   * it off screen. The anchor holds the collapsed entry's own corner, which is
+   * why a dragged position survives expanding and collapsing again.
+   */
+  private reclampMiniBarAnchor(): void {
+    const width = this.previewViewWidth;
+    const height = this.previewViewHeight;
+    if (width <= 0 || height <= 0) {
+      return;
+    }
+    if (!this.miniBarAnchorInitialized || !this.miniBarDragged) {
+      this.miniBarAnchorRight = this.clampMiniBarAnchorRight(
+        this.defaultMiniBarAnchorRight(width),
+        width,
+      );
+      this.miniBarAnchorTop = this.clampMiniBarAnchorTop(this.defaultMiniBarAnchorTop(), height);
+      this.miniBarAnchorInitialized = true;
+      return;
+    }
+    this.miniBarAnchorRight = this.clampMiniBarAnchorRight(this.miniBarAnchorRight, width);
+    this.miniBarAnchorTop = this.clampMiniBarAnchorTop(this.miniBarAnchorTop, height);
+  }
+
+  private measureMiniBarExpandedHeight(height: number): void {
+    // The panel is drawn from this height, so recording it re-clamps by itself.
+    if (height <= 0 || Math.abs(height - this.miniBarExpandedHeight) <= 0.5) {
+      return;
+    }
+    this.miniBarExpandedHeight = height;
+  }
+
+  private startMiniBarDrag(): void {
+    // A drag continues from where the toolbar is actually drawn, not from the
+    // anchor: the two differ whenever the visible state had to be clamped.
+    this.miniBarDragStartX = this.isMiniBarExpanded ? this.miniBarExpandedX() : this.miniBarCollapsedX();
+    this.miniBarDragStartY = this.isMiniBarExpanded ? this.miniBarExpandedY() : this.miniBarCollapsedY();
+    this.miniBarDragged = true;
+  }
+
+  private updateMiniBarDrag(offsetX: number, offsetY: number): void {
+    if (this.miniBarViewportWidth() <= 0 || this.miniBarViewportHeight() <= 0) {
+      return;
+    }
+    this.miniBarDragged = true;
+    this.miniBarAnchorInitialized = true;
+    if (this.isMiniBarExpanded) {
+      // A real drag of the panel does move the shared anchor: the tab follows it.
+      const panelWidth = this.miniBarExpandedWidth();
+      const x = this.clampMiniBarX(this.miniBarDragStartX + offsetX, panelWidth);
+      const y = this.clampMiniBarY(this.miniBarDragStartY + offsetY, this.miniBarExpandedHeight);
+      this.miniBarAnchorRight = x + panelWidth;
+      this.miniBarAnchorTop = y;
+      return;
+    }
+    const x = this.clampMiniBarX(this.miniBarDragStartX + offsetX, MINI_BAR_COLLAPSED_TOUCH_WIDTH);
+    const y = this.clampMiniBarY(this.miniBarDragStartY + offsetY, MINI_BAR_COLLAPSED_HEIGHT);
+    this.miniBarAnchorRight = x + MINI_BAR_COLLAPSED_TOUCH_WIDTH;
+    this.miniBarAnchorTop = y;
   }
 
   private registerFoldHoverListeners(): void {
@@ -5573,6 +7075,10 @@ struct RustDeskIndex {
     this.registerFoldHoverListeners();
     this.previewSurfaceVisible = false;
     this.previewSurfaceId = '';
+    // The holder identity belongs to the generation being replaced: its own
+    // detach still names it through that controller instance, so this field is
+    // dropped here instead of being reused for the new pane.
+    this.previewComponentId = '';
     this.frameWidth = 0;
     this.frameHeight = 0;
     this.frameStatus = 'Preparing preview surface';
@@ -5595,15 +7101,15 @@ struct RustDeskIndex {
         return;
       }
       this.recoverPreviewSurfaceIdFromController();
-      if (this.previewSurfaceId.length > 0 && this.syncSurfaceBinding()) {
+      if (this.previewComponentId.length > 0 && this.syncSurfaceBinding()) {
         return;
       }
       await new Promise<void>((resolve) => setTimeout(() => resolve(), PREVIEW_SURFACE_WAIT_INTERVAL_MS));
     }
-    if (this.previewSurfaceId.length === 0) {
-      throw new Error('Preview surface was not created before session start');
+    if (this.previewComponentId.length === 0) {
+      throw new Error('Preview XComponent holder was not attached before session start');
     }
-    throw new Error('Preview surface was created but could not be bound before session start');
+    throw new Error('Preview XComponent holder was attached but could not be bound before session start');
   }
 
   private enterPreviewMode(event: NativeEvent): void {
@@ -5624,6 +7130,9 @@ struct RustDeskIndex {
 
   private async preparePreviewSurfaceForPendingEvent(setupGeneration: number): Promise<void> {
     try {
+      // Asked for while the picture is on screen, so an idle panel is not held
+      // at a high rate when nothing is being shown.
+      this.declarePanelFrameRate();
       const initialPeerInfo = this.pendingPreviewPeerInfo;
       if (initialPeerInfo) {
         this.configureDisplayFromPeerInfo(initialPeerInfo);
@@ -5675,11 +7184,23 @@ struct RustDeskIndex {
   }
 
   private setPointerMode(mode: RustDeskInputMode): void {
-    if (!this.isRemoteControlSessionActive()) {
+    if (!this.isInteractiveSessionActive()) {
       return;
     }
     if (mode === 'relative' && !this.relativeMouseModeSupported()) {
       this.sessionMessage = '当前远端不支持相对鼠标模式';
+      return;
+    }
+    // Choosing any mode is also how input comes back on, so there is no way to
+    // select a mode that silently sends nothing.
+    const nextEnabled = mode !== 'off';
+    if (this.inputEnabled !== nextEnabled) {
+      this.inputEnabled = nextEnabled;
+      this.activeSessionDefaults.inputEnabled = nextEnabled;
+      this.syncInputEnabled(nextEnabled);
+    }
+    if (mode === 'off') {
+      this.sessionMessage = '输入已关闭，远端仍可观看';
       return;
     }
     const nextTouchMode = mode === 'touch';
@@ -5700,6 +7221,10 @@ struct RustDeskIndex {
   }
 
   private async cyclePointerMode(): Promise<void> {
+    if (!this.inputEnabled) {
+      this.setPointerMode('touch');
+      return;
+    }
     if (this.touchMode) {
       this.setPointerMode('mouse');
       return;
@@ -5708,7 +7233,7 @@ struct RustDeskIndex {
       this.setPointerMode('relative');
       return;
     }
-    this.setPointerMode('touch');
+    this.setPointerMode('off');
   }
 
   private setRightClickGesture(gesture: RustDeskRightClickGesture): void {
@@ -5723,17 +7248,13 @@ struct RustDeskIndex {
   }
 
   private getPointerModeName(): string {
+    if (!this.inputEnabled) {
+      return '输入关闭';
+    }
     if (this.touchMode) {
       return '触控模式';
     }
     return this.relativeMouseMode ? '相对鼠标模式' : '鼠标模式';
-  }
-
-  private currentPointerMode(): RustDeskInputMode {
-    if (this.touchMode) {
-      return 'touch';
-    }
-    return this.relativeMouseMode ? 'relative' : 'mouse';
   }
 
   private clampPreviewScale(value: number): number {
@@ -5819,14 +7340,39 @@ struct RustDeskIndex {
     return rotation === 0 ? `${scale}%` : `${scale}% · ${rotation}°`;
   }
 
+  /**
+   * The height budget for the toolbar's middle slot: the panel body, or the cap
+   * the home block may occupy.
+   *
+   * The panel is drawn from its anchor, and that anchor can never sit above its
+   * default top, so the whole expanded box has to fit between that top and the
+   * bound the toolbar keeps clear of the gesture bar. What is left after the
+   * panel's own padding and the toolbar's measured chrome is the slot's. The
+   * floor is 0 rather than a minimum: a minimum would push the box past the
+   * bound it is computed from, which is the overflow this budget exists to
+   * prevent. The panel's own sheets scroll, so a small slot still reaches all
+   * of their content.
+   */
   private sessionOverlayContentHeight(): number {
-    const tabChromeHeight = this.remoteSessionTabs.length > 0 ? 58 : 0;
-    const windowControlHeight = this.activeOverlayPanel !== 'home' && this.sessionWindowControlsAvailable() ? 56 : 0;
-    const availableHeight = this.previewViewHeight - 120 - tabChromeHeight - windowControlHeight;
-    if (this.activeOverlayPanel === 'input' && this.previewViewWidth >= 700) {
-      return Math.max(96, Math.min(300, availableHeight));
+    const viewportHeight = this.miniBarViewportHeight();
+    if (viewportHeight <= 0) {
+      return 0;
     }
-    return Math.max(96, Math.min(560, availableHeight));
+    const chromeHeight = this.sessionToolbarChromeHeight > 0
+      ? this.sessionToolbarChromeHeight
+      : SESSION_TOOLBAR_CHROME_FALLBACK_HEIGHT;
+    const available = viewportHeight
+      - this.defaultMiniBarAnchorTop()
+      - this.miniBarBottomBound()
+      - MINI_BAR_EXPANDED_PADDING * 2
+      - chromeHeight;
+    if (available <= 0) {
+      return 0;
+    }
+    // The wide input sheet is a short list of selectors, so it keeps a shorter
+    // ceiling than the scrolling quality and display sheets.
+    const ceiling = this.activeOverlayPanel === 'input' && this.previewViewWidth >= 700 ? 300 : 560;
+    return Math.min(ceiling, available);
   }
 
   private resetPreviewViewTransform(animated: boolean = true): void {
@@ -5912,9 +7458,22 @@ struct RustDeskIndex {
   }
 
   private shouldDrawRemoteCursorOverlay(): boolean {
-    return this.isRemoteControlSessionActive()
-      && (!this.touchMode || this.relativeMouseMode)
-      && this.remoteCursorVisible;
+    return this.isInteractiveSessionActive()
+      && (this.inputEnabled && (!this.touchMode || this.relativeMouseMode))
+      && this.remoteCursorVisible
+      && !this.isCurrentDisplayCursorEmbedded();
+  }
+
+  /**
+   * Whether the peer paints its pointer into the picture of the shown display,
+   * as upstream RustDesk reports it; a second, local arrow would then only
+   * trail the real one.
+   */
+  private isCurrentDisplayCursorEmbedded(): boolean {
+    const display = this.currentDisplayIndex >= 0 && this.currentDisplayIndex < this.peerDisplays.length
+      ? this.peerDisplays[this.currentDisplayIndex]
+      : undefined;
+    return display !== undefined && display.cursor_embedded === 1;
   }
 
   private resetRemoteCursorVisualState(): void {
@@ -5987,7 +7546,8 @@ struct RustDeskIndex {
       if (response.ok) {
         this.keyboardEnteredSessionId = enter ? targetSessionId : '';
       }
-      this.logRelativeDebug('keyboard_enter', `enter=${enter} ok=${response.ok} session=${targetSessionId} message=${String(response.message ?? '')}`);
+      this.logRelativeDebug('keyboard_enter',
+        `enter=${enter} ok=${response.ok} applied=${String(response.applied === true)} notSupported=${String(response.notSupported === true)} session=${targetSessionId} message=${String(response.message ?? '')}`);
     } catch (error) {
       this.logRelativeDebug('keyboard_enter', `enter=${enter} session=${targetSessionId} failed=${String(error)}`);
     }
@@ -6005,7 +7565,7 @@ struct RustDeskIndex {
   }
 
   private sendMousePayload(payload: RustDeskMousePayload): void {
-    if (!this.isRemoteControlSessionActive()) {
+    if (!this.isInteractiveSessionActive()) {
       return;
     }
     this.sendMousePayloadToSession(this.activeSessionId, payload, true);
@@ -6020,8 +7580,14 @@ struct RustDeskIndex {
       return;
     }
     try {
-      const response = this.parseResponse(native.sessionSendMouse(sessionId, JSON.stringify(payload)));
+      const response = this.parseResponse(native.sessionSendMouse(
+        sessionId,
+        JSON.stringify(payload),
+        this.currentInputGeneration(),
+      ));
       if (!response.ok && reportFailure && this.activeSessionId === sessionId) {
+        // A refusal names the generation the session is at now.
+        this.adoptInputGeneration(response);
         this.errorText = response.message ?? 'Mouse input failed';
       }
     } catch (error) {
@@ -6149,7 +7715,7 @@ struct RustDeskIndex {
   }
 
   private handlePreviewTouchEvent(event: TouchEvent): void {
-    if (!this.isRemoteControlSessionActive()) {
+    if (!this.isInteractiveSessionActive()) {
       return;
     }
     this.requestPreviewInputFocus();
@@ -6157,13 +7723,21 @@ struct RustDeskIndex {
   }
 
   private sendKeyPayloadObject(payload: RustDeskKeyPayload): boolean {
-    if (!this.isRemoteControlSessionActive()) {
+    if (!this.isInteractiveSessionActive()) {
       return false;
     }
     try {
-      const response = this.parseResponse(native.sessionInputKey(this.activeSessionId, JSON.stringify(payload)));
-      this.logRelativeDebug('keyboard_send_legacy', `ok=${response.ok} name=${payload.name} down=${payload.down} press=${payload.press}`);
+      const response = this.parseResponse(native.sessionInputKey(
+        this.activeSessionId,
+        JSON.stringify(payload),
+        this.currentInputGeneration(),
+      ));
+      // The key itself is never named here: a key name identifies a keystroke, and a
+      // sequence of them reconstructs what was typed, which can be a password.
+      this.logRelativeDebug('keyboard_send_legacy', `ok=${response.ok} down=${payload.down} press=${payload.press}`);
       if (!response.ok) {
+        // A refusal names the generation the session is at now.
+        this.adoptInputGeneration(response);
         this.errorText = response.message ?? 'Keyboard input failed';
         return false;
       }
@@ -6178,10 +7752,28 @@ struct RustDeskIndex {
     if (!this.isRemoteControlSessionActive()) {
       return false;
     }
+    if (payload.inputGeneration === undefined) {
+      // The mapper that built this payload is not bound to a session, so the value
+      // is captured here, at the moment the real event is sent. A payload that
+      // already names a generation keeps it: an older event is never rewritten onto
+      // the current generation.
+      const generation = this.currentInputGeneration();
+      if (generation === undefined) {
+        // Nothing has been adopted yet, so there is no real value to name. The event
+        // is refused here instead of being sent as 0 or without one; the next poll,
+        // or any input refusal, adopts the value the native side reports.
+        this.logRelativeDebug('keyboard_send_flutter', 'skipped: no adopted input generation yet');
+        return false;
+      }
+      payload.inputGeneration = generation;
+    }
     try {
       const response = this.parseResponse(native.sessionHandleFlutterKeyEvent(this.activeSessionId, JSON.stringify(payload)));
-      this.logRelativeDebug('keyboard_send_flutter', `ok=${response.ok} usb=${payload.usb_hid} down=${payload.down_or_up} charLen=${payload.character.length}`);
+      this.logRelativeDebug('keyboard_send_flutter', `ok=${response.ok} down=${payload.down_or_up}`);
       if (!response.ok) {
+        // The refusal names the generation the session is at now; adopting it is how
+        // the next event is admitted. This event is not replayed.
+        this.adoptInputGeneration(response);
         this.errorText = response.message ?? 'Flutter keyboard input failed';
         return false;
       }
@@ -6194,7 +7786,7 @@ struct RustDeskIndex {
   }
 
   private handlePreviewMouseEvent(event: MouseEvent): void {
-    if (!this.isRemoteControlSessionActive()) {
+    if (!this.isInteractiveSessionActive()) {
       return;
     }
     this.requestPreviewInputFocus();
@@ -6202,7 +7794,7 @@ struct RustDeskIndex {
   }
 
   private handlePreviewAxisEvent(event: AxisEvent): void {
-    if (!this.isRemoteControlSessionActive()) {
+    if (!this.isInteractiveSessionActive()) {
       return;
     }
     this.requestPreviewInputFocus();
@@ -6210,19 +7802,27 @@ struct RustDeskIndex {
   }
 
   private handlePreviewKeyEvent(event: KeyEvent): boolean {
-    if (!this.isRemoteControlSessionActive()) {
+    if (!this.isInteractiveSessionActive()) {
       return false;
     }
     this.requestPreviewInputFocus();
-    this.logRelativeDebug('keyboard_event', `keyCode=${event.keyCode} type=${String(event.type)} keyText=${String(event.keyText ?? '')} unicode=${String(event.unicode ?? '')}`);
+    if (this.inputInterceptorActive) {
+      // The native interceptor already owns this keystroke; forwarding it from
+      // ArkUI as well would send it twice.
+      return true;
+    }
+    this.logRelativeDebug('keyboard_event', `type=${String(event.type)}`);
     return this.getInputController().handleKeyEvent(event);
   }
 
   private handlePreviewRootKeyEvent(event: KeyEvent): boolean {
-    if (!this.isRemoteControlSessionActive()) {
+    if (!this.isInteractiveSessionActive()) {
       return false;
     }
-    this.logRelativeDebug('keyboard_root_event', `keyCode=${event.keyCode} type=${String(event.type)} keyText=${String(event.keyText ?? '')} unicode=${String(event.unicode ?? '')}`);
+    if (this.inputInterceptorActive) {
+      return true;
+    }
+    this.logRelativeDebug('keyboard_root_event', `type=${String(event.type)}`);
     return this.getInputController().handleKeyEvent(event);
   }
 
@@ -6268,35 +7868,18 @@ struct RustDeskIndex {
 
   private sessionToolbarMetrics(): SessionToolbarMetrics {
     return formatSessionToolbarMetrics(
-      this.qualityTelemetry.fps,
-      this.qualityTelemetry.delay,
+      this.qualityTelemetry.submittedFps,
+      this.qualityTelemetry.networkRttMs,
       this.qualityTelemetry.codec,
     );
   }
 
-  private refreshQualitySummary(): void {
-    this.qualitySummary = `Remote fps ${this.qualityTelemetry.fps} | delay ${this.qualityTelemetry.delay} | codec ${this.qualityTelemetry.codec}`;
-  }
 
   private shortRemoteStatusText(): string {
-    return `fps ${this.qualityTelemetry.fps} | delay ${this.qualityTelemetry.delay} | codec ${this.qualityTelemetry.codec} | ${this.getPointerModeName()}`;
+    const metrics = this.sessionToolbarMetrics();
+    return `提交 ${metrics.fps} FPS | RTT ${metrics.delay} ms | ${metrics.codec} | ${this.getPointerModeName()}`;
   }
 
-  private extractRemoteFps(raw: string | undefined): string | undefined {
-    if (!raw || raw.length === 0) {
-      return undefined;
-    }
-    try {
-      const fpsMap = JSON.parse(raw) as Record<string, number>;
-      const current = fpsMap[String(this.viewportModel.getCurrentDisplayIndex())];
-      if (typeof current === 'number') {
-        return String(current);
-      }
-    } catch (_) {
-      return raw;
-    }
-    return undefined;
-  }
 
   private parseSupportedResolutions(raw: string | undefined): ResolutionInfo[] {
     if (!raw || raw.length === 0) {
@@ -6361,6 +7944,11 @@ struct RustDeskIndex {
       );
       const currentDisplay = this.sessionDisplayController.getCurrentDisplayIndex();
       this.currentDisplayIndex = currentDisplay;
+      const shown = this.peerDisplays[currentDisplay];
+      if (shown !== undefined) {
+        // A direct RDP session reports its new desktop through peer_info.
+        this.confirmPendingResolution(currentDisplay, shown.width, shown.height);
+      }
       this.refreshSessionOrientation();
       this.ensureRemoteCursorEnabled();
       hilog.info(
@@ -6419,14 +8007,75 @@ struct RustDeskIndex {
         this.syncSurfaceBinding(false);
       }
     }
-    if (this.pendingResolutionDisplay === display
-      && this.pendingResolutionWidth === Math.round(width)
-      && this.pendingResolutionHeight === Math.round(height)) {
-      this.pendingResolutionDisplay = -1;
-      this.pendingResolutionWidth = 0;
-      this.pendingResolutionHeight = 0;
-      this.sessionMessage = `远端分辨率已确认 ${Math.round(width)}x${Math.round(height)}`;
+    this.confirmPendingResolution(display, width, height);
+    this.applyDisplayConfiguration();
+    this.reprojectVirtualCursorOverlay();
+  }
+
+  /** Clears a resolution request once the display it named really reports that size. */
+  private confirmPendingResolution(display: number, width: number, height: number): void {
+    if (this.pendingResolutionDisplay !== display
+      || this.pendingResolutionWidth !== Math.round(width)
+      || this.pendingResolutionHeight !== Math.round(height)) {
+      return;
     }
+    this.pendingResolutionDisplay = -1;
+    this.pendingResolutionWidth = 0;
+    this.pendingResolutionHeight = 0;
+    this.sessionMessage = `远端分辨率已确认 ${Math.round(width)}x${Math.round(height)}`;
+  }
+
+  /**
+   * Measured rectangle the video Surface is laid out at.
+   *
+   * Every input is an ArkUI-observed field. `viewportModel` is a plain object,
+   * so its internal geometry mutations do not invalidate XComponent layout;
+   * using the observed mirrors makes the first viewport/display report resize
+   * the initial Surface without waiting for a display-mode toggle.
+   */
+  private previewSurfaceSize(): RustDeskSize {
+    const display = this.currentDisplayIndex >= 0 && this.currentDisplayIndex < this.peerDisplays.length
+      ? this.peerDisplays[this.currentDisplayIndex]
+      : undefined;
+    return computeSurfaceGeometry(
+      this.previewDisplayMode,
+      display === undefined ? 0 : display.width,
+      display === undefined ? 0 : display.height,
+      this.previewViewWidth,
+      this.previewViewHeight,
+      this.getUIContext().vp2px(1),
+    );
+  }
+
+  /**
+   * Fit of the RGBA fallback picture.
+   *
+   * The fallback draws in the view rather than in the native Surface, so it has
+   * to follow the same control instead of its own fixed choice.
+   */
+  private previewFallbackFit(): ImageFit {
+    if (this.previewDisplayMode === 'stretch') {
+      return ImageFit.Fill;
+    }
+    return this.previewDisplayMode === 'original' ? ImageFit.None : ImageFit.Contain;
+  }
+
+  /**
+   * Changes how the remote frame is fitted.
+   *
+   * The surface re-measures on its own, but the renderer is only told the new
+   * rectangle from `applyDisplayConfiguration`, and that call skips its work
+   * when the display and video size are unchanged -- which is exactly the case
+   * here. The applied geometry is therefore invalidated first.
+   */
+  private selectPreviewDisplayMode(mode: RustDeskDisplayMode): void {
+    if (this.previewDisplayMode === mode) {
+      return;
+    }
+    this.previewDisplayMode = mode;
+    this.lastAppliedDisplay = -1;
+    this.lastAppliedVideoWidth = 0;
+    this.lastAppliedVideoHeight = 0;
     this.applyDisplayConfiguration();
     this.reprojectVirtualCursorOverlay();
   }
@@ -6435,6 +8084,11 @@ struct RustDeskIndex {
     if (!this.activeSessionId || this.peerDisplays.length === 0) {
       return;
     }
+    // Input is mapped through the rectangle the picture occupies, which is the
+    // mode's own rectangle, and through the clip of whichever presentation is on
+    // screen, so the model is told both before it is read.
+    this.viewportModel.setDisplayMode(this.previewDisplayMode);
+    this.viewportModel.setFallbackPresentation(this.previewFramePixelMap !== undefined && this.rgbaFallbackActive);
     const plan = this.viewportModel.buildRenderPlan();
     if (!plan) {
       this.frameStatus = 'Display geometry not ready';
@@ -6500,6 +8154,9 @@ struct RustDeskIndex {
     sessionId: string,
   ): RustDeskSurfaceController {
     const controller = new RustDeskSurfaceController();
+    const nodeId = `rustdesk-preview-surface-${generation.toString()}`;
+    controller.onAttached = (): void => this.adoptPreviewSurfaceComponent(nodeId, controller);
+    controller.onDetached = (): void => this.detachPreviewSurfaceComponent(controller.adoptedComponentId);
     controller.onCreated = (surfaceId: string): void =>
       this.handlePreviewSurfaceCreated(surfaceId, generation, sessionId);
     controller.onChanged = (surfaceId: string, rect: SurfaceRect): void =>
@@ -6522,7 +8179,9 @@ struct RustDeskIndex {
         return;
       }
       this.previewSurfaceId = surfaceId;
+      this.previewSurfaceDestroyAuthorized = false;
       this.frameStatus = `Surface created ${surfaceId}`;
+      this.declarePanelFrameRate();
       this.syncSurfaceBinding();
     }, 0);
   }
@@ -6532,7 +8191,7 @@ struct RustDeskIndex {
       return;
     }
     try {
-      const surfaceId = this.previewController.getXComponentSurfaceId();
+      const surfaceId = this.previewController.getSurfaceId();
       if (surfaceId.length > 0) {
         this.previewSurfaceId = surfaceId;
         this.frameStatus = `Surface recovered ${surfaceId}`;
@@ -6556,6 +8215,8 @@ struct RustDeskIndex {
       this.frameHeight = rect.surfaceHeight;
       this.viewportModel.setSurfaceSize(rect.surfaceWidth, rect.surfaceHeight);
       this.frameStatus = `Surface ready ${rect.surfaceWidth}x${rect.surfaceHeight}`;
+      // The node exists from here on, which is what the panel expectation needs.
+      this.declarePanelFrameRate();
       this.applyDisplayConfiguration();
       this.reprojectVirtualCursorOverlay();
     }, 0);
@@ -6563,11 +8224,30 @@ struct RustDeskIndex {
 
   private handlePreviewSurfaceDestroyed(surfaceId: string, generation: number, sessionId: string): void {
     setTimeout(() => {
-      if (!this.isCurrentPreviewSurface(generation, sessionId) || surfaceId !== this.previewSurfaceId) {
+      // The pane is identified by its generation: a stale callback from an older
+      // component must not touch the current one, and the session the pane serves
+      // is the one captured when it was created.
+      if (generation !== this.previewSurfaceGeneration || sessionId.length === 0) {
         return;
       }
+      const authorized = this.previewSurfaceDestroyAuthorized;
+      this.previewSurfaceDestroyAuthorized = false;
       this.inputController?.releasePressedButtons();
-      this.clearSurfaceBinding();
+      if (!authorized) {
+        // The native holder already revoked admission and requested this viewer's
+        // close when its Surface was destroyed, and this bridge exports no destroy
+        // notification. Nothing here is a release or an ACK: the session's own
+        // close/poll/ACK order settles it, and the holder id stays on the
+        // controller until a detach really answers released:true.
+        hilog.warn(DOMAIN, TAG,
+          'surface destroyed without a confirmed release session=%{public}s surface=%{public}s component=%{public}s',
+          sessionId, surfaceId,
+          this.previewController.adoptedComponentId.length > 0
+            ? this.previewController.adoptedComponentId : '-');
+      }
+      if (surfaceId !== this.previewSurfaceId) {
+        return;
+      }
       this.previewSurfaceId = '';
       this.frameWidth = 0;
       this.frameHeight = 0;
@@ -6577,17 +8257,30 @@ struct RustDeskIndex {
   }
 
   private syncSurfaceBinding(refreshAfterBind: boolean = true): boolean {
-    if (!this.activeSessionId || this.previewSurfaceId.length === 0) {
+    if (!this.activeSessionId) {
+      return false;
+    }
+    if (this.previewComponentId.length === 0) {
+      // The third argument is the opaque componentId xcomponentAttach allocated on
+      // this UI environment. An empty string is the give-back request, so it is
+      // never sent from here, and no node label or Surface id is substituted.
+      this.previewSurfaceBindFailure = '没有已接管的原生 XComponent holder（componentId 为空）';
       return false;
     }
     try {
       const response = this.parseResponse(native.sessionBindSurface(
         this.activeSessionId,
         this.viewportModel.getCurrentDisplayIndex(),
-        this.previewSurfaceId
+        this.previewComponentId,
+        this.activeSessionLifecycleEpoch
       ));
       this.updateSessionState(response);
       if (!response.ok) {
+        // A bind refusal carries only this message, so it is kept verbatim for the
+        // caller to render instead of being replaced by a guessed reason.
+        this.previewSurfaceBindFailure = response.message ?? '';
+        hilog.warn(DOMAIN, TAG, 'surface bind refused session=%{public}s message=%{public}s',
+          this.activeSessionId, this.previewSurfaceBindFailure);
         return false;
       }
       this.setSessionVideoPaused(this.activeSessionId, false);
@@ -6596,7 +8289,7 @@ struct RustDeskIndex {
         activeTab.paused = false;
         this.syncRemoteSessionTabs();
       }
-      if (this.isRemoteControlSessionActive()) {
+      if (this.isInteractiveSessionActive()) {
         this.remoteInteractionReady = true;
         this.syncClipboardController();
         this.syncInputInterceptor();
@@ -6611,18 +8304,87 @@ struct RustDeskIndex {
     }
   }
 
-  private clearSurfaceBinding(): void {
+  /**
+   * Gives the Surface back to the native side.
+   *
+   * Returns whether the destination was really released. A destination whose
+   * producer still owes a join stays held: the native side keeps it, the
+   * component must not be destroyed, and the caller keeps polling instead of
+   * being told a release happened.
+   */
+  private clearSurfaceBinding(): boolean {
     if (!this.activeSessionId) {
-      return;
+      return true;
     }
+    // A give-back carries no componentId: it asks this session's own record to
+    // drop its destination. Whether that happened is read from released below,
+    // never from an id the UI still happens to hold.
     try {
-      this.updateSessionState(this.parseResponse(native.sessionBindSurface(
+      const response = this.parseResponse(native.sessionBindSurface(
         this.activeSessionId,
         this.viewportModel.getCurrentDisplayIndex(),
-        ''
-      )));
-    } catch (_) {
+        '',
+        this.activeSessionLifecycleEpoch
+      ));
+      this.updateSessionState(response);
+      if (response.released !== true) {
+        // Only an explicit released:true clears the local destination. A held
+        // holder or an unproven answer keeps it, so the next give-back is still
+        // possible and no release is claimed without a receipt.
+        hilog.warn(DOMAIN, TAG,
+          'surface give-back not released session=%{public}s ok=%{public}s held=%{public}s surfaces=%{public}d message=%{public}s',
+          this.activeSessionId, String(response.ok === true), String(response.held === true),
+          (response.surfaces ?? []).length, response.message ?? '');
+        return false;
+      }
+      this.previewSurfaceId = '';
+      return true;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'surface give-back failed session=%{public}s error=%{public}s',
+        this.activeSessionId, String(error));
+      return false;
     }
+  }
+
+  /**
+   * Adopts the engine input generation the viewer published in this poll.
+   *
+   * The viewer refuses input carrying a stale generation, so the value must come
+   * from the poll that just proved the session is alive on that generation; it is
+   * never derived from a local counter.
+   */
+  private adoptInputGeneration(response: ActionResponse): void {
+    // The owed-hold count travels with the same answers as the generation and is
+    // adopted whenever native names one: an absent value is unknown, never zero.
+    const holdsOwed = response.session?.inputHoldsOwed ?? response.inputHoldsOwed;
+    if (holdsOwed !== undefined) {
+      this.activeInputHoldsOwed = holdsOwed;
+    }
+    const generation = response.session?.inputGeneration ?? response.inputGeneration;
+    if (generation === undefined || generation.length === 0) {
+      return;
+    }
+    this.activeInputGeneration = generation;
+    const tab = this.remoteSessionTabsController.get(this.activeSessionId);
+    if (tab !== undefined) {
+      tab.inputGeneration = generation;
+    }
+  }
+
+  /**
+   * The generation to send with this session's input, or `undefined` while the
+   * session has not reported one yet.
+   *
+   * Every kind sends the value the native side itself published — a poll's
+   * `session.inputGeneration` or an input refusal's `inputGeneration` — because
+   * Main ruled that a cached older generation being refused after a permission
+   * flip is the correct boundary, not a lost event to be avoided by naming the
+   * call-time live generation. Nothing is ever derived locally: before the first
+   * native value the generation is simply not sent, and a refusal's value is
+   * adopted for the next (new) event; a refused event is never replayed.
+   */
+  private currentInputGeneration(): string | undefined {
+    return this.activeInputGeneration.length > 0 ? this.activeInputGeneration : undefined;
   }
 
   private updateSessionState(response: ActionResponse): void {
@@ -6630,6 +8392,14 @@ struct RustDeskIndex {
       this.activeSessionId = response.session.sessionId;
       this.activeCoreSessionId = response.session.coreSessionId ?? '';
       this.sessionPhase = response.session.phase;
+      const epoch = response.session.lifecycleEpoch;
+      if (epoch !== undefined && epoch.length > 0) {
+        this.activeSessionLifecycleEpoch = epoch;
+        const activeTab = this.remoteSessionTabsController.get(response.session.sessionId);
+        if (activeTab !== undefined) {
+          activeTab.lifecycleEpoch = epoch;
+        }
+      }
     }
     this.sessionMessage = response.message ?? response.action;
     if (!response.ok) {
@@ -6651,14 +8421,15 @@ struct RustDeskIndex {
       return;
     }
     try {
-      const quality = this.qualityPresetFor(this.activeSessionDefaults);
-      if (this.sessionDisplayController.applyQuality(
-        this.activeSessionId,
-        quality,
-        this.activeSessionDefaults.customQuality,
-        this.activeSessionDefaults.customFps,
-      )) {
-        this.selectedQualityPreset = this.sessionDisplayController.getImageQuality();
+      // A Core session is the only wire this client can ask for a capture rate:
+      // the direct VNC/RDP wires have no rate control, so the request is not sent
+      // there at all rather than being refused into the session's error state.
+      if (this.activeSessionKind === 'remote_control'
+        && this.sessionDisplayController.applyRefreshRate(
+          this.activeSessionId,
+          this.selectedRefreshRate,
+        )) {
+        this.selectedRefreshRate = this.sessionDisplayController.getRefreshRate();
       }
       this.applyCodecPreference();
       this.performanceTuningApplied = true;
@@ -6674,11 +8445,38 @@ struct RustDeskIndex {
     if (this.codecPreferenceApplied) {
       return;
     }
+    if (this.isDirectWireSession()) {
+      // The engine owns a direct wire's codec, and the codec-preference call is
+      // the Core's own option store: on these wires it is refused by name, and
+      // reporting that refusal as a preference that failed to apply would be a
+      // false operation. Nothing is asked for and nothing is claimed.
+      this.codecPreferenceApplied = true;
+      this.logRelativeDebug('codec_preference', `skipped kind=${this.activeSessionKind}`);
+      return;
+    }
     try {
       const response = this.parseResponse(native.sessionSetCodecPreference(this.activeSessionId, this.preferredCodec));
+      // The answer carries the value the Core's own option store holds, not an echo
+      // of the request: a mismatch is the native side's own refusal, and a real
+      // failure is kept visible and retried after the connection is up rather than
+      // being reported as applied.
       this.codecPreferenceApplied = response.ok;
-      if (!response.ok && response.message) {
-        this.logRelativeDebug('codec_preference', response.message);
+      this.logRelativeDebug('codec_preference',
+        `ok=${response.ok} requested=${this.preferredCodec} stored=${String(response.codec ?? '')} storedFlag=${String(response.stored === true)} coreAccepted=${String(response.coreAccepted === true)} message=${String(response.message ?? '')}`);
+      if (!response.ok && response.stored === true && response.coreAccepted === false) {
+        // The preference was verified in the Core's own option store, so it is what
+        // the next handshake carries; only the re-advertisement was refused now.
+        // That is a notice, not a failure of the operator's action, and the
+        // post-connection retry below still runs.
+        this.showSessionNotice(
+          `偏好已保存，连接建立后将重新通告（原因：${response.message ?? '原生层未接受本次通告'}）`,
+        );
+      } else if (!response.ok && response.stored !== true) {
+        // The Core did not store the preference, so it is not in force for the next
+        // handshake; the session still starts on the peer's own default.
+        this.showSessionNotice(
+          `编码偏好未生效（${response.message ?? '原生层未保存该值'}）`,
+        );
       }
     } catch (error) {
       this.logRelativeDebug('codec_preference', `failed=${String(error)}`);
@@ -6691,6 +8489,7 @@ struct RustDeskIndex {
     }
     const response = this.parseResponse(native.sessionPollEvents(this.activeSessionId, limit));
     this.updateSessionState(response);
+    this.adoptInputGeneration(response);
     const events = (response.events ?? []) as NativeEvent[];
     if (events.length > 0) {
       hilog.info(DOMAIN, TAG, 'pollSessionEventsOnce count=%{public}d phase=%{public}s', events.length, this.sessionPhase);
@@ -6716,22 +8515,51 @@ struct RustDeskIndex {
       }
       for (const tab of tabs) {
         if (tab.sessionId === this.activeSessionId) {
-          const response = this.parseResponse(native.sessionPollEvents(tab.sessionId, 20));
+          const rawPoll = native.sessionPollEvents(tab.sessionId, 20);
+          const response = this.parseResponse(rawPoll);
           this.updateSessionState(response);
+          this.adoptInputGeneration(response);
           tab.coreSessionId = response.session?.coreSessionId ?? tab.coreSessionId;
           tab.phase = response.session?.phase ?? tab.phase;
           tab.connected = tab.phase === 'connected';
+          const events = (response.events ?? []) as NativeEvent[];
+          if (response.closed_externally === true) {
+            this.noteExternallyClosedSession(tab.sessionId, response.settle ?? '');
+          } else {
+            const certificateEvent = events.find((event: NativeEvent): boolean => event.name === 'certificate_untrusted');
+            if (certificateEvent !== undefined) {
+              this.openRdpCertificateDialog(certificateEvent);
+            }
+            if (this.rdpCertificateRejectedSessions.has(tab.sessionId)) {
+              continue;
+            }
+          }
+          // A direct wire names its own failure in this envelope, and the close
+          // event it sends in the same answer is the only thing that would
+          // otherwise reach the operator as the generic "connection ended"
+          // wording. It is read from the raw answer, and only when that answer
+          // could end the session, so the ordinary poll pays nothing for it.
+          if (!response.ok || events.some((event: NativeEvent) => event.name === 'close')) {
+            this.noteDirectWireFailure(rawPoll, response, tab.kind, tab.sessionId);
+          }
           if (!response.ok) {
             this.closeRemoteAudio();
+            const directFailure = isDirectWireKind(tab.kind) ? this.directWireFailureFor(tab.sessionId) : '';
+            if (directFailure.length > 0) {
+              this.handleRemoteDisconnect(directFailure);
+            }
             continue;
           }
-          if (this.activeSessionKind === 'remote_control' && !this.isRemoteAudioSessionActive()) {
+          if (!this.isRemoteAudioSessionActive()) {
             this.closeRemoteAudio();
           }
-          const events = (response.events ?? []) as NativeEvent[];
           if (events.length > 0) {
-            hilog.info(DOMAIN, TAG, 'pollSessionEvents count=%{public}d phase=%{public}s', events.length, this.sessionPhase);
+            hilog.info(DOMAIN, TAG, 'pollSessionEvents count=%{public}d phase=%{public}s engine=%{public}s',
+              events.length, this.sessionPhase, tab.phase);
           }
+          // The batch's own names are logged by `logEventBatch` below. The raw
+          // envelope is not: it can carry clipboard text and file paths, and the
+          // direct wire's failure text is already read out by `noteDirectWireFailure`.
           this.logEventBatch(events, 'poll');
           this.logCursorEventBatch(events, 'poll');
           events.forEach((event: NativeEvent) => this.handleSessionEvent(event));
@@ -6743,6 +8571,7 @@ struct RustDeskIndex {
       if (this.isRemoteControlSessionActive()) {
         this.ensureRemoteCursorEnabled();
       }
+      this.pollFrameRateTelemetry();
       this.syncRemoteSessionTabs();
     } catch (error) {
       this.errorText = String(error);
@@ -6752,21 +8581,82 @@ struct RustDeskIndex {
     }
   }
 
+  private pollFrameRateTelemetry(): void {
+    if (!this.isInteractiveSessionActive() || this.activeSessionId.length === 0) {
+      this.frameRateTelemetry.reset();
+      this.qualityTelemetry = clearQualityFrameMetrics(this.qualityTelemetry);
+      return;
+    }
+    const binding = `${this.activeSessionId}:${this.activeCoreSessionId}`;
+    if (!this.frameRateTelemetry.shouldRead(binding, Date.now())) {
+      return;
+    }
+    try {
+      const display = this.viewportModel.getCurrentDisplayIndex();
+      const raw = this.nativeSessionBridge.getFrameRateSnapshot(this.activeSessionId, display);
+      const snapshot = this.frameRateTelemetry.sample(raw, display);
+      hilog.info(DOMAIN, TAG, 'frame_rate_sample raw=%{public}s', raw);
+      if (this.frameRateTelemetry.consumeFrameReset()) {
+        this.qualityTelemetry = clearQualityFrameMetrics(this.qualityTelemetry);
+      }
+      if (snapshot !== undefined) {
+        const requestedFps = Number.isFinite(this.selectedRefreshRate) && this.selectedRefreshRate > 0
+          ? String(Math.round(this.selectedRefreshRate)) : '';
+        // Replace the value so the toolbar and open quality sheet both update.
+        this.qualityTelemetry = applyFrameRateSnapshot(this.qualityTelemetry, snapshot, requestedFps);
+      }
+      // The system panel rate is independent of requested and submitted FPS.
+      const panel = this.currentPanelRefreshRate();
+      if (panel !== this.panelRefreshRate) {
+        hilog.info(DOMAIN, TAG, 'panel_refresh_rate changed %{public}d -> %{public}d', this.panelRefreshRate, panel);
+      }
+      this.panelRefreshRate = panel;
+    } catch (error) {
+      this.frameRateTelemetry.reset();
+      this.qualityTelemetry = clearQualityFrameMetrics(this.qualityTelemetry);
+      hilog.warn(DOMAIN, TAG, 'frame rate sample failed: %{public}s', String(error));
+    }
+  }
+
+
   private pollBackgroundSessionEvents(tab: RemoteSessionTab): void {
     const response = this.parseResponse(native.sessionPollEvents(tab.sessionId, 20));
+    const backgroundGeneration = response.session?.inputGeneration ?? response.inputGeneration;
+    if (backgroundGeneration !== undefined && backgroundGeneration.length > 0) {
+      tab.inputGeneration = backgroundGeneration;
+    }
     if (response.session !== undefined) {
       tab.coreSessionId = response.session.coreSessionId ?? tab.coreSessionId;
       tab.phase = response.session.phase;
       tab.connected = tab.phase === 'connected';
     }
+    const events = (response.events ?? []) as NativeEvent[];
+    if (response.closed_externally === true) {
+      this.noteExternallyClosedSession(tab.sessionId, response.settle ?? '');
+    } else {
+      const certificateEvent = events.find((event: NativeEvent): boolean => event.name === 'certificate_untrusted');
+      const challenge = certificateEvent === undefined ? undefined : rdpCertificateChallengeFromEvent(certificateEvent);
+      if (certificateEvent !== undefined && challenge !== undefined &&
+        this.certificateEventMatchesSession(challenge, tab.sessionId) &&
+        !this.rdpCertificateRejectedSessions.has(tab.sessionId)) {
+        this.rdpCertificateRejectedSessions.add(tab.sessionId);
+        this.remoteSessionTabsController.markPhase(tab.sessionId, 'failed',
+          this.certificateMessage($r('app.string.rdp_certificate_waiting')));
+        this.remoteSessionTabsController.enqueue(tab.sessionId, certificateEvent, true);
+      }
+      if (this.rdpCertificateRejectedSessions.has(tab.sessionId)) {
+        return;
+      }
+    }
     if (!response.ok) {
+      this.forgetRdpCertificateCredentials(tab.sessionId);
       tab.needsAttention = true;
       tab.message = response.message ?? '后台会话不可用';
       return;
     }
-    const events = (response.events ?? []) as NativeEvent[];
     for (const event of events) {
       if (event.name === 'peer_info' || event.name === 'sync_peer_info') {
+        this.forgetRdpCertificateCredentials(tab.sessionId);
         this.remoteSessionTabsController.markPeerInfo(tab.sessionId, event);
         this.setSessionVideoPaused(tab.sessionId, true);
         this.nativeSessionBridge.setRemoteAudioMuted(tab.sessionId, true);
@@ -6777,6 +8667,13 @@ struct RustDeskIndex {
         continue;
       }
       if (event.name === 'clipboard_multi') {
+        if (isDirectWireKind(tab.kind)) {
+          // A direct wire's take is non-consuming and its notification arrives once
+          // per peer revision, so the fact is kept for activation: discarding it
+          // here would lose the text the peer copied while this tab was in the
+          // background, and no later notification would bring it back.
+          this.clipboardPeerUpdateSessions.add(tab.sessionId);
+        }
         const clipboard = this.nativeSessionBridge.takeClipboard(tab.sessionId);
         if (clipboard.image !== undefined && clipboard.image !== null) {
           this.nativeSessionBridge.takeClipboardImage(tab.sessionId);
@@ -6788,15 +8685,18 @@ struct RustDeskIndex {
         continue;
       }
       if (event.name === 'clipboard' || event.name === 'clipboard_files'
+        || event.name === 'clipboard_write_result'
         || event.name === 'cursor_position' || event.name === 'update_quality_status') {
         continue;
       }
       if (event.name === 'close') {
+        this.forgetRdpCertificateCredentials(tab.sessionId);
         this.remoteSessionTabsController.markPhase(tab.sessionId, 'closed', '远端连接已结束');
         this.remoteSessionTabsController.enqueue(tab.sessionId, event, true);
         continue;
       }
-      const needsAttention = event.name === 'msgbox' || event.name === 'switch_display';
+      const needsAttention = event.name === 'msgbox' || event.name === 'switch_display'
+        || event.name === 'resolution_refused';
       this.remoteSessionTabsController.enqueue(tab.sessionId, event, needsAttention);
     }
   }
@@ -6842,11 +8742,99 @@ struct RustDeskIndex {
     );
   }
 
+  /**
+   * Remembers what one direct poll envelope said went wrong.
+   *
+   * The engine reports a direct wire's own cause in the envelope's `error` field,
+   * and a refusal of the poll itself in `message`; both are kept as they arrived
+   * rather than reworded, because this text is the whole cause the operator can
+   * be given. Only the session that is actually in front is read and written, so a
+   * background tab's poll can neither overwrite the active session's cause nor
+   * leave its own behind for a later session to claim.
+   */
+  private noteDirectWireFailure(rawPoll: string, response: ActionResponse, kind: string, sessionId: string): void {
+    if (!isDirectWireKind(kind) || sessionId.length === 0 || sessionId !== this.activeSessionId) {
+      return;
+    }
+    const reported = this.pollEnvelopeError(rawPoll);
+    if (reported.length > 0) {
+      this.directWireFailureText = reported;
+      this.directWireFailureSessionId = sessionId;
+      hilog.warn(DOMAIN, TAG, 'direct wire reported a failure: %{public}s', reported);
+      return;
+    }
+    const message = (response.message ?? '').trim();
+    if (!response.ok && message.length > 0) {
+      this.directWireFailureText = message;
+      this.directWireFailureSessionId = sessionId;
+      hilog.warn(DOMAIN, TAG, 'direct poll refused: %{public}s', message);
+    }
+  }
+
+  /** Forgets the failure text held for whichever session reported it. */
+  private clearDirectWireFailure(): void {
+    this.directWireFailureText = '';
+    this.directWireFailureSessionId = '';
+  }
+
+  /** The failure held for one session, or `''` when it belongs to another. */
+  private directWireFailureFor(sessionId: string): string {
+    if (sessionId.length === 0 || this.directWireFailureSessionId !== sessionId) {
+      return '';
+    }
+    return this.directWireFailureText;
+  }
+
+  /**
+   * The `error` one poll answer carried, read from the raw envelope.
+   *
+   * The typed response this client parses does not model that field, and the
+   * envelope is the only place the engine's own wording for a direct wire lives,
+   * so it is read here once instead of being guessed from a generic phase.
+   */
+  private pollEnvelopeError(rawPoll: string): string {
+    try {
+      const envelope: ESObject = JSON.parse(rawPoll);
+      const reported: ESObject = envelope.error;
+      if (typeof reported === 'string' && (reported as string).trim().length > 0) {
+        return (reported as string).trim();
+      }
+      return '';
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'poll envelope error read failed: %{public}s', String(error));
+      return '';
+    }
+  }
+
+  /**
+   * What one close really was, in the terms the operator can act on.
+   *
+   * A direct wire reports its own cause, and that text is shown; a session that
+   * ended without naming one keeps the generic wording.
+   */
+  private closeReasonForActiveSession(): string {
+    if (this.isDirectWireSession()) {
+      const reported = this.directWireFailureFor(this.activeSessionId);
+      if (reported.length > 0) {
+        return reported;
+      }
+    }
+    return '远端连接已结束';
+  }
+
   private handleSessionEvent(event: NativeEvent): void {
+    if (event.name === 'certificate_untrusted') {
+      this.openRdpCertificateDialog(event);
+      return;
+    }
     if (event.name === 'close') {
-      this.remoteSessionTabsController.markPhase(this.activeSessionId, 'closed', '远端连接已结束');
+      if (this.rdpCertificateRejectedSessions.has(this.activeSessionId)) {
+        return;
+      }
+      const reason = this.closeReasonForActiveSession();
+      this.remoteSessionTabsController.markPhase(this.activeSessionId, 'closed', reason);
       this.syncRemoteSessionTabs();
-      this.handleRemoteDisconnect('远端连接已结束');
+      this.handleRemoteDisconnect(reason);
       return;
     }
     if (event.name === 'permission') {
@@ -6871,6 +8859,9 @@ struct RustDeskIndex {
       return;
     }
     if (event.name === 'connection_ready') {
+      if (this.activeSessionKind === 'rdp') {
+        this.forgetRdpCertificateCredentials(this.activeSessionId);
+      }
       this.connectionSummary = `secure=${String(event.secure)}, direct=${String(event.direct)}, stream=${String(event.stream_type)}`;
       if (this.connectionUiPhase === 'connecting' || this.connectionUiPhase === 'authenticating') {
         const secure = String(event.secure).trim().toLowerCase() === 'true';
@@ -6884,7 +8875,30 @@ struct RustDeskIndex {
       this.performanceTuningApplied = false;
       return;
     }
+    if (event.name === 'audio_capability') {
+      if (this.activeSessionKind === 'rdp' && event.audio !== undefined) {
+        this.directAudioCapability = event.audio;
+        this.refreshRemoteAudioState();
+      }
+      return;
+    }
+    if (event.name === 'resolution_refused') {
+      if (matchesResolutionRefusal(event, this.pendingResolutionDisplay,
+        this.pendingResolutionWidth, this.pendingResolutionHeight)) {
+        this.pendingResolutionDisplay = -1;
+        this.pendingResolutionWidth = 0;
+        this.pendingResolutionHeight = 0;
+        this.clearRdpFollowResize();
+      }
+      this.sessionMessage = event.message ?? '';
+      return;
+    }
     if (event.name === 'peer_info' || event.name === 'sync_peer_info') {
+      this.forgetRdpCertificateCredentials(this.activeSessionId);
+      if (this.activeSessionKind === 'rdp' && event.audio !== undefined) {
+        this.directAudioCapability = event.audio;
+        this.refreshRemoteAudioState();
+      }
       this.clearConnectionTimeout();
       this.dismissPasswordDialogFor('primary');
       this.errorText = '';
@@ -6908,7 +8922,7 @@ struct RustDeskIndex {
         this.connectionSummary = `peer=${String(event.hostname)}, platform=${String(event.platform)}, version=${String(event.version)}`;
       }
       this.applyPerformanceTuning();
-      if (this.isRemoteControlSessionActive()) {
+      if (this.isInteractiveSessionActive()) {
         this.remoteInteractionReady = this.showPreviewModal
           && this.previewSurfaceVisible
           && this.previewSurfaceId.length > 0;
@@ -6918,7 +8932,11 @@ struct RustDeskIndex {
         }
         this.syncTouchMode(this.touchMode);
         this.syncRelativeMouseMode(this.relativeMouseMode);
-        this.ensureRemoteCursorEnabled();
+        // The show-remote-cursor option is a Core toggle: a direct wire's cursor is
+        // the engine's own, and the native layer refuses this request on one.
+        if (this.isRemoteControlSessionActive()) {
+          this.ensureRemoteCursorEnabled();
+        }
       }
       if (!this.showPreviewModal || !this.previewSurfaceVisible) {
         this.enterPreviewMode(event);
@@ -6926,8 +8944,10 @@ struct RustDeskIndex {
         this.configureDisplayFromPeerInfo(event);
       }
       if (event.name === 'peer_info') {
+        this.rememberConnectedDevice(event);
         this.refreshDirectorySnapshot();
       }
+      this.scheduleRdpFollowResize();
       return;
     }
     if (event.name === 'switch_display') {
@@ -6935,26 +8955,12 @@ struct RustDeskIndex {
       return;
     }
     if (event.name === 'update_quality_status') {
-      const fpsText = this.extractRemoteFps(event.fps);
-      if (fpsText) {
-        this.qualityTelemetry.fps = fpsText;
-      }
-      if (event.delay && event.delay.length > 0) {
-        this.qualityTelemetry.delay = String(event.delay);
-      }
-      if (event.codec_format && event.codec_format.length > 0) {
-        this.qualityTelemetry.codec = String(event.codec_format);
-      }
-      if (event.speed && event.speed.length > 0) {
-        this.qualityTelemetry.speed = String(event.speed);
-      }
-      if (event.target_bitrate && event.target_bitrate.length > 0) {
-        this.qualityTelemetry.targetBitrate = String(event.target_bitrate);
-      }
-      if (event.chroma && event.chroma.length > 0) {
-        this.qualityTelemetry.chroma = String(event.chroma);
-      }
-      this.refreshQualitySummary();
+      this.qualityTelemetry = mergeQualityStatus(this.qualityTelemetry, {
+        speed: event.speed ?? '',
+        delay: event.delay ?? '',
+        targetBitrate: event.target_bitrate ?? '',
+        codec: event.codec_format ?? '',
+      });
       return;
     }
     if (event.name === 'rgba' || event.name === 'texture') {
@@ -6976,15 +8982,29 @@ struct RustDeskIndex {
       return;
     }
     if (event.name === 'clipboard') {
-      if (this.clipboardSyncEnabled && this.isRemoteControlSessionActive()) {
+      if (this.isClipboardTextSyncAllowed()) {
         this.clipboardController?.applyRemoteText(this.activeSessionId, String(event.content ?? ''));
       }
       return;
     }
     if (event.name === 'clipboard_multi') {
-      if (this.clipboardSyncEnabled && this.isRemoteControlSessionActive()) {
+      if (this.isClipboardTextSyncAllowed() && this.remoteInteractionReady) {
         this.applyRemoteNativeClipboard();
+      } else if (this.isDirectWireSession() && this.isClipboardTextAdmitted()) {
+        // Policy admits this session, but it is not usable right now — the app is not
+        // in front, or its preview is not ready. The notification arrives once per
+        // peer revision and the direct wire keeps the text in its own mailbox, so the
+        // fact is remembered instead of handing the payload to a controller that is
+        // not running: the newest text is retrieved when this session is admitted and
+        // ready again, before its own local clipboard is read. Only a notification
+        // consumed here is marked — work dropped at a lifecycle boundary stays
+        // dropped, and a policy refusal is not marked at all.
+        this.clipboardPeerUpdateSessions.add(this.activeSessionId);
       }
+      return;
+    }
+    if (event.name === 'clipboard_write_result') {
+      this.handleClipboardWriteResult(event);
       return;
     }
     if (event.name === 'clipboard_files') {
@@ -6994,22 +9014,15 @@ struct RustDeskIndex {
       }
       return;
     }
-    if (event.name === 'chat_client_mode') {
-      this.chatStore.receive(String(event.text ?? ''), Date.now());
-      const activeTab = this.remoteSessionTabsController.get(this.activeSessionId);
-      if (activeTab !== undefined) {
-        activeTab.unreadCount = this.chatStore.unreadCount();
-      }
-      this.refreshChatState();
-      this.syncRemoteSessionTabs();
-      return;
-    }
     if (event.name === 'msgbox') {
       this.handleMsgBoxEvent(event);
     }
   }
 
   private handleMsgBoxEvent(event: NativeEvent): void {
+    if (this.rdpCertificateRejectedSessions.has(this.activeSessionId)) {
+      return;
+    }
     const title = String(event.title ?? '');
     const text = String(event.text ?? '');
     const type = String(event.type ?? '');
@@ -7027,6 +9040,15 @@ struct RustDeskIndex {
       const errorMsg = type === 're-input-password' ? '密码错误，请重新输入' : '';
       this.connectionSummary = '等待密码验证';
       this.errorText = message;
+      if (this.isDirectWireSession()) {
+        // A direct viewer consumes its credential when it dials; a password that
+        // arrives now cannot reach that handshake, and the native side refuses a
+        // login on a running viewer by name. The engine's own text is reported and
+        // the wire is closed, so the operator retries into a fresh viewer with a
+        // fresh prompt instead of a secret that would go nowhere.
+        this.handleRemoteDisconnect(message.length > 0 ? message : '远端拒绝了凭据');
+        return;
+      }
       if (this.tryAutoSubmitHandoffPassword()) {
         return;
       }
@@ -7075,6 +9097,9 @@ struct RustDeskIndex {
     if (this.activeSessionId.length === 0) {
       return;
     }
+    // Every challenge the engine raises is answered for the session that raised
+    // it: the Core holds the same policy per connection, and a stored acceptance
+    // would let a later dial through without anyone answering for it.
     this.clearConnectionTimeout();
     this.insecureConnectionMessage = text === 'conn-e2ee-unavailable-tip'
       ? '无法验证端到端加密。远程设备可能仍在准备中，请稍后重试。如果此问题持续出现，服务器可能不受信任。仍要继续吗？'
@@ -7092,6 +9117,10 @@ struct RustDeskIndex {
     if (!this.insecureConnectionDialogVisible || sessionId.length === 0) {
       return;
     }
+    this.applyInsecureContinuation(sessionId);
+  }
+
+  private applyInsecureContinuation(sessionId: string): void {
     if (sessionId !== this.activeSessionId) {
       this.insecureConnectionDialogVisible = false;
       this.insecureConnectionMessage = '';
@@ -7100,7 +9129,19 @@ struct RustDeskIndex {
       return;
     }
     try {
-      this.nativeSessionBridge.setCommon(sessionId, 'continue-insecure-connection', 'Y');
+      // The native side reports whether the decision reached the viewer, so the
+      // dialog is only cleared once the engine really took the key: a refused
+      // key would otherwise show a confirmation the viewer never received.
+      const outcome = this.nativeSessionBridge.setCommon(
+        sessionId,
+        'continue-insecure-connection',
+        'Y',
+      );
+      this.logRelativeDebug('insecure_continue',
+        `ok=${outcome.ok} action=${outcome.action} message=${outcome.message ?? ''}`);
+      if (!outcome.ok) {
+        throw new Error(outcome.message ?? '无法发送非安全连接确认');
+      }
       this.insecureConnectionDialogVisible = false;
       this.insecureConnectionMessage = '';
       this.insecureConnectionSessionId = '';
@@ -7110,7 +9151,15 @@ struct RustDeskIndex {
       this.scheduleConnectionTimeout();
     } catch (error) {
       this.errorText = `无法继续连接：${String(error)}`;
-      this.disconnectInsecureConnection();
+      if (this.insecureConnectionDialogVisible) {
+        this.disconnectInsecureConnection();
+      } else {
+        // The dialog is already gone, so there is nothing left to close by hand:
+        // end the session instead of leaving it waiting for a decision nobody
+        // can make.
+        this.rejectPendingInsecureConnection();
+        void this.closeSession('无法继续非安全连接');
+      }
     }
   }
 
@@ -7157,10 +9206,17 @@ struct RustDeskIndex {
       return;
     }
     try {
-      this.updateSessionState(this.nativeSessionBridge.refresh(
-        this.activeSessionId,
-        this.viewportModel.getCurrentDisplayIndex(),
-      ));
+      const response = this.nativeSessionBridge.refresh(this.activeSessionId,
+        this.viewportModel.getCurrentDisplayIndex());
+      if (this.isDirectWireSession() && response.ok) {
+        if (response.requested === true) {
+          this.sessionMessage = '已请求刷新画面，等待远端更新';
+        } else {
+          this.errorText = '原生未确认刷新请求已入队';
+        }
+      } else {
+        this.updateSessionState(response);
+      }
     } catch (error) {
       this.errorText = `Refresh error: ${String(error)}`;
     }
@@ -7175,6 +9231,9 @@ struct RustDeskIndex {
     const previous = this.previewFramePixelMap;
     this.previewFramePixelMap = undefined;
     this.rgbaFallbackActive = false;
+    // The fallback is the presentation no longer, so input goes back to the Surface's
+    // own clip without waiting for the next display configuration pass.
+    this.viewportModel.setFallbackPresentation(false);
     if (previous) {
       previous.release().catch((_error: BusinessError) => {});
     }
@@ -7315,7 +9374,7 @@ struct RustDeskIndex {
   }
 
   private sendRemoteKeyTap(name: string): void {
-    if (!this.isRemoteControlSessionActive()) {
+    if (!this.isInteractiveSessionActive()) {
       return;
     }
     const payload = new RustDeskKeyPayload(name, false);
@@ -7381,7 +9440,7 @@ struct RustDeskIndex {
           sessionCount: this.remoteSessionTabs.length,
           label: this.activeRemoteSessionTab()?.label ?? '远程会话',
           needsAttention: this.remoteSessionTabs.some(
-            (tab: RemoteSessionTab): boolean => tab.needsAttention || tab.unreadCount > 0,
+            (tab: RemoteSessionTab): boolean => tab.needsAttention,
           ),
           onResume: () => this.resumeRemoteSessionFromHome(),
         });
@@ -7404,18 +9463,26 @@ struct RustDeskIndex {
     Stack({ alignContent: Alignment.Top }) {
       Stack({ alignContent: Alignment.Center }) {
         if (this.previewSurfaceVisible) {
-          XComponent({
-            id: `rustdesk-preview-surface-${this.previewSurfaceGeneration.toString()}`,
-            type: XComponentType.SURFACE,
-            controller: this.previewController
-          })
-            .width('100%')
-            .height('100%')
-            .backgroundColor($r('app.color.black'))
-            .scale({ x: this.previewUserScale, y: this.previewUserScale, centerX: '50%', centerY: '50%' })
-            .rotate({ angle: this.previewUserRotation, centerX: '50%', centerY: '50%' })
-            .translate({ x: this.previewUserOffsetX, y: this.previewUserOffsetY })
-            .zIndex(0);
+          Stack() {
+            XComponent({
+              type: XComponentType.SURFACE
+            })
+              .id(this.previewSurfaceNodeId())
+              .onAttach(this.previewController.handleNodeAttach)
+              .onDetach(this.previewController.handleNodeDetach)
+              .width('100%')
+              .height('100%')
+              .backgroundColor($r('app.color.black'))
+              .scale({ x: this.previewUserScale, y: this.previewUserScale, centerX: '50%', centerY: '50%' })
+              .rotate({ angle: this.previewUserRotation, centerX: '50%', centerY: '50%' })
+              .translate({ x: this.previewUserOffsetX, y: this.previewUserOffsetY });
+          }
+          .width(this.previewSurfaceSize().width)
+          .height(this.previewSurfaceSize().height)
+          // `original` can exceed the pane, and a frame that hangs outside it
+          // must not be drawn over the toolbar.
+          .clip(true)
+          .zIndex(0);
         } else {
           Text('Preparing preview...')
             .fontSize(14)
@@ -7426,7 +9493,7 @@ struct RustDeskIndex {
           Image(this.previewFramePixelMap)
             .width('100%')
             .height('100%')
-            .objectFit(ImageFit.Contain)
+            .objectFit(this.previewFallbackFit())
             .interpolation(ImageInterpolation.Medium)
             .scale({ x: this.previewUserScale, y: this.previewUserScale, centerX: '50%', centerY: '50%' })
             .rotate({ angle: this.previewUserRotation, centerX: '50%', centerY: '50%' })
@@ -7480,11 +9547,14 @@ struct RustDeskIndex {
           if (height > 0) {
             this.previewViewHeight = height;
           }
+          this.viewportModel.setPixelDensity(this.getUIContext().vp2px(1));
           this.viewportModel.setViewportSize(width, height);
           this.updateAndroidNavigationViewport(width, height);
+          this.reclampMiniBarAnchor();
           this.reclampSoftKeyboardPosition();
           this.applyDisplayConfiguration();
           this.reprojectVirtualCursorOverlay();
+          this.scheduleRdpFollowResize();
         })
         .zIndex(10);
 
@@ -7568,14 +9638,21 @@ struct RustDeskIndex {
             RemoteSoftKeyboard({
               keyboardWidth: this.softKeyboardWidth(),
               dockTop: this.softKeyboardDockTop,
-              onKey: (
-                name: string,
-                down: boolean,
-                alt: boolean,
-                ctrl: boolean,
-                shift: boolean,
-                command: boolean,
-              ): void => this.sendSoftKeyboardKey(name, down, alt, ctrl, shift, command),
+              // The latches the panel draws are the keys the engine accepted a
+              // Down for, so a modifier the engine refused stays unlit and the
+              // panel's toggle asks for the opposite of the state this page holds.
+              altActive: this.softKeyboardAltActive,
+              ctrlActive: this.softKeyboardCtrlActive,
+              shiftActive: this.softKeyboardShiftActive,
+              commandActive: this.softKeyboardCommandActive,
+              onKey: (name: string, down: boolean): void => this.sendSoftKeyboardKey(
+                name,
+                down,
+                this.softKeyboardAltActive,
+                this.softKeyboardCtrlActive,
+                this.softKeyboardShiftActive,
+                this.softKeyboardCommandActive,
+              ),
               onMoveDock: (): void => this.moveSoftKeyboardToOtherEdge(),
               onCollapse: (): void => this.toggleSoftKeyboard(),
               onKeyboardMoveStart: (): void => this.startSoftKeyboardDrag(),
@@ -7607,23 +9684,21 @@ struct RustDeskIndex {
   previewMiniBar() {
     if (this.isMiniBarExpanded) {
       Row() {
-        Column({ space: 10 }) {
+        Column() {
           SessionToolbar({
             tabs: this.remoteSessionTabs,
             activeSessionId: this.remoteSessionTabsController.activeId(),
             canAddSession: this.remoteSessionTabsController.canAdd(),
+            inputEnabled: this.inputEnabled,
             touchMode: this.touchMode,
             relativeMouseMode: this.relativeMouseMode,
             relativeModeSupported: this.relativeMouseModeSupported(),
             rightClickGesture: this.rightClickGesture,
             metrics: this.sessionToolbarMetrics(),
+            statusMessage: this.errorText || this.sessionMessage,
             activeOverlayPanel: this.activeOverlayPanel,
-            chatTransitionId: SESSION_OVERLAY_TRANSITION_CHAT,
             displayTransitionId: SESSION_OVERLAY_TRANSITION_DISPLAY,
             qualityTransitionId: SESSION_OVERLAY_TRANSITION_QUALITY,
-            unreadCount: this.chatRevision >= 0 ? this.chatStore.unreadCount() : 0,
-            cameraSession: this.activeSessionKind === 'view_camera',
-            viewOnlySession: this.activeSessionKind === 'view_only',
             androidNavigationAvailable: this.androidNavigationAvailable(),
             androidNavigationVisible: this.androidNavigationVisible,
             softKeyboardAvailable: this.softKeyboardAvailable(),
@@ -7632,7 +9707,12 @@ struct RustDeskIndex {
             systemImeActive: this.systemImeActive,
             audioAvailable: this.remoteAudioState.available,
             audioMuted: this.remoteAudioState.muted,
-            wideLayout: this.activeSessionKind === 'remote_control' && this.previewViewWidth >= 700,
+            directSession: this.isDirectWireSession(),
+            audioUnavailableText: this.remoteAudioUnavailableText(),
+            keyboardUnavailableText: this.remoteKeyboardUnavailableText(),
+            windowUnavailableText: this.sessionWindowControlsAvailable() && this.sessionWindowFullscreenAvailable()
+              ? '' : $r('app.string.direct_window_reason'),
+            wideLayout: this.isInteractiveSessionActive() && this.previewViewWidth >= 700,
             transformSummary: this.previewTransformSummary(),
             canResetTransform: this.hasPreviewViewTransform(),
             panelContentHeight: this.sessionOverlayContentHeight(),
@@ -7644,7 +9724,6 @@ struct RustDeskIndex {
             onSelectInputMode: (mode: RustDeskInputMode) => this.setPointerMode(mode),
             onSelectRightClick: (gesture: RustDeskRightClickGesture) => this.setRightClickGesture(gesture),
             onResetTransform: () => this.resetPreviewViewTransform(),
-            onOpenChat: () => this.openChatDrawer(),
             onAudioChange: (enabled: boolean) => this.setRemoteAudioEnabled(enabled),
             onOpenDisplay: () => this.openDisplaySheet(),
             onOpenQuality: () => this.openQualitySheet(),
@@ -7667,9 +9746,16 @@ struct RustDeskIndex {
             },
             onDisconnect: () => this.closeSession('已手动断开连接'),
             onCollapse: () => {
+              // The tab is drawn from the anchor, so collapsing keeps the place.
               this.getUIContext()?.animateTo({ duration: 300, curve: Curve.FastOutSlowIn }, () => {
                 this.isMiniBarExpanded = false;
               });
+            },
+            onToolbarMoveStart: () => this.startMiniBarDrag(),
+            onToolbarMoveUpdate: (offsetX: number, offsetY: number): void =>
+              this.updateMiniBarDrag(offsetX, offsetY),
+            onChromeHeightChange: (height: number): void => {
+              this.sessionToolbarChromeHeight = height;
             },
             onMinimizeWindow: () => this.minimizeSessionWindow(),
             onToggleWindowFullscreen: () => this.toggleSessionWindowFullscreen(),
@@ -7677,9 +9763,7 @@ struct RustDeskIndex {
             onCloseSession: (sessionId: string) => void this.closeRemoteSessionTab(sessionId),
             onAddSession: () => this.openNewRemoteSession(),
             content: () => {
-              if (this.isOverlayPanelOpen('chat')) {
-                this.chatOverlayPanel();
-              } else if (this.isOverlayPanelOpen('display')) {
+              if (this.isOverlayPanelOpen('display')) {
                 this.displayOverlayPanel();
               } else if (this.isOverlayPanelOpen('quality')) {
                 this.qualityOverlayPanel();
@@ -7687,11 +9771,8 @@ struct RustDeskIndex {
             },
           });
         }
-        .width('95%')
-        .padding(10)
-        .margin({
-          top: Math.max(16, this.windowTopAvoidInset + 8),
-        })
+        .width('100%')
+        .padding(MINI_BAR_EXPANDED_PADDING)
         .backgroundColor($r('app.color.glass_surface'))
         .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
           adaptiveColor: AdaptiveColor.DEFAULT,
@@ -7708,87 +9789,28 @@ struct RustDeskIndex {
         .border({ width: 1, color: $r('app.color.mica_border') })
         .borderRadius($r('app.float.radius_24'))
         .clip(false)
-        .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-        .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.95, y: 0.95 })));
+        .shadow(ShadowStyle.OUTER_DEFAULT_MD);
       }
-      .width('100%')
-      .justifyContent(FlexAlign.Center)
+      .width(this.miniBarExpandedWidth())
+      .position({ x: this.miniBarExpandedX(), y: this.miniBarExpandedY() })
       .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY)
+      .onAreaChange((_oldArea: Area, newArea: Area): void => {
+        this.measureMiniBarExpandedHeight(Number(newArea.height));
+      })
+      // One transition, on the panel's root: the panel slides in from, and back
+      // out to, the right edge it is anchored to. `move` is the framework's
+      // edge-slide, so the travel is the panel's own distance to that edge and
+      // it always clears it; a transform does not re-lay-out the page, and no
+      // child repeats the direction (the children only fade).
+      .transition(TransitionEffect.OPACITY.combine(TransitionEffect.move(TransitionEdge.END)))
       .zIndex(30);
     } else {
-      if (this.isMiniBarOnSide()) {
-        Row() {
-          Button({ type: ButtonType.Normal, stateEffect: true }) {
-            Stack({ alignContent: Alignment.Center }) {
-              Stack()
-                .width(4)
-                .height(36)
-                .backgroundColor($r('app.color.neu_text_secondary'))
-                .borderRadius(2)
-                .opacity(0.72);
-
-              if (this.rootFocusedControl === 'mini-toolbar') {
-                Row()
-                  .width('100%')
-                  .height('100%')
-                  .border({ width: 2, color: $r('app.color.focus_ring') })
-                  .borderRadius({
-                    topLeft: $r('app.float.radius_14'),
-                    bottomLeft: $r('app.float.radius_14'),
-                  })
-                  .hitTestBehavior(HitTestMode.None);
-              }
-            }
-            .width('100%')
-            .height('100%');
-          }
-          .width(28)
-          .height(68)
-          .padding(0)
-          .backgroundColor($r('app.color.glass_surface'))
-          .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
-            adaptiveColor: AdaptiveColor.DEFAULT,
-            scale: 0.68,
-          })
-          .linearGradient({
-            angle: 142,
-            colors: [
-              [$r('app.color.mica_highlight'), 0],
-              [$r('app.color.transparent'), 0.58],
-              [$r('app.color.transparent'), 1],
-            ],
-          })
-          .border({ width: 1, color: $r('app.color.mica_border') })
-          .borderRadius({
-            topLeft: $r('app.float.radius_14'),
-            bottomLeft: $r('app.float.radius_14'),
-          })
-          .clip(true)
-          .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-          .hoverEffect(HoverEffect.None)
-          .focusOnTouch(true)
-          .accessibilityText('展开远控工具栏')
-          .onFocus(() => this.setRootControlFocused('mini-toolbar', true))
-          .onBlur(() => this.setRootControlFocused('mini-toolbar', false))
-          .onClick((): void => {
-            this.getUIContext()?.animateTo({ duration: 300, curve: Curve.FastOutSlowIn }, () => {
-              this.isMiniBarExpanded = true;
-            });
-          })
-          .transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ x: 10 })));
-        }
-        .width('100%')
-        .justifyContent(FlexAlign.End)
-        .position({ x: 0, y: Math.max(80, this.windowTopAvoidInset + 60) })
-        .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY)
-        .zIndex(30);
-      } else {
       Row() {
         Button({ type: ButtonType.Normal, stateEffect: true }) {
           Stack({ alignContent: Alignment.Center }) {
             Stack()
-              .width(36)
-              .height(4)
+              .width(4)
+              .height(36)
               .backgroundColor($r('app.color.neu_text_secondary'))
               .borderRadius(2)
               .opacity(0.72);
@@ -7799,8 +9821,8 @@ struct RustDeskIndex {
                 .height('100%')
                 .border({ width: 2, color: $r('app.color.focus_ring') })
                 .borderRadius({
+                  topLeft: $r('app.float.radius_14'),
                   bottomLeft: $r('app.float.radius_14'),
-                  bottomRight: $r('app.float.radius_14'),
                 })
                 .hitTestBehavior(HitTestMode.None);
             }
@@ -7808,8 +9830,8 @@ struct RustDeskIndex {
           .width('100%')
           .height('100%');
         }
-        .width(68)
-        .height(28)
+        .width(MINI_BAR_COLLAPSED_WIDTH)
+        .height(MINI_BAR_COLLAPSED_HEIGHT)
         .padding(0)
         .backgroundColor($r('app.color.glass_surface'))
         .backgroundBlurStyle(BlurStyle.BACKGROUND_THICK, {
@@ -7826,8 +9848,8 @@ struct RustDeskIndex {
         })
         .border({ width: 1, color: $r('app.color.mica_border') })
         .borderRadius({
+          topLeft: $r('app.float.radius_14'),
           bottomLeft: $r('app.float.radius_14'),
-          bottomRight: $r('app.float.radius_14'),
         })
         .clip(true)
         .shadow(ShadowStyle.OUTER_DEFAULT_MD)
@@ -7837,18 +9859,32 @@ struct RustDeskIndex {
         .onFocus(() => this.setRootControlFocused('mini-toolbar', true))
         .onBlur(() => this.setRootControlFocused('mini-toolbar', false))
         .onClick((): void => {
+          // The panel is drawn from the anchor, so expanding never re-seats it.
           this.getUIContext()?.animateTo({ duration: 300, curve: Curve.FastOutSlowIn }, () => {
             this.isMiniBarExpanded = true;
           });
-        })
-        .transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: -10 })));
+        });
       }
-      .width('100%')
-      .justifyContent(FlexAlign.Center)
-      .position({ x: 0, y: -14 })
+      // The node is wider than the tab: the extra width is touch target, and the
+      // tab itself stays flush with the anchor's right edge.
+      .width(MINI_BAR_COLLAPSED_TOUCH_WIDTH)
+      .height(MINI_BAR_COLLAPSED_HEIGHT)
+      .justifyContent(FlexAlign.End)
+      .position({ x: this.miniBarCollapsedX(), y: this.miniBarCollapsedY() })
       .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY)
+      .gesture(
+        PanGesture({ fingers: 1, direction: PanDirection.All, distance: 4 })
+          .onActionStart((_event: GestureEvent): void => {
+            this.startMiniBarDrag();
+          })
+          .onActionUpdate((event: GestureEvent): void => {
+            this.updateMiniBarDrag(event.offsetX, event.offsetY);
+          }),
+      )
+      // The tab leaves and returns through the same right edge, so folding the
+      // panel and unfolding it read as one motion.
+      .transition(TransitionEffect.OPACITY.combine(TransitionEffect.move(TransitionEdge.END)))
       .zIndex(30);
-      }
     }
   }
 
@@ -7965,25 +10001,6 @@ struct RustDeskIndex {
     .focusable(true)
     .focusOnTouch(true)
     .onKeyEvent((event: KeyEvent) => this.handlePreviewRootKeyEvent(event));
-  }
-
-  @Builder
-  private chatOverlayPanel() {
-    SessionPanelFrame({
-      title: '聊天',
-      transitionId: SESSION_OVERLAY_TRANSITION_CHAT,
-      onBack: () => this.closeOverlayPanel(),
-    }) {
-      ChatDrawer({
-        messages: this.chatMessages(),
-        draft: this.chatDraft,
-        unreadCount: this.chatRevision >= 0 ? this.chatStore.unreadCount() : 0,
-        onDraftChange: (value: string) => this.chatDraft = value,
-        onSend: (value: string) => this.sendChatDraft(value),
-        onRetry: (localId: string) => this.retryChat(localId),
-        onClose: () => this.closeOverlayPanel(),
-      });
-    }
   }
 
   @Builder
@@ -8124,9 +10141,13 @@ struct RustDeskIndex {
           width: this.pendingResolutionWidth,
           height: this.pendingResolutionHeight,
         } : undefined,
-        resolutionEnabled: this.activeSessionKind !== 'view_only'
-          && this.sessionDisplayController.canChangeResolution(this.peerPlatform),
-        viewOnlySession: this.activeSessionKind === 'view_only',
+        resolutionEnabled: this.sessionDisplayController.canChangeResolution(this.peerPlatform)
+          && this.activeSessionKind !== 'vnc',
+        resolutionUnavailableText: this.activeSessionKind === 'vnc'
+          ? '桌面尺寸由 VNC 服务端决定，本机无法调整'
+          : '远端 OHOS 暂不支持修改显示器分辨率',
+        displayMode: this.previewDisplayMode,
+        onSelectDisplayMode: (mode: RustDeskDisplayMode) => this.selectPreviewDisplayMode(mode),
         onSelectDisplay: (index: number) => this.requestDisplaySelection(index),
         onSelectResolution: (resolution: ResolutionInfo) => this.requestResolutionChange(resolution),
         onClose: () => this.closeOverlayPanel(),
@@ -8142,13 +10163,15 @@ struct RustDeskIndex {
       onBack: () => this.closeOverlayPanel(),
     }) {
       QualityControlSheet({
-        selectedPreset: this.selectedQualityPreset,
-        customQuality: this.customQualityDraft,
-        customFps: this.customFpsDraft,
+        refreshRate: this.selectedRefreshRate,
+        refreshRateChoices: this.refreshRateChoices,
+        panelRefreshRate: this.panelRefreshRate,
         telemetry: this.qualityTelemetry,
-        onSelectPreset: (preset: QualityPreset) => this.applyQualitySelection(preset),
-        onCustomQualityChange: (value: number) => this.updateCustomQuality(value),
-        onCustomFpsChange: (value: number) => this.updateCustomFps(value),
+        protocol: this.activeSessionKind === 'vnc' ? 'vnc' : (this.activeSessionKind === 'rdp' ? 'rdp' : 'rustdesk'),
+        directDefaults: this.directQualityDefaults,
+        actionMessage: this.errorText || this.sessionMessage,
+        onDirectDefaultsChange: (defaults: SessionDefaults): void => this.updateDirectQualityDefaults(defaults),
+        onRefreshRateChange: (value: number) => this.applyRefreshRateSelection(value),
         onClose: () => this.closeOverlayPanel(),
       });
     }
@@ -8360,6 +10383,7 @@ struct RustDeskIndex {
   private ConnectPageContent() {
     ConnectTab({
       target: this.peerTarget,
+      connectionMode: this.connectPageMode,
       rememberPassword: this.rememberPassword,
       canDisconnect: this.activeSessionId.length > 0,
       transferActive: this.transferSessionReady,
@@ -8373,10 +10397,11 @@ struct RustDeskIndex {
       scroller: this.connectScroller,
       titleSpacerHeight: this.mainTitleSpacerHeight(),
       bottomAvoidInset: this.windowBottomAvoidInset,
+      onConnectionModeChange: (index: number) => this.changeConnectPageMode(index),
       onTargetChange: (value: string) => this.updatePeerTarget(value),
       onConnectRemote: () => this.connectRemoteSession(),
-      onViewOnly: () => this.connectViewOnlySession(),
-      onViewCamera: () => this.connectCameraSession(),
+      onConnectVnc: () => this.connectVncSession(),
+      onConnectRdp: () => this.connectRdpSession(),
       onOpenTransfer: () => this.openTransferWorkspace(),
       onDisconnect: () => this.closeSession('已手动断开连接'),
       onEasyTierModeChange: (instanceId: string) => this.setEasyTierMode(instanceId),
@@ -8388,24 +10413,28 @@ struct RustDeskIndex {
     DeviceDirectoryPanel({
       snapshot: this.directorySnapshot,
       wideLayout: this.isWideMainLayout(),
-      activeTransferPeerId: this.transferManager.isReady() ? this.transferSessionTarget : '',
       recentScroller: this.deviceRecentScroller,
       favoriteScroller: this.deviceFavoriteScroller,
       lanScroller: this.deviceLanScroller,
       addressBookScroller: this.deviceAddressBookScroller,
       titleSpacerHeight: this.mainTitleSpacerHeight(),
       bottomAvoidInset: this.windowBottomAvoidInset,
-      onRefresh: () => this.refreshDirectorySnapshot(),
+      onRefresh: () => this.refreshDirectorySnapshot(true),
       onScanLan: (): void => {
         void this.scanLanPeers();
       },
-      onSetFavorite: (peerId: string, favorite: boolean) => this.setPeerFavorite(peerId, favorite),
-      onRemoveRecent: (peerId: string) => this.removeRecentPeer(peerId),
-      onRemoveLan: (peerId: string) => this.removeDiscoveredPeer(peerId),
-      onConnectRemote: (peerId: string) => this.launchPeer(peerId, 'remote_control'),
-      onViewOnly: (peerId: string) => this.launchPeer(peerId, 'view_only'),
-      onViewCamera: (peerId: string) => this.launchPeer(peerId, 'view_camera'),
-      onOpenTransfer: (peerId: string) => this.launchPeer(peerId, 'file_transfer'),
+      onStopLan: (): void => this.cancelLanScan(),
+      onSetFavorite: (target: string, protocol: PeerProtocol, favorite: boolean,
+        idOnly: boolean) => this.setPeerFavorite(target, protocol, favorite, idOnly),
+      onEditNote: (target: string, protocol: PeerProtocol, note: string,
+        idOnly: boolean) => this.setPeerNote(target, protocol, note, idOnly),
+      onRemoveRecent: (target: string, protocol: PeerProtocol, idOnly: boolean) =>
+        this.removeRecentPeer(target, protocol, idOnly),
+      onSaveDevice: (original: PeerRecord, peer: PeerRecord): ResourceStr => this.saveLocalDevice(original, peer),
+      onRemoveLan: (target: string, _protocol: PeerProtocol) => void this.removeDiscoveredPeer(target),
+      onConnectRemote: (peerId: string, rustdeskIdOnly: boolean) => this.launchPeer(peerId, 'remote_control', rustdeskIdOnly),
+      onConnectVnc: (peerId: string) => this.launchPeer(peerId, 'vnc'),
+      onConnectRdp: (peerId: string) => this.launchPeer(peerId, 'rdp'),
     })
   }
 
@@ -8414,11 +10443,13 @@ struct RustDeskIndex {
     SettingsTab({
       decoderCapabilities: this.decoderCapabilities,
       serverConfig: this.serverConfig,
+      serverProfile: this.serverProfile,
       serverValidating: this.serverValidating,
       serverSaving: this.serverSaving,
       sessionDefaults: this.sessionDefaults,
-      accountState: this.accountState,
-      accountLoginProviders: this.accountLoginProviders,
+      // The same device-derived list the session panel offers, so a default set
+      // here is always one the panel can show.
+      refreshRateChoices: this.refreshRateChoices,
       controlledHostState: controlledHostCoordinator.state,
       controlledTwoFactorState: controlledHostCoordinator.twoFactorState,
       errorText: this.errorText,
@@ -8431,13 +10462,6 @@ struct RustDeskIndex {
       onValidateServerConfig: (config: ServerConfig) => this.testServerConfiguration(config),
       onSaveServerConfig: (config: ServerConfig) => this.saveServerConfiguration(config),
       onSessionDefaultsChange: (defaults: SessionDefaults) => this.saveSessionDefaults(defaults),
-      onAccountLogin: (username: string, password: string) => this.startAccountLogin(username, password),
-      onAccountVerify: (code: string) => this.startAccountVerification(code),
-      onAccountCancelChallenge: () => this.cancelAccountChallenge(),
-      onAccountOidcLogin: (provider: string) => this.startAccountOidc(provider),
-      onAccountOidcCancel: () => this.cancelAccountOidc(),
-      onAddressBookSync: () => this.startAddressBookSync(),
-      onAccountLogout: () => this.logoutAccount(),
       onControlledRefresh: () => {
         controlledHostCoordinator.refreshPasswordState();
         controlledHostCoordinator.refreshTwoFactorState();
@@ -8456,7 +10480,7 @@ struct RustDeskIndex {
       onControlledRemoveTrustedDevice: (device: ControlledTrustedDevice) =>
         controlledHostCoordinator.removeTrustedDevice(device),
       onControlledClearTrustedDevices: () => controlledHostCoordinator.clearTrustedDevices(),
-      onRefresh: () => this.refreshNativeState(),
+      onRefresh: () => void this.refreshNativeState(),
       onTutorialAutoOpened: () => this.markFirstLaunchTutorialShown(),
     })
   }
@@ -8470,7 +10494,7 @@ struct RustDeskIndex {
       bottomAvoidInset: this.windowBottomAvoidInset,
       wideLayout: this.isWideMainLayout(),
       onStart: () => void controlledHostCoordinator.start(),
-      onStop: () => controlledHostCoordinator.stop('已由用户停止被看服务'),
+      onStop: () => void controlledHostCoordinator.stop('已由用户停止被看服务'),
       onAccept: (requestId: string, peerId: string) => controlledHostCoordinator.acceptIncoming(requestId, peerId),
       onReject: (requestId: string, peerId: string) => controlledHostCoordinator.rejectIncoming(requestId, peerId),
       onRefreshPassword: () => controlledHostCoordinator.refreshTemporaryPassword(),
@@ -8614,27 +10638,7 @@ struct RustDeskIndex {
           }
 
           Stack() {
-            if (this.activeSessionKind === 'remote_control') {
-              this.foldHoverControlPane();
-            } else if (this.activeSessionKind === 'view_only') {
-              Column({ space: $r('app.float.space_12') }) {
-                Text('只观看模式 · 触摸与键盘输入已关闭')
-                  .fontSize(16)
-                  .fontColor($r('app.color.text_primary'))
-                  .textAlign(TextAlign.Center)
-                  .width('100%');
-                this.FoldControlButton('断开连接', 'fold-view-only-disconnect', false, true, false,
-                  () => this.closeSession('已手动断开连接'));
-              }
-              .width('100%')
-              .height('100%')
-              .justifyContent(FlexAlign.Center)
-              .padding({ left: $r('app.float.space_20'), right: $r('app.float.space_20') });
-            } else {
-              Text('摄像头预览')
-                .fontSize(18)
-                .fontColor($r('app.color.text_primary'));
-            }
+            this.foldHoverControlPane();
           }
           .width('100%')
           .layoutWeight(1)
@@ -8991,7 +10995,7 @@ struct RustDeskIndex {
 
       ConnectionAttemptOverlay({
         visible: this.connectionUiPhase !== 'idle' && !this.showPreviewModal && !this.passwordDialogVisible
-          && !this.insecureConnectionDialogVisible,
+          && !this.insecureConnectionDialogVisible && !this.directCredentialsVisible && !this.rdpCertificateDialogVisible,
         phase: this.connectionUiPhase,
         target: this.connectionUiTarget,
         message: this.connectionUiMessage,
@@ -9002,10 +11006,25 @@ struct RustDeskIndex {
       })
       .zIndex(1500)
 
+      DirectCredentialsDialog({
+        visible: this.directCredentialsVisible,
+        protocol: this.directCredentialsProtocol,
+        target: this.directCredentialsTarget,
+        username: this.directCredentialsUsername,
+        password: this.directCredentialPassword,
+        errorMessage: this.directCredentialsError,
+        onUsernameChange: (value: string) => this.directCredentialsUsername = value,
+        onPasswordChange: (value: string) => this.directCredentialPassword = value,
+        onCancel: () => this.cancelDirectCredentials(),
+        onSubmit: () => this.submitDirectCredentials(),
+      })
+      .zIndex(2000)
+
       PasswordDialog({
         visible: this.passwordDialogVisible,
         mode: this.authDialogMode,
         canTrustDevice: this.canTrustDevice,
+        canRememberPassword: this.canPersistSessionPassword(),
         errorMessage: this.authErrorMessage,
         password: this.passwordDraft,
         rememberPassword: this.rememberPassword,
@@ -9027,6 +11046,21 @@ struct RustDeskIndex {
         onDisconnect: () => this.disconnectInsecureConnection(),
       })
       .zIndex(2100)
+
+      InsecureConnectionDialog({
+        visible: this.rdpCertificateDialogVisible,
+        title: $r('app.string.rdp_certificate_title'),
+        subtitle: this.rdpCertificateChallenge?.reason === 'pin_mismatch'
+          ? $r('app.string.rdp_certificate_changed') : $r('app.string.rdp_certificate_waiting'),
+        certificate: this.rdpCertificateChallenge,
+        replaceConfirmation: this.rdpCertificateReplaceConfirmation,
+        busy: this.rdpCertificateBusy,
+        certificateError: this.rdpCertificateError,
+        onContinue: (): void => { void this.acceptRdpCertificate(false); },
+        onRemember: (): void => { void this.acceptRdpCertificate(true); },
+        onDisconnect: (): void => this.cancelRdpCertificateDialog(),
+      })
+      .zIndex(2200)
     }
     .width('100%')
     .height('100%')

@@ -7,43 +7,35 @@ import {
   inputInterceptorStop as bridgeInputInterceptorStop,
   nativeVersion as bridgeNativeVersion,
   runtimeGetApiServer as bridgeRuntimeGetApiServer,
-  runtimeGetAccountState as bridgeRuntimeGetAccountState,
-  runtimeStartAccountLoginOptions as bridgeRuntimeStartAccountLoginOptions,
-  runtimePollAccountLoginOptions as bridgeRuntimePollAccountLoginOptions,
-  runtimeStartAccountLogin as bridgeRuntimeStartAccountLogin,
-  runtimeStartAccountOidc as bridgeRuntimeStartAccountOidc,
-  runtimePollAccountOidc as bridgeRuntimePollAccountOidc,
-  runtimeCancelAccountOidc as bridgeRuntimeCancelAccountOidc,
-  runtimeStartAccountVerification as bridgeRuntimeStartAccountVerification,
-  runtimePollAccountAction as bridgeRuntimePollAccountAction,
-  runtimeAccountLogout as bridgeRuntimeAccountLogout,
-  runtimeCancelAccountChallenge as bridgeRuntimeCancelAccountChallenge,
-  runtimeStartAddressBookSync as bridgeRuntimeStartAddressBookSync,
-  runtimePollAddressBookSync as bridgeRuntimePollAddressBookSync,
   runtimeGetDecoderCapabilities as bridgeRuntimeGetDecoderCapabilities,
   runtimeGetServerConfig as bridgeRuntimeGetServerConfig,
   runtimeInit as bridgeRuntimeInit,
-  runtimeListAddressBookPeers as bridgeRuntimeListAddressBookPeers,
   runtimeListFavorites as bridgeRuntimeListFavorites,
   runtimeListLanPeers as bridgeRuntimeListLanPeers,
   runtimeListLocalDir as bridgeRuntimeListLocalDir,
   runtimeListRecentPeers as bridgeRuntimeListRecentPeers,
-  runtimeQueryPeerOnlineStates as bridgeRuntimeQueryPeerOnlineStates,
+  peerQueryOnline as bridgePeerQueryOnline,
+  runtimeRecordRecentPeer as bridgeRuntimeRecordRecentPeer,
   runtimeRemoveDiscoveredPeer as bridgeRuntimeRemoveDiscoveredPeer,
   runtimeRemoveRecentPeer as bridgeRuntimeRemoveRecentPeer,
   runtimeScanLanPeers as bridgeRuntimeScanLanPeers,
   runtimeSetFavorite as bridgeRuntimeSetFavorite,
+  runtimeSetLifecycle as bridgeRuntimeSetLifecycle,
+  runtimeSetRecordingDirectory as bridgeRuntimeSetRecordingDirectory,
   runtimeSetServerConfig as bridgeRuntimeSetServerConfig,
   runtimeTestServerConfig as bridgeRuntimeTestServerConfig,
+  sessionAcknowledgeClose as bridgeSessionAcknowledgeClose,
   sessionAdd as bridgeSessionAdd,
   sessionBindSurface as bridgeSessionBindSurface,
   sessionCancelJob as bridgeSessionCancelJob,
   sessionChangeResolution as bridgeSessionChangeResolution,
   sessionClose as bridgeSessionClose,
   sessionEnterOrLeave as bridgeSessionEnterOrLeave,
-  sessionGetImageQuality as bridgeSessionGetImageQuality,
   sessionGetConnToken as bridgeSessionGetConnToken,
   sessionGetEnableTrustedDevices as bridgeSessionGetEnableTrustedDevices,
+  sessionGetFrameRateSnapshot as bridgeSessionGetFrameRateSnapshot,
+  sessionGetImageQuality as bridgeSessionGetImageQuality,
+  sessionGetIsRecording as bridgeSessionGetIsRecording,
   sessionGetRemoteAudioState as bridgeSessionGetRemoteAudioState,
   sessionGetRgbaSize as bridgeSessionGetRgbaSize,
   sessionGetToggleOption as bridgeSessionGetToggleOption,
@@ -55,17 +47,16 @@ import {
   sessionOnWaitingForImageDialogShow as bridgeSessionOnWaitingForImageDialogShow,
   sessionPollEvents as bridgeSessionPollEvents,
   sessionReadRemoteDir as bridgeSessionReadRemoteDir,
+  sessionRecordScreen as bridgeSessionRecordScreen,
   sessionRefresh as bridgeSessionRefresh,
-  sessionSetVideoPaused as bridgeSessionSetVideoPaused,
-  sessionSend2Fa as bridgeSessionSend2Fa,
-  sessionSendChat as bridgeSessionSendChat,
+  sessionSend2fa as bridgeSessionSend2fa,
   sessionSendClipboard as bridgeSessionSendClipboard,
   sessionSendClipboardFiles as bridgeSessionSendClipboardFiles,
   sessionSendClipboardImage as bridgeSessionSendClipboardImage,
   sessionSendFiles as bridgeSessionSendFiles,
   sessionSendMouse as bridgeSessionSendMouse,
-  sessionSetCodecPreference as bridgeSessionSetCodecPreference,
   sessionSetClipboardFileRoot as bridgeSessionSetClipboardFileRoot,
+  sessionSetCodecPreference as bridgeSessionSetCodecPreference,
   sessionSetCommon as bridgeSessionSetCommon,
   sessionSetConfirmOverrideFile as bridgeSessionSetConfirmOverrideFile,
   sessionSetCustomFps as bridgeSessionSetCustomFps,
@@ -73,6 +64,7 @@ import {
   sessionSetImageQuality as bridgeSessionSetImageQuality,
   sessionSetShowRemoteCursor as bridgeSessionSetShowRemoteCursor,
   sessionSetSize as bridgeSessionSetSize,
+  sessionSetVideoPaused as bridgeSessionSetVideoPaused,
   sessionSetViewOnly as bridgeSessionSetViewOnly,
   sessionStart as bridgeSessionStart,
   sessionSwitchDisplay as bridgeSessionSwitchDisplay,
@@ -81,6 +73,9 @@ import {
   sessionTakeRgbaFrame as bridgeSessionTakeRgbaFrame,
   sessionToggleOption as bridgeSessionToggleOption,
   transferNextJobId as bridgeTransferNextJobId,
+  xcomponentAttach as bridgeXcomponentAttach,
+  xcomponentDetach as bridgeXcomponentDetach,
+  xcomponentSetFrameRateRangeNative as bridgeXcomponentSetFrameRateRangeNative,
 } from 'rustdesk-ohrs';
 
 export class RustDeskNativeApi {
@@ -116,75 +111,19 @@ export class RustDeskNativeApi {
     return bridgeRuntimeGetApiServer();
   }
 
-  runtimeGetAccountState(): string {
-    return bridgeRuntimeGetAccountState();
-  }
-
-  runtimeStartAccountLoginOptions(): string {
-    return bridgeRuntimeStartAccountLoginOptions();
-  }
-
-  runtimePollAccountLoginOptions(): string {
-    return bridgeRuntimePollAccountLoginOptions();
-  }
-
-  runtimeStartAccountLogin(payloadJson: string): string {
-    return bridgeRuntimeStartAccountLogin(payloadJson);
-  }
-
-  runtimeStartAccountOidc(provider: string): string {
-    return bridgeRuntimeStartAccountOidc(provider);
-  }
-
-  runtimePollAccountOidc(): string {
-    return bridgeRuntimePollAccountOidc();
-  }
-
-  runtimeCancelAccountOidc(): string {
-    return bridgeRuntimeCancelAccountOidc();
-  }
-
-  runtimeStartAccountVerification(payloadJson: string): string {
-    return bridgeRuntimeStartAccountVerification(payloadJson);
-  }
-
-  runtimePollAccountAction(): string {
-    return bridgeRuntimePollAccountAction();
-  }
-
-  runtimeAccountLogout(): string {
-    return bridgeRuntimeAccountLogout();
-  }
-
-  runtimeCancelAccountChallenge(): string {
-    return bridgeRuntimeCancelAccountChallenge();
-  }
-
-  runtimeStartAddressBookSync(): string {
-    return bridgeRuntimeStartAddressBookSync();
-  }
-
-  runtimePollAddressBookSync(): string {
-    return bridgeRuntimePollAddressBookSync();
-  }
-
-  runtimeGetDecoderCapabilities(): string {
+  runtimeGetDecoderCapabilities(): Promise<string> {
     return bridgeRuntimeGetDecoderCapabilities();
   }
 
-  runtimeGetServerConfig(): string {
+  runtimeGetServerConfig(): Promise<string> {
     return bridgeRuntimeGetServerConfig();
   }
 
-  runtimeInit(appDir: string, deviceName: string): string {
+  runtimeInit(appDir: string, deviceName: string): Promise<string> {
     return bridgeRuntimeInit(appDir, deviceName);
   }
 
-  runtimeListAddressBookPeers(): string {
-    return bridgeRuntimeListAddressBookPeers();
-  }
-
-  runtimeListFavorites(): string {
+  runtimeListFavorites(): Promise<string> {
     return bridgeRuntimeListFavorites();
   }
 
@@ -196,31 +135,46 @@ export class RustDeskNativeApi {
     return bridgeRuntimeListLocalDir(path);
   }
 
-  runtimeListRecentPeers(): string {
+  runtimeListRecentPeers(): Promise<string> {
     return bridgeRuntimeListRecentPeers();
   }
 
-  runtimeQueryPeerOnlineStates(peerIdsJson: string): Promise<string> {
-    return bridgeRuntimeQueryPeerOnlineStates(peerIdsJson);
+  peerQueryOnline(peerIdsJson: string, approvedProfileJson: string): Promise<string> {
+    return bridgePeerQueryOnline(peerIdsJson, approvedProfileJson);
   }
 
   runtimeRemoveDiscoveredPeer(peerId: string): string {
     return bridgeRuntimeRemoveDiscoveredPeer(peerId);
   }
 
-  runtimeRemoveRecentPeer(peerId: string): string {
+  runtimeSetFavorite(peerId: string, favorite: boolean): Promise<string> {
+    return bridgeRuntimeSetFavorite(peerId, favorite);
+  }
+
+  runtimeRecordRecentPeer(peerJson: string): Promise<string> {
+    return bridgeRuntimeRecordRecentPeer(peerJson);
+  }
+
+  runtimeRemoveRecentPeer(peerId: string): Promise<string> {
     return bridgeRuntimeRemoveRecentPeer(peerId);
   }
+
 
   runtimeScanLanPeers(): Promise<string> {
     return bridgeRuntimeScanLanPeers();
   }
 
-  runtimeSetFavorite(peerId: string, favorite: boolean): string {
-    return bridgeRuntimeSetFavorite(peerId, favorite);
+
+  runtimeSetLifecycle(privacyAccepted: boolean, foreground: boolean): Promise<string> {
+    return bridgeRuntimeSetLifecycle(privacyAccepted, foreground);
   }
 
-  runtimeSetServerConfig(configJson: string): string {
+
+  runtimeSetRecordingDirectory(path: string): string {
+    return bridgeRuntimeSetRecordingDirectory(path);
+  }
+
+  runtimeSetServerConfig(configJson: string): Promise<string> {
     return bridgeRuntimeSetServerConfig(configJson);
   }
 
@@ -228,12 +182,18 @@ export class RustDeskNativeApi {
     return bridgeRuntimeTestServerConfig(configJson);
   }
 
+  sessionAcknowledgeClose(sessionId: string, lifecycleEpoch: string): string {
+    return bridgeSessionAcknowledgeClose(sessionId, lifecycleEpoch);
+  }
+
   sessionAdd(sessionId: string, peerTarget: string, optionsJson: string): string {
     return bridgeSessionAdd(sessionId, peerTarget, optionsJson);
   }
 
-  sessionBindSurface(sessionId: string, display: number, surfaceId: string): string {
-    return bridgeSessionBindSurface(sessionId, display, surfaceId);
+  /** The third argument is the opaque componentId xcomponentAttach returned, never a Surface id. */
+  sessionBindSurface(sessionId: string, display: number, componentId: string,
+    lifecycleEpoch: string): string {
+    return bridgeSessionBindSurface(sessionId, display, componentId, lifecycleEpoch);
   }
 
   sessionCancelJob(sessionId: string, actId: number): string {
@@ -244,16 +204,12 @@ export class RustDeskNativeApi {
     return bridgeSessionChangeResolution(sessionId, display, width, height);
   }
 
-  sessionClose(sessionId: string): string {
+  sessionClose(sessionId: string): Promise<string> {
     return bridgeSessionClose(sessionId);
   }
 
   sessionEnterOrLeave(sessionId: string, enter: boolean): string {
     return bridgeSessionEnterOrLeave(sessionId, enter);
-  }
-
-  sessionGetImageQuality(sessionId: string): string | null {
-    return bridgeSessionGetImageQuality(sessionId);
   }
 
   sessionGetConnToken(sessionId: string): string | null {
@@ -264,6 +220,18 @@ export class RustDeskNativeApi {
     return bridgeSessionGetEnableTrustedDevices(sessionId);
   }
 
+  sessionGetFrameRateSnapshot(sessionId: string, display: number): string {
+    return bridgeSessionGetFrameRateSnapshot(sessionId, display);
+  }
+
+  sessionGetImageQuality(sessionId: string): string | null {
+    return bridgeSessionGetImageQuality(sessionId);
+  }
+
+  sessionGetIsRecording(sessionId: string): boolean {
+    return bridgeSessionGetIsRecording(sessionId);
+  }
+
   sessionGetRemoteAudioState(sessionId: string): string {
     return bridgeSessionGetRemoteAudioState(sessionId);
   }
@@ -272,20 +240,20 @@ export class RustDeskNativeApi {
     return bridgeSessionGetRgbaSize(sessionId, display);
   }
 
-  sessionGetToggleOption(sessionId: string, arg: string): boolean {
-    return bridgeSessionGetToggleOption(sessionId, arg);
+  sessionGetToggleOption(sessionId: string, option: string): boolean {
+    return bridgeSessionGetToggleOption(sessionId, option);
   }
 
   sessionHandleFlutterKeyEvent(sessionId: string, keyJson: string): string {
     return bridgeSessionHandleFlutterKeyEvent(sessionId, keyJson);
   }
 
-  sessionInputKey(sessionId: string, keyJson: string): string {
-    return bridgeSessionInputKey(sessionId, keyJson);
+  sessionInputKey(sessionId: string, keyJson: string, inputGeneration?: string): string {
+    return bridgeSessionInputKey(sessionId, keyJson, inputGeneration);
   }
 
-  sessionInputString(sessionId: string, value: string): string {
-    return bridgeSessionInputString(sessionId, value);
+  sessionInputString(sessionId: string, value: string, inputGeneration?: string): string {
+    return bridgeSessionInputString(sessionId, value, inputGeneration);
   }
 
   sessionLogin(sessionId: string, loginJson: string): string {
@@ -308,20 +276,16 @@ export class RustDeskNativeApi {
     return bridgeSessionReadRemoteDir(sessionId, path, includeHidden);
   }
 
+  sessionRecordScreen(sessionId: string, start: boolean): string {
+    return bridgeSessionRecordScreen(sessionId, start);
+  }
+
   sessionRefresh(sessionId: string, display: number): string {
     return bridgeSessionRefresh(sessionId, display);
   }
 
-  sessionSetVideoPaused(sessionId: string, paused: boolean): string {
-    return bridgeSessionSetVideoPaused(sessionId, paused);
-  }
-
   sessionSend2fa(sessionId: string, code: string, trustThisDevice: boolean): string {
-    return bridgeSessionSend2Fa(sessionId, code, trustThisDevice);
-  }
-
-  sessionSendChat(sessionId: string, text: string): string {
-    return bridgeSessionSendChat(sessionId, text);
+    return bridgeSessionSend2fa(sessionId, code, trustThisDevice);
   }
 
   sessionSendClipboard(sessionId: string, content: string): string {
@@ -336,27 +300,29 @@ export class RustDeskNativeApi {
     return bridgeSessionSendClipboardImage(sessionId, image);
   }
 
-  sessionSendFiles(sessionId: string, actId: number, path: string, to: string, fileNum: number, includeHidden: boolean, isRemote: boolean, isDir: boolean): string {
+  sessionSendFiles(sessionId: string, actId: number, path: string, to: string, fileNum: number,
+    includeHidden: boolean, isRemote: boolean, isDir: boolean): string {
     return bridgeSessionSendFiles(sessionId, actId, path, to, fileNum, includeHidden, isRemote, isDir);
   }
 
-  sessionSendMouse(sessionId: string, mouseJson: string): string {
-    return bridgeSessionSendMouse(sessionId, mouseJson);
-  }
-
-  sessionSetCodecPreference(sessionId: string, codec: string): string {
-    return bridgeSessionSetCodecPreference(sessionId, codec);
+  sessionSendMouse(sessionId: string, mouseJson: string, inputGeneration?: string): string {
+    return bridgeSessionSendMouse(sessionId, mouseJson, inputGeneration);
   }
 
   sessionSetClipboardFileRoot(sessionId: string, root: string): string {
     return bridgeSessionSetClipboardFileRoot(sessionId, root);
   }
 
-  sessionSetCommon(sessionId: string, key: string, value: string): void {
-    bridgeSessionSetCommon(sessionId, key, value);
+  sessionSetCodecPreference(sessionId: string, codec: string): string {
+    return bridgeSessionSetCodecPreference(sessionId, codec);
   }
 
-  sessionSetConfirmOverrideFile(sessionId: string, actId: number, fileNum: number, needOverride: boolean, remember: boolean, isUpload: boolean): string {
+  sessionSetCommon(sessionId: string, key: string, value: string): string {
+    return bridgeSessionSetCommon(sessionId, key, value);
+  }
+
+  sessionSetConfirmOverrideFile(sessionId: string, actId: number, fileNum: number,
+    needOverride: boolean, remember: boolean, isUpload: boolean): string {
     return bridgeSessionSetConfirmOverrideFile(sessionId, actId, fileNum, needOverride, remember, isUpload);
   }
 
@@ -364,8 +330,8 @@ export class RustDeskNativeApi {
     return bridgeSessionSetCustomFps(sessionId, fps);
   }
 
-  sessionSetCustomImageQuality(sessionId: string, value: number): void {
-    bridgeSessionSetCustomImageQuality(sessionId, value);
+  sessionSetCustomImageQuality(sessionId: string, value: number): string {
+    return bridgeSessionSetCustomImageQuality(sessionId, value);
   }
 
   sessionSetImageQuality(sessionId: string, value: string): string {
@@ -378,6 +344,10 @@ export class RustDeskNativeApi {
 
   sessionSetSize(sessionId: string, display: number, width: number, height: number): string {
     return bridgeSessionSetSize(sessionId, display, width, height);
+  }
+
+  sessionSetVideoPaused(sessionId: string, paused: boolean): string {
+    return bridgeSessionSetVideoPaused(sessionId, paused);
   }
 
   sessionSetViewOnly(sessionId: string, enabled: boolean): string {
@@ -404,14 +374,26 @@ export class RustDeskNativeApi {
     return bridgeSessionTakeRgbaFrame(sessionId, display);
   }
 
-  sessionToggleOption(sessionId: string, arg: string): void {
-    bridgeSessionToggleOption(sessionId, arg);
+  sessionToggleOption(sessionId: string, option: string): string {
+    return bridgeSessionToggleOption(sessionId, option);
   }
 
   transferNextJobId(): number {
     return bridgeTransferNextJobId();
   }
 
+  xcomponentAttach(nodeId: string, frameNode: Object, onSurfaceEvent: (event: string) => void): string {
+    return bridgeXcomponentAttach(nodeId, frameNode, onSurfaceEvent);
+  }
+
+  xcomponentDetach(componentId: string): string {
+    return bridgeXcomponentDetach(componentId);
+  }
+
+  xcomponentSetFrameRateRangeNative(componentId: string, expected: number, min: number,
+    max: number): string {
+    return bridgeXcomponentSetFrameRateRangeNative(componentId, expected, min, max);
+  }
 }
 
 export const rustDeskNativeApi: RustDeskNativeApi = new RustDeskNativeApi();

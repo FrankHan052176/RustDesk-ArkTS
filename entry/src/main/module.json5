@@ -32,8 +32,7 @@
         "preferMultiWindowOrientation": "landscape_auto",
         "continuable": true,
         "backgroundModes": [
-          "dataTransfer",
-          "audioRecording"
+          "dataTransfer"
         ],
         "exported": true,
         "skills": [

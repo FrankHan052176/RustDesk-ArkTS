@@ -1,16 +1,18 @@
 import { NativeEvent } from './RustDeskTypes';
-import { ChatMessage } from './RustDeskSessionTypes';
 import { ServerConfig, SessionDefaults } from './RustDeskDirectoryTypes';
-import { ImageQualityPreset } from './SessionDisplayController';
+import { DEFAULT_REFRESH_RATE } from './RustDeskRefreshRate';
 
-const MAX_PENDING_CHAT_EVENTS = 512;
 const MAX_PENDING_PROTECTED_ACTIONS = 128;
 
-export type RemoteSessionKind = 'remote_control' | 'view_only' | 'view_camera';
+export type RemoteSessionKind = 'remote_control' | 'vnc' | 'rdp';
 
 export class RemoteSessionTab {
   sessionId: string = '';
   coreSessionId: string = '';
+  /** Native lifecycle epoch (decimal string) for bind/ACK; never a UI guess. */
+  lifecycleEpoch: string = '';
+  /** Engine input generation (decimal string) the viewer must echo on input. */
+  inputGeneration: string = '';
   target: string = '';
   label: string = '';
   kind: RemoteSessionKind = 'remote_control';
@@ -20,33 +22,28 @@ export class RemoteSessionTab {
   connected: boolean = false;
   paused: boolean = false;
   needsAttention: boolean = false;
-  unreadCount: number = 0;
   audioMuted: boolean = true;
   audioPreferenceCaptured: boolean = false;
   uiStateCaptured: boolean = false;
   touchMode: boolean = true;
   relativeMouseMode: boolean = false;
+  inputEnabled: boolean = true;
   toolbarExpanded: boolean = true;
   displayIndex: number = 0;
   viewScale: number = 1;
   viewOffsetX: number = 0;
   viewOffsetY: number = 0;
   viewRotation: number = 0;
-  chatMessages: Array<ChatMessage> = [];
-  chatUnread: number = 0;
-  chatDraft: string = '';
-  imageQuality: ImageQualityPreset = 'balanced';
-  customImageQuality: number = 50;
-  customFps: number = 30;
+  refreshRate: number = DEFAULT_REFRESH_RATE;
   sessionDefaults: SessionDefaults = new SessionDefaults();
   serverConfig: ServerConfig = new ServerConfig();
   shareTargetKind: string = 'target';
+  rustdeskIdOnly: boolean = false;
   forceRelay: boolean = false;
   peerInfo?: NativeEvent = undefined;
   cursorDataEvents: Array<NativeEvent> = [];
   lastCursorId: string = '';
   pendingEvents: Array<NativeEvent> = [];
-  omittedChatEvents: number = 0;
   omittedProtectedEvents: number = 0;
   createdAt: number = 0;
   lastActivatedAt: number = 0;
@@ -125,7 +122,6 @@ export class RemoteSessionTabsController {
       item.paused = item.sessionId !== sessionId;
     }
     tab.needsAttention = false;
-    tab.unreadCount = 0;
     return result;
   }
 
@@ -217,50 +213,37 @@ export class RemoteSessionTabsController {
     if (tab === undefined) {
       return;
     }
-    if (event.name === 'chat_client_mode' || event.name === 'chat_server_mode') {
-      tab.unreadCount += 1;
-      tab.pendingEvents.push(event);
-      while (this.pendingChatCount(tab) > MAX_PENDING_CHAT_EVENTS) {
-        const oldestChat = tab.pendingEvents.findIndex((item: NativeEvent) => this.isChatEvent(item));
-        if (oldestChat < 0) {
-          break;
-        }
-        tab.pendingEvents.splice(oldestChat, 1);
-        tab.omittedChatEvents += 1;
-      }
+    if (event.name === 'close'
+      && tab.pendingEvents.some((item: NativeEvent) => item.name === 'close')) {
+      // One terminal event is sufficient and must never be evicted.
     } else {
-      if (event.name === 'close'
-        && tab.pendingEvents.some((item: NativeEvent) => item.name === 'close')) {
-        // One terminal event is sufficient and must never be evicted.
-      } else {
-        if (event.name === 'switch_display') {
-          const previousSwitch = tab.pendingEvents.findIndex((item: NativeEvent) =>
-            item.name === 'switch_display');
-          if (previousSwitch >= 0) {
-            tab.pendingEvents.splice(previousSwitch, 1);
-          }
+      if (event.name === 'switch_display') {
+        const previousSwitch = tab.pendingEvents.findIndex((item: NativeEvent) =>
+          item.name === 'switch_display');
+        if (previousSwitch >= 0) {
+          tab.pendingEvents.splice(previousSwitch, 1);
         }
-        tab.pendingEvents.push(event);
       }
-      while (this.pendingReplaceableActionCount(tab) > 64) {
-        const oldestReplaceable = tab.pendingEvents.findIndex((item: NativeEvent) =>
-          !this.isChatEvent(item) && !this.isProtectedAction(item));
-        if (oldestReplaceable < 0) {
-          break;
-        }
-        tab.pendingEvents.splice(oldestReplaceable, 1);
-      }
-      while (this.pendingProtectedActionCount(tab) > MAX_PENDING_PROTECTED_ACTIONS) {
-        const oldestProtected = tab.pendingEvents.findIndex((item: NativeEvent) =>
-          this.isProtectedAction(item) && item.name !== 'close');
-        if (oldestProtected < 0) {
-          break;
-        }
-        tab.pendingEvents.splice(oldestProtected, 1);
-        tab.omittedProtectedEvents += 1;
-      }
+      tab.pendingEvents.push(event);
     }
-    if (needsAttention || tab.unreadCount > 0) {
+    while (this.pendingReplaceableActionCount(tab) > 64) {
+      const oldestReplaceable = tab.pendingEvents.findIndex((item: NativeEvent) =>
+        !this.isProtectedAction(item));
+      if (oldestReplaceable < 0) {
+        break;
+      }
+      tab.pendingEvents.splice(oldestReplaceable, 1);
+    }
+    while (this.pendingProtectedActionCount(tab) > MAX_PENDING_PROTECTED_ACTIONS) {
+      const oldestProtected = tab.pendingEvents.findIndex((item: NativeEvent) =>
+        this.isProtectedAction(item) && item.name !== 'close');
+      if (oldestProtected < 0) {
+        break;
+      }
+      tab.pendingEvents.splice(oldestProtected, 1);
+      tab.omittedProtectedEvents += 1;
+    }
+    if (needsAttention) {
       tab.needsAttention = true;
     }
   }
@@ -271,14 +254,6 @@ export class RemoteSessionTabsController {
       return [];
     }
     const events = tab.pendingEvents.slice();
-    if (tab.omittedChatEvents > 0) {
-      const marker: NativeEvent = {
-        name: 'chat_client_mode',
-        text: `（${tab.omittedChatEvents} 条较早消息已省略）`,
-      };
-      const firstChat = events.findIndex((item: NativeEvent) => this.isChatEvent(item));
-      events.splice(firstChat < 0 ? 0 : firstChat, 0, marker);
-    }
     if (tab.omittedProtectedEvents > 0) {
       const marker: NativeEvent = {
         name: 'msgbox',
@@ -290,33 +265,19 @@ export class RemoteSessionTabsController {
       events.splice(firstProtected < 0 ? 0 : firstProtected, 0, marker);
     }
     tab.pendingEvents = [];
-    tab.omittedChatEvents = 0;
     tab.omittedProtectedEvents = 0;
     return events;
   }
 
-  private isChatEvent(event: NativeEvent): boolean {
-    return event.name === 'chat_client_mode' || event.name === 'chat_server_mode';
-  }
-
   private isProtectedAction(event: NativeEvent): boolean {
-    return event.name === 'close' || event.name === 'msgbox' || event.name === 'switch_display';
-  }
-
-  private pendingChatCount(tab: RemoteSessionTab): number {
-    let count = 0;
-    for (const event of tab.pendingEvents) {
-      if (this.isChatEvent(event)) {
-        count += 1;
-      }
-    }
-    return count;
+    return event.name === 'close' || event.name === 'msgbox' || event.name === 'switch_display'
+      || event.name === 'resolution_refused';
   }
 
   private pendingReplaceableActionCount(tab: RemoteSessionTab): number {
     let count = 0;
     for (const event of tab.pendingEvents) {
-      if (!this.isChatEvent(event) && !this.isProtectedAction(event)) {
+      if (!this.isProtectedAction(event)) {
         count += 1;
       }
     }

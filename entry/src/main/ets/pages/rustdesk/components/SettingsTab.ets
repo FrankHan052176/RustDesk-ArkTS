@@ -12,13 +12,15 @@ import {
   LuminousSurface,
   LuminousTone,
 } from 'luminous_neo';
-import { AccountLoginProvider, AccountState, ServerConfig, SessionDefaults } from '../RustDeskDirectoryTypes';
+import { ServerConfig, ServerProfileState, SessionDefaults } from '../RustDeskDirectoryTypes';
 import { DecoderCapability } from '../RustDeskTypes';
 import { RustDeskLayoutTokens } from '../RustDeskLayoutTokens';
 import { AccountSettingsCard } from './AccountSettingsCard';
 import { BeginnerGuidePage } from './BeginnerGuidePage';
 import { ServerSettingsCard } from './ServerSettingsCard';
 import { SessionDefaultsCard } from './SessionDefaultsCard';
+import { DirectSessionSettingsCard } from './DirectSessionSettingsCard';
+import { copySessionDefaults } from '../DirectSessionSettings';
 import { HostSecuritySettingsCard } from './HostSecuritySettingsCard';
 import {
   ControlledHostState,
@@ -32,16 +34,18 @@ const RUSTDESK_PRIVACY_URL: string = 'https://rustdesk.com/privacy.html';
 
 type SettingsSection = 'tutorial' | 'server' | 'account'
   | 'session_input' | 'session_quality' | 'session_security' | 'session_other'
-  | 'diagnostics';
+  | 'direct' | 'diagnostics';
 
 export interface SettingsTabProps {
   decoderCapabilities: DecoderCapability[];
+  /** Rates this device can show, ascending. Owned by the page. */
+  refreshRateChoices: number[];
   serverConfig: ServerConfig;
+  /** The approval this page holds; editing `serverConfig` never changes it. */
+  serverProfile: ServerProfileState;
   serverValidating: boolean;
   serverSaving: boolean;
   sessionDefaults: SessionDefaults;
-  accountState: AccountState;
-  accountLoginProviders: AccountLoginProvider[];
   controlledHostState: ControlledHostState;
   controlledTwoFactorState: ControlledTwoFactorState;
   errorText: string;
@@ -54,13 +58,6 @@ export interface SettingsTabProps {
   onValidateServerConfig: (config: ServerConfig) => void;
   onSaveServerConfig: (config: ServerConfig) => void;
   onSessionDefaultsChange: (defaults: SessionDefaults) => void;
-  onAccountLogin: (username: string, password: string) => void;
-  onAccountVerify: (code: string) => void;
-  onAccountCancelChallenge: () => void;
-  onAccountOidcLogin: (provider: string) => void;
-  onAccountOidcCancel: () => void;
-  onAddressBookSync: () => void;
-  onAccountLogout: () => void;
   onControlledRefresh: () => void;
   onControlledPasswordModeChange: (mode: ControlledPasswordMode) => void;
   onControlledSetPermanentPassword: (password: string, confirmation: string) => void;
@@ -80,11 +77,10 @@ export interface SettingsTabProps {
 export struct SettingsTab {
   @Param decoderCapabilities: DecoderCapability[] = [];
   @Param serverConfig: ServerConfig = new ServerConfig();
+  @Param serverProfile: ServerProfileState = new ServerProfileState();
   @Param serverValidating: boolean = false;
   @Param serverSaving: boolean = false;
   @Param sessionDefaults: SessionDefaults = new SessionDefaults();
-  @Param accountState: AccountState = new AccountState();
-  @Param accountLoginProviders: AccountLoginProvider[] = [];
   @Param controlledHostState: ControlledHostState = new ControlledHostState();
   @Param controlledTwoFactorState: ControlledTwoFactorState = new ControlledTwoFactorState();
   @Param errorText: string = '';
@@ -100,6 +96,7 @@ export struct SettingsTab {
   @Local settingsSheetVisible: boolean = false;
   @Local pressedSection: string = '';
   @Local appVersionName: string = '--';
+  @Param refreshRateChoices: number[] = [30];
   @Local sessionDefaultsDraft: SessionDefaults = new SessionDefaults();
   @Param scroller: Scroller = new Scroller();
   private sheetScroller: Scroller = new Scroller();
@@ -108,13 +105,6 @@ export struct SettingsTab {
   @Event onValidateServerConfig: (config: ServerConfig) => void = (_config: ServerConfig) => {};
   @Event onSaveServerConfig: (config: ServerConfig) => void = (_config: ServerConfig) => {};
   @Event onSessionDefaultsChange: (defaults: SessionDefaults) => void = (_defaults: SessionDefaults) => {};
-  @Event onAccountLogin: (username: string, password: string) => void = (_username: string, _password: string) => {};
-  @Event onAccountVerify: (code: string) => void = (_code: string) => {};
-  @Event onAccountCancelChallenge: () => void = () => {};
-  @Event onAccountOidcLogin: (provider: string) => void = (_provider: string) => {};
-  @Event onAccountOidcCancel: () => void = () => {};
-  @Event onAddressBookSync: () => void = () => {};
-  @Event onAccountLogout: () => void = () => {};
   @Event onControlledRefresh: () => void = () => {};
   @Event onControlledPasswordModeChange: (mode: ControlledPasswordMode) => void =
     (_mode: ControlledPasswordMode) => {};
@@ -270,20 +260,7 @@ export struct SettingsTab {
   }
 
   private copySessionDefaults(source: SessionDefaults): SessionDefaults {
-    const defaults = new SessionDefaults();
-    defaults.touchMode = source.touchMode;
-    defaults.relativeMouseMode = source.relativeMouseMode;
-    defaults.rightClickGesture = source.rightClickGesture;
-    defaults.audioEnabled = source.audioEnabled;
-    defaults.clipboardEnabled = source.clipboardEnabled;
-    defaults.qualityPreset = source.qualityPreset;
-    defaults.customQuality = source.customQuality;
-    defaults.customFps = source.customFps;
-    defaults.preferredCodec = source.preferredCodec;
-    defaults.gesturesEnabled = source.gesturesEnabled;
-    defaults.toolbarExpanded = source.toolbarExpanded;
-    defaults.sessionSharingEnabled = source.sessionSharingEnabled;
-    return defaults;
+    return copySessionDefaults(source);
   }
 
   private updateSessionDefaultsDraft(defaults: SessionDefaults): void {
@@ -296,7 +273,7 @@ export struct SettingsTab {
     if (section === 'session_input'
       || section === 'session_quality'
       || section === 'session_security'
-      || section === 'session_other') {
+      || section === 'session_other' || section === 'direct') {
       this.sessionDefaultsDraft = this.copySessionDefaults(this.sessionDefaults);
     }
     this.selectedSection = section;
@@ -311,6 +288,9 @@ export struct SettingsTab {
   }
 
   private sheetTitle(): ResourceStr {
+    if (this.selectedSection === 'direct') {
+      return $r('app.string.direct_settings_title');
+    }
     if (this.selectedSection === 'tutorial') {
       return $r('app.string.settings_tutorial_title');
     }
@@ -336,6 +316,9 @@ export struct SettingsTab {
   }
 
   private sheetSubtitle(): ResourceStr {
+    if (this.selectedSection === 'direct') {
+      return $r('app.string.direct_settings_summary');
+    }
     if (this.selectedSection === 'tutorial') {
       return $r('app.string.settings_tutorial_subtitle');
     }
@@ -367,22 +350,6 @@ export struct SettingsTab {
     return $r('app.string.settings_server_custom');
   }
 
-  private accountSummary(): ResourceStr {
-    if (this.accountState.loggedIn) {
-      if (this.accountState.displayName.trim().length > 0) {
-        return this.accountState.displayName.trim();
-      }
-      if (this.accountState.name.trim().length > 0) {
-        return this.accountState.name.trim();
-      }
-      return $r('app.string.settings_account_signed_in');
-    }
-    if (this.accountState.apiServer.trim().length === 0) {
-      return $r('app.string.settings_account_api_unavailable');
-    }
-    return $r('app.string.settings_account_signed_out');
-  }
-
   private sessionSummary(): ResourceStr {
     if (this.sessionDefaults.touchMode) {
       return $r('app.string.settings_pointer_touchpad');
@@ -393,16 +360,7 @@ export struct SettingsTab {
   }
 
   private qualitySummary(): string {
-    if (this.sessionDefaults.qualityPreset === 'best') {
-      return '最佳画质';
-    }
-    if (this.sessionDefaults.qualityPreset === 'low') {
-      return '低带宽';
-    }
-    if (this.sessionDefaults.qualityPreset === 'custom') {
-      return `自定义 · ${this.sessionDefaults.customQuality}% · ${this.sessionDefaults.customFps} FPS`;
-    }
-    return '平衡';
+    return `${Math.round(this.sessionDefaults.refreshRate)} 帧 · 画质自动`;
   }
 
   private securitySummary(): string {
@@ -547,8 +505,8 @@ export struct SettingsTab {
           this.SettingsTile(
             'account',
             $r('sys.symbol.person_crop_circle_fill'),
-            '账户',
-            this.accountSummary(),
+            $r('app.string.settings_account_title'),
+            $r('app.string.settings_account_unavailable'),
             $r('app.color.neu_accent'),
           )
           this.SettingsTile(
@@ -596,6 +554,11 @@ export struct SettingsTab {
           )
         }
         .width(this.hubFrameWidth());
+        Row() {
+          this.SettingsTile('direct', $r('sys.symbol.display'), $r('app.string.direct_settings_title'),
+            $r('app.string.direct_settings_summary'), $r('app.color.neu_accent'))
+        }
+        .width(this.hubFrameWidth());
       }
       .width(this.hubFrameWidth());
     } else {
@@ -617,8 +580,8 @@ export struct SettingsTab {
         this.SettingsTile(
           'account',
           $r('sys.symbol.person_crop_circle_fill'),
-          '账户',
-          this.accountSummary(),
+          $r('app.string.settings_account_title'),
+          $r('app.string.settings_account_unavailable'),
           $r('app.color.neu_accent'),
         )
         this.SettingsTile(
@@ -649,6 +612,8 @@ export struct SettingsTab {
           '音频、剪贴板、手势与工具栏',
           $r('app.color.neu_accent'),
         )
+        this.SettingsTile('direct', $r('sys.symbol.display'), $r('app.string.direct_settings_title'),
+          $r('app.string.direct_settings_summary'), $r('app.color.neu_accent'))
         this.SettingsTile(
           'diagnostics',
           $r('sys.symbol.info_circle'),
@@ -989,6 +954,7 @@ export struct SettingsTab {
       ServerSettingsCard({
         showHeader: false,
         config: this.serverConfig,
+        profile: this.serverProfile,
         validating: this.serverValidating,
         saving: this.serverSaving,
         onConfigChange: (config: ServerConfig) => this.onServerConfigChange(config),
@@ -998,21 +964,13 @@ export struct SettingsTab {
     } else if (this.selectedSection === 'account') {
       AccountSettingsCard({
         showHeader: false,
-        accountState: this.accountState,
-        loginProviders: this.accountLoginProviders,
-        onLogin: (username: string, password: string) => this.onAccountLogin(username, password),
-        onVerify: (code: string) => this.onAccountVerify(code),
-        onCancelChallenge: () => this.onAccountCancelChallenge(),
-        onOidcLogin: (provider: string) => this.onAccountOidcLogin(provider),
-        onOidcCancel: () => this.onAccountOidcCancel(),
-        onSync: () => this.onAddressBookSync(),
-        onLogout: () => this.onAccountLogout(),
       })
     } else if (this.selectedSection === 'session_input') {
       SessionDefaultsCard({
         showHeader: false,
         section: 'input',
         defaults: this.sessionDefaultsDraft,
+        refreshRateChoices: this.refreshRateChoices,
         onDefaultsChange: (defaults: SessionDefaults) => this.updateSessionDefaultsDraft(defaults),
       })
     } else if (this.selectedSection === 'session_quality') {
@@ -1020,6 +978,7 @@ export struct SettingsTab {
         showHeader: false,
         section: 'quality',
         defaults: this.sessionDefaultsDraft,
+        refreshRateChoices: this.refreshRateChoices,
         onDefaultsChange: (defaults: SessionDefaults) => this.updateSessionDefaultsDraft(defaults),
       })
     } else if (this.selectedSection === 'session_security') {
@@ -1045,7 +1004,13 @@ export struct SettingsTab {
         showHeader: false,
         section: 'other',
         defaults: this.sessionDefaultsDraft,
+        refreshRateChoices: this.refreshRateChoices,
         onDefaultsChange: (defaults: SessionDefaults) => this.updateSessionDefaultsDraft(defaults),
+      })
+    } else if (this.selectedSection === 'direct') {
+      DirectSessionSettingsCard({
+        defaults: this.sessionDefaultsDraft,
+        onDefaultsChange: (defaults: SessionDefaults): void => this.updateSessionDefaultsDraft(defaults),
       })
     } else {
       this.DiagnosticsPage()

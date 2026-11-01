@@ -54,9 +54,10 @@ const PENDING_INSTANCE_ID_KEY = 'pending_instance_id';
 const INTENT_TARGET_KEY = 'intent_target';
 const INTENT_KIND_KEY = 'intent_kind';
 const INTENT_ISSUED_AT_KEY = 'intent_issued_at';
+const INTENT_RUSTDESK_ID_ONLY_KEY = 'intent_rustdesk_id_only';
 
 export type EasyTierApiOperation = 'start_instance' | 'ensure_instance_running';
-export type EasyTierConnectionKind = 'remote_control' | 'view_only' | 'view_camera' | 'file_transfer';
+export type EasyTierConnectionKind = 'remote_control' | 'vnc' | 'rdp' | 'file_transfer';
 
 interface EasyTierApiRequestPayload {
   schemaVersion: number;
@@ -128,11 +129,13 @@ export class EasyTierConnectionIntent {
   target: string;
   kind: EasyTierConnectionKind;
   issuedAt: number;
+  rustdeskIdOnly: boolean;
 
-  constructor(target: string, kind: EasyTierConnectionKind, issuedAt: number) {
+  constructor(target: string, kind: EasyTierConnectionKind, issuedAt: number, rustdeskIdOnly: boolean = false) {
     this.target = target;
     this.kind = kind;
     this.issuedAt = issuedAt;
+    this.rustdeskIdOnly = kind === 'remote_control' && rustdeskIdOnly;
   }
 }
 
@@ -157,6 +160,7 @@ export class EasyTierApiResultEvent {
   instance: EasyTierInstanceSummary | undefined;
   target: string;
   kind: EasyTierConnectionKind;
+  rustdeskIdOnly: boolean = false;
 
   constructor(ok: boolean, requestId: string, operation: EasyTierApiOperation, code: string, message: string) {
     this.ok = ok;
@@ -201,8 +205,8 @@ export class EasyTierApiValidator {
   }
 
   static isConnectionKind(value: string): boolean {
-    return value === 'remote_control' || value === 'view_only'
-      || value === 'view_camera' || value === 'file_transfer';
+    return value === 'remote_control' || value === 'vnc'
+      || value === 'rdp' || value === 'file_transfer';
   }
 
   static isInstanceId(value: string): boolean {
@@ -402,7 +406,7 @@ export class EasyTierApiService {
   }
 
   static saveConnectionIntent(context: common.UIAbilityContext, target: string,
-    kind: EasyTierConnectionKind): boolean {
+    kind: EasyTierConnectionKind, rustdeskIdOnly: boolean = false): boolean {
     const normalizedTarget = target.trim();
     if (normalizedTarget.length === 0 || normalizedTarget.length > MAX_TARGET_LENGTH
       || !EasyTierApiValidator.isConnectionKind(kind)) {
@@ -413,6 +417,7 @@ export class EasyTierApiService {
       store.putSync(INTENT_TARGET_KEY, normalizedTarget);
       store.putSync(INTENT_KIND_KEY, kind);
       store.putSync(INTENT_ISSUED_AT_KEY, Date.now());
+      store.putSync(INTENT_RUSTDESK_ID_ONLY_KEY, kind === 'remote_control' && rustdeskIdOnly);
       store.flushSync();
       return true;
     } catch (error) {
@@ -428,13 +433,14 @@ export class EasyTierApiService {
       const target = (store.getSync(INTENT_TARGET_KEY, '') as string).trim();
       const kind = store.getSync(INTENT_KIND_KEY, '') as string;
       const issuedAt = store.getSync(INTENT_ISSUED_AT_KEY, 0) as number;
+      const rustdeskIdOnly = store.getSync(INTENT_RUSTDESK_ID_ONLY_KEY, false) === true;
       if (target.length === 0 || target.length > MAX_TARGET_LENGTH
         || !EasyTierApiValidator.isConnectionKind(kind)
         || !EasyTierApiValidator.isCurrentTimestamp(issuedAt, Date.now())) {
         EasyTierApiService.clearConnectionIntent(context);
         return undefined;
       }
-      return new EasyTierConnectionIntent(target, kind as EasyTierConnectionKind, issuedAt);
+      return new EasyTierConnectionIntent(target, kind as EasyTierConnectionKind, issuedAt, rustdeskIdOnly);
     } catch (_) {
       return undefined;
     }
@@ -443,7 +449,8 @@ export class EasyTierApiService {
   static clearConnectionIntent(context: common.UIAbilityContext): void {
     try {
       const store = EasyTierApiService.getStore(context);
-      EasyTierApiService.deleteKeys(store, [INTENT_TARGET_KEY, INTENT_KIND_KEY, INTENT_ISSUED_AT_KEY]);
+      EasyTierApiService.deleteKeys(store,
+        [INTENT_TARGET_KEY, INTENT_KIND_KEY, INTENT_ISSUED_AT_KEY, INTENT_RUSTDESK_ID_ONLY_KEY]);
       store.flushSync();
     } catch (_) {
     }
@@ -554,8 +561,9 @@ export class EasyTierApiService {
     try {
       const payload = await this.readResult();
       const event = this.validateResult(payload, pending);
-      this.finishPending(event, pending);
-      this.deliver(event);
+      if (this.finishPending(event, pending)) {
+        this.deliver(event);
+      }
     } catch (error) {
       const message = EasyTierApiService.errorMessage(error as Object);
       const event = new EasyTierApiResultEvent(
@@ -565,8 +573,9 @@ export class EasyTierApiService {
         'INTERNAL_ERROR',
         message,
       );
-      this.finishPending(event, pending);
-      this.deliver(event);
+      if (this.finishPending(event, pending)) {
+        this.deliver(event);
+      }
     } finally {
       this.activeRequestIds.delete(requestId);
     }
@@ -662,11 +671,18 @@ export class EasyTierApiService {
     return new EasyTierApiResultEvent(false, pending.requestId, pending.operation, 'INVALID_RESULT', message);
   }
 
-  private finishPending(event: EasyTierApiResultEvent, pending: EasyTierApiPendingRequest): void {
+  private finishPending(event: EasyTierApiResultEvent, pending: EasyTierApiPendingRequest): boolean {
+    // readResult is asynchronous: cancellation/new target may have replaced the request meanwhile.
+    // Never consume the new intent or deliver a stale result to its preflight.
+    const current = EasyTierApiService.loadPendingRequest(this.context);
+    if (current === undefined || current.requestId !== pending.requestId) {
+      return false;
+    }
     const intent = EasyTierApiService.loadConnectionIntent(this.context);
     if (intent !== undefined) {
       event.target = intent.target;
       event.kind = intent.kind;
+      event.rustdeskIdOnly = intent.rustdeskIdOnly;
     }
     EasyTierApiService.clearPendingRequest(this.context, pending.requestId);
     EasyTierApiService.clearConnectionIntent(this.context);
@@ -675,6 +691,7 @@ export class EasyTierApiService {
       event.code = 'MISSING_CONNECTION_INTENT';
       event.message = 'RustDesk 待恢复连接已丢失或过期';
     }
+    return true;
   }
 
   private deliver(event: EasyTierApiResultEvent): void {
