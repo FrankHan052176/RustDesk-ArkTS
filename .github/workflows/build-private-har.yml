@@ -141,7 +141,7 @@ jobs:
           from urllib.parse import urlsplit
 
           registry = urlsplit(os.environ['RD_ENGINE_HAR_REGISTRY'])
-          auth_key = '//' + registry.netloc + registry.path + ':_read_auth'
+          auth_key = '//' + registry.netloc + registry.path + ':_auth'
           values = []
           for line in os.environ.get('CODEARTS_PRIVATE_OHPM_READ', '').splitlines():
               key, separator, value = line.partition('=')
