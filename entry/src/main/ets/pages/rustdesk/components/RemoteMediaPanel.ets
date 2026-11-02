@@ -26,13 +26,19 @@ export struct RemoteMediaPanel {
     if (this.state.errorText.length > 0) {
       return this.state.errorText;
     }
+    if (!this.state.available) {
+      return '等待音频会话';
+    }
     if (this.state.muted) {
       return '远端音频已静音';
+    }
+    if (this.state.allowed === false) {
+      return '音频暂不可用';
     }
     if (this.state.rendererActive) {
       return '正在播放远端音频';
     }
-    return '远端音频已就绪';
+    return '等待远端音频';
   }
 
   private animateAudioBlur(active: boolean): void {
@@ -67,11 +73,6 @@ export struct RemoteMediaPanel {
                 : $r('app.color.text_primary'))
               .maxLines(2)
               .textOverflow({ overflow: TextOverflow.Ellipsis });
-
-            Text('静音将在当前缓冲播放完后生效')
-              .width('100%')
-              .fontSize($r('app.float.font_body'))
-              .fontColor($r('app.color.text_secondary'));
 
             LuminousSwitch({
               label: '远端音频',
