@@ -581,7 +581,7 @@
     },
     {
       "name": "settings_session_sharing_description",
-      "value": "仅控制本设备作为分享方；接收连接无需开启"
+      "value": "分享含可重复免密凭据，请仅向信任的设备发送"
     },
     {
       "name": "settings_tutorial_title",
