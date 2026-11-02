@@ -21,7 +21,6 @@ export function matchesResolutionRefusal(event: NativeEvent, display: number, wi
 export class SessionDisplayController {
   private readonly viewport: RustDeskViewportModel;
   private readonly bridge: NativeSessionBridge;
-  private readonly invalidateFrames: () => void;
   private readonly reportActionError: (response: ActionResponse) => void;
   private displays: PeerDisplayInfo[] = [];
   private resolutions: ResolutionInfo[] = [];
@@ -32,12 +31,10 @@ export class SessionDisplayController {
   constructor(
     viewport: RustDeskViewportModel,
     bridge: NativeSessionBridge,
-    invalidateFrames: () => void,
     reportActionError: (response: ActionResponse) => void,
   ) {
     this.viewport = viewport;
     this.bridge = bridge;
-    this.invalidateFrames = invalidateFrames;
     this.reportActionError = reportActionError;
   }
 
@@ -69,7 +66,6 @@ export class SessionDisplayController {
     const selectedDisplay = plan.display;
     const width = Math.max(Math.round(plan.videoSize.width), 1);
     const height = Math.max(Math.round(plan.videoSize.height), 1);
-    this.invalidateFrames();
     this.awaitingAction = true;
     try {
       if (!this.applyAction(this.bridge.switchDisplay(sessionId, selectedDisplay))) {

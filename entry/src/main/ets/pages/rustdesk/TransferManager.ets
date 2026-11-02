@@ -7,10 +7,46 @@ import {
   TransferDirection,
   TransferItem,
 } from './RustDeskSessionTypes';
-import { NativeEvent } from './RustDeskTypes';
+import { ApprovedServerProfile } from './RustDeskDirectoryTypes';
+import { ActionResponse, NativeEvent } from './RustDeskTypes';
 import { RemoteFilePath } from './RemoteFilePath';
 
-type TransferSessionState = 'idle' | 'connecting' | 'awaiting_password' | 'ready' | 'failed';
+type TransferSessionState = 'idle' | 'connecting' | 'awaiting_password' | 'awaiting_2fa' | 'ready' | 'failed' | 'closing';
+
+/**
+ * The second-factor step this file session's peer is asking for.
+ *
+ * It is the peer's own text plus the local enrollment capability the challenge
+ * event carried. Both describe answering this one session's authentication:
+ * neither is a claim that a code was accepted, and neither names another
+ * session's metadata.
+ */
+export interface SecondFactorChallenge {
+  /** The peer's text for this challenge, exactly as the msgbox event carried it. */
+  message: string;
+  /**
+   * Whether this build can really enroll a trusted device.
+   *
+   * The native side reports it on the challenge itself; `false` (or absent)
+   * means an answer with `trust = true` would be refused before it reached the
+   * session, so the switch is not offered.
+   */
+  trustEnrollmentSupported: boolean;
+}
+
+/**
+ * The receipt of one second-factor answer offered to this file session.
+ *
+ * `queued` is the whole of a successful call: the code reached the session's own
+ * authentication loop on its own wire, so the peer has not answered yet. It is
+ * never a claim that the peer authenticated this session.
+ */
+export interface SecondFactorSubmission {
+  /** The code reached this session's own authentication loop. */
+  queued: boolean;
+  /** The engine's own refusal text; empty only when `queued` is true. */
+  message: string;
+}
 
 export class TransferManager {
   private readonly bridge: NativeSessionBridge;
@@ -24,17 +60,38 @@ export class TransferManager {
   private issuedSessionIds: string[] = [];
   private passwordRequested: boolean = false;
   private passwordMessage: string = '';
+  private secondFactorRequested: boolean = false;
+  private secondFactorMessage: string = '';
+  private secondFactorTrustEnrollmentSupported: boolean = false;
   private sessionState: TransferSessionState = 'idle';
   private statusMessage: string = '文件传输未连接';
   private transferErrorMessage: string = '';
   private closeInProgress: boolean = false;
+  /** The lifecycle epoch native issued for this session; the ACK echoes it. */
+  private sessionEpoch: string = '';
+  /** The one close attempt of the current session; every caller shares it. */
+  private closePromise: Promise<boolean> | undefined = undefined;
+  /** Native has not confirmed this session's release, so the id stays ours. */
+  private closeUnconfirmed: boolean = false;
 
   constructor(bridge: NativeSessionBridge, sessionIdFactory: () => string) {
     this.bridge = bridge;
     this.sessionIdFactory = sessionIdFactory;
   }
 
-  public open(target: string, password: string, forceRelay: boolean, root: DownloadRoot): boolean {
+  /**
+   * Opens the one file-transfer session this manager owns.
+   *
+   * `approvedServerProfile` is the route the engine already recorded for an
+   * explicitly saved profile. It is a value-owned envelope, so passing it cannot
+   * turn an editable draft, a LAN claim or a typed address into trust, and
+   * omitting it leaves the session on whatever route it would have had anyway.
+   * The root is named at add time rather than after start because the engine
+   * fixes it for the session: a later path would be a different root than the
+   * one this add authorised.
+   */
+  public open(target: string, password: string, forceRelay: boolean, root: DownloadRoot,
+    approvedServerProfile?: ApprovedServerProfile, rustdeskIdOnly: boolean = false): boolean {
     if (this.closeInProgress || this.fileSessionId.length > 0 || root.path.trim().length === 0) {
       return false;
     }
@@ -49,7 +106,12 @@ export class TransferManager {
       forceRelay,
       isFileTransfer: true,
       isViewOnly: false,
+      rustdeskIdOnly,
+      transferRoot: root.path,
     };
+    if (approvedServerProfile !== undefined) {
+      options.approvedServerProfile = approvedServerProfile;
+    }
     const addResponse = this.bridge.addSession(sessionId, target, options);
     if (!addResponse.ok) {
       this.statusMessage = addResponse.message?.trim() || '无法创建文件传输会话';
@@ -57,6 +119,9 @@ export class TransferManager {
     }
     const resolvedSessionId = addResponse.session?.sessionId.trim() || sessionId;
     this.fileSessionId = resolvedSessionId;
+    // Native issues this session's own epoch at add time; a close ACK must echo
+    // that value, so it is captured before anything else can name the session.
+    this.sessionEpoch = this.sessionEpochOf(addResponse, resolvedSessionId);
     this.downloadRoot = root;
     this.remoteDirectory = '/';
     this.remoteEntries = [];
@@ -64,21 +129,35 @@ export class TransferManager {
     this.pendingTransfers = [];
     this.passwordRequested = false;
     this.passwordMessage = '';
+    this.secondFactorRequested = false;
+    this.secondFactorMessage = '';
+    this.secondFactorTrustEnrollmentSupported = false;
     this.sessionState = 'connecting';
     this.statusMessage = '正在建立文件传输连接';
     this.transferErrorMessage = '';
 
-    if (!this.bridge.startSession(resolvedSessionId).ok) {
-      void this.bridge.closeSession(resolvedSessionId);
-      this.resetSessionState('文件传输连接启动失败');
+    const startResponse = this.bridge.startSession(resolvedSessionId);
+    if (!startResponse.ok) {
+      // The add already gave this id to the engine, so the failed start is
+      // retired through the one close owner instead of a fire-and-forget close:
+      // the same attempt, the same receipt, and the identity kept until that
+      // receipt reports the release.
+      if (this.sessionEpoch.length === 0) {
+        this.sessionEpoch = this.sessionEpochOf(startResponse, resolvedSessionId);
+      }
+      void this.beginClose('文件传输连接启动失败');
+      this.statusMessage = '文件传输连接启动失败';
       return false;
+    }
+    if (this.sessionEpoch.length === 0) {
+      this.sessionEpoch = this.sessionEpochOf(startResponse, resolvedSessionId);
     }
     this.issuedSessionIds.push(resolvedSessionId);
     return true;
   }
 
   public poll(): boolean {
-    if (this.closeInProgress || !this.isReady()) {
+    if (this.closeInProgress || this.closeUnconfirmed || !this.isReady()) {
       return false;
     }
     const response = this.bridge.pollEvents(this.fileSessionId, 20);
@@ -111,7 +190,7 @@ export class TransferManager {
 
   public cancel(actId: number): boolean {
     const item = this.findTransfer(actId);
-    if (this.closeInProgress || !item || this.isTerminal(item) || !this.isReady()) {
+    if (this.closeInProgress || this.closeUnconfirmed || !item || this.isTerminal(item) || !this.isReady()) {
       return false;
     }
     const response = this.bridge.cancelTransfer(this.fileSessionId, actId);
@@ -131,14 +210,81 @@ export class TransferManager {
     return this.passwordMessage;
   }
 
+  /**
+   * Takes the second-factor step this file session's peer asked for, once.
+   *
+   * Taking it here only stops this client from raising the same prompt twice for
+   * one challenge: the challenge itself stays live in the engine until the peer
+   * answers, so nothing about this session is ended by reading it.
+   */
+  public consumeSecondFactorRequest(): SecondFactorChallenge | undefined {
+    if (!this.secondFactorRequested) {
+      return undefined;
+    }
+    this.secondFactorRequested = false;
+    return {
+      message: this.secondFactorMessage,
+      trustEnrollmentSupported: this.secondFactorTrustEnrollmentSupported,
+    };
+  }
+
+  /**
+   * Whether this file session's own peer metadata allows trusted-device
+   * enrollment.
+   *
+   * The value is read for this session's id, so a desktop session's answer never
+   * describes this connection. A session that is not open, a peer that has not
+   * reported the flag and a HAR that cannot answer the call are all `false`: the
+   * switch is hidden and the mandatory code is still asked for, which is the
+   * same outcome as a peer that really refused enrollment.
+   */
+  public canTrustDevice(): boolean {
+    if (!this.isReady()) {
+      return false;
+    }
+    try {
+      return this.bridge.getEnableTrustedDevices(this.fileSessionId);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
+   * Offers one second-factor code to this file session, and to no other.
+   *
+   * `undefined` means this file session is not open, or is already closing, and
+   * therefore owns no challenge: the caller must not raise a prompt for it.
+   * A refusal comes back as `queued: false` with the engine's own text and this
+   * session's authentication untouched: the engine refuses a code before it
+   * takes ownership of it, so only the peer may end that step.
+   */
+  public submitSecondFactor(code: string, trustThisDevice: boolean): SecondFactorSubmission | undefined {
+    if (!this.isReady() || this.closeInProgress || this.closeUnconfirmed || this.sessionState === 'failed') {
+      return undefined;
+    }
+    const response = this.bridge.send2fa(this.fileSessionId, code, trustThisDevice);
+    if (!response.ok || response.queued !== true) {
+      return { queued: false, message: response.message?.trim() || '未收到验证码入队确认，请重试' };
+    }
+    // Only a queued code leaves the caller's draft. This session is not ready
+    // here: `peer_info` is what says the peer authorized it.
+    this.secondFactorRequested = false;
+    this.secondFactorMessage = '';
+    this.secondFactorTrustEnrollmentSupported = false;
+    this.sessionState = 'connecting';
+    this.statusMessage = '2FA 验证码已提交，正在等待远端验证';
+    return { queued: true, message: '' };
+  }
+
   public login(password: string, remember: boolean = false): boolean {
-    if (!this.isReady() || password.trim().length === 0) {
+    if (!this.isReady() || this.closeInProgress || this.closeUnconfirmed || password.trim().length === 0) {
       return false;
     }
     const response = this.bridge.login(this.fileSessionId, password, remember);
-    if (!response.ok) {
-      this.sessionState = 'failed';
-      this.statusMessage = response.message?.trim() || '文件传输密码提交失败';
+    if (!response.ok || response.queued !== true) {
+      // A locally refused answer ends neither the peer's challenge nor this
+      // session. Only a queued answer leaves the caller's password draft.
+      this.statusMessage = response.message?.trim() || '未收到密码入队确认，请重试';
       return false;
     }
     this.passwordRequested = false;
@@ -150,7 +296,8 @@ export class TransferManager {
 
   public resolveOverride(actId: number, needOverride: boolean): boolean {
     const item = this.findTransfer(actId);
-    if (!item || item.state !== 'awaiting_override' || !this.isReady()) {
+    if (!item || item.state !== 'awaiting_override' || !this.isReady()
+      || this.closeInProgress || this.closeUnconfirmed) {
       return false;
     }
     const response = this.bridge.setConfirmOverrideFile(
@@ -179,6 +326,19 @@ export class TransferManager {
         this.statusMessage = '文件传输等待密码验证';
         return true;
       }
+      if (type === 'input-2fa' || type === 're-input-2fa') {
+        if (this.sessionState === 'failed' || this.closeInProgress) {
+          // The session this challenge names has already ended, so nothing here
+          // may raise a prompt for it.
+          return true;
+        }
+        this.secondFactorRequested = true;
+        this.secondFactorMessage = title.length > 0 ? `${title}: ${text}` : text;
+        this.secondFactorTrustEnrollmentSupported = event.trust_this_device_supported === true;
+        this.sessionState = 'awaiting_2fa';
+        this.statusMessage = '文件传输等待二次验证 (2FA)';
+        return true;
+      }
       if (title === 'Connection Error' || type.includes('error')) {
         this.sessionState = 'failed';
         this.statusMessage = title.length > 0 ? `${title}: ${text}` : (text || '文件传输连接失败');
@@ -204,6 +364,13 @@ export class TransferManager {
       return true;
     }
     if (event.name === 'close') {
+      // Nothing about this session is answerable any more, a second-factor step
+      // it had not delivered included.
+      this.passwordRequested = false;
+      this.passwordMessage = '';
+      this.secondFactorRequested = false;
+      this.secondFactorMessage = '';
+      this.secondFactorTrustEnrollmentSupported = false;
       this.sessionState = 'failed';
       this.statusMessage = '文件传输连接已结束';
       return true;
@@ -319,8 +486,22 @@ export class TransferManager {
     return this.fileSessionId.length > 0 && this.downloadRoot !== undefined;
   }
 
+  /**
+   * Whether this manager still owes the engine a confirmed close.
+   *
+   * A close in flight and a close whose release native did not confirm both
+   * leave the session owned here: no transfer may resume, and no other session
+   * may take its place, until a close is really confirmed.
+   */
+  public isClosePending(): boolean {
+    return this.closeInProgress || this.closeUnconfirmed;
+  }
+
   public canTransfer(): boolean {
-    return this.isReady() && this.sessionState === 'ready';
+    return this.isReady()
+      && !this.closeInProgress
+      && !this.closeUnconfirmed
+      && this.sessionState === 'ready';
   }
 
   public hasFailed(): boolean {
@@ -340,20 +521,137 @@ export class TransferManager {
     return message;
   }
 
-  public async close(): Promise<boolean> {
+  /**
+   * Retires the session this manager owns and reports whether native really
+   * released it.
+   *
+   * `true` means no session is owed any more: either there was nothing to
+   * reclaim, or the close receipt reported every destination released and the
+   * epoch native issued for that same session was acknowledged afterwards. It
+   * is never a claim that a native session was reclaimed when there was none.
+   *
+   * Repeated calls while one attempt is in flight share that attempt's result,
+   * so a second caller is never told that a session closed when it did not. A
+   * close native did not confirm keeps the session id, its epoch and its root,
+   * so the same manager can be asked again; it is never replaced by a new
+   * session.
+   */
+  public close(): Promise<boolean> {
+    return this.beginClose('文件传输未连接');
+  }
+
+  private beginClose(closedMessage: string): Promise<boolean> {
     if (this.fileSessionId.length === 0) {
-      this.resetSessionState('文件传输未连接');
-      return true;
+      this.resetSessionState(closedMessage);
+      return Promise.resolve(true);
     }
-    if (this.closeInProgress) {
-      return true;
+    if (this.closePromise !== undefined) {
+      return this.closePromise;
     }
     this.closeInProgress = true;
+    this.sessionState = 'closing';
+    this.statusMessage = '正在关闭文件传输会话';
     const sessionId = this.fileSessionId;
-    const response = await this.bridge.closeSession(sessionId);
-    this.resetSessionState('文件传输未连接');
+    const epoch = this.sessionEpoch;
+    const attempt = this.reclaimSession(sessionId, epoch, closedMessage);
+    this.closePromise = attempt;
+    // The attempt is cleared only after it has really settled, so a later
+    // close() starts the next attempt with the identity this one kept.
+    attempt.then(() => {
+      this.clearCloseAttempt(attempt);
+    }, () => {
+      this.clearCloseAttempt(attempt);
+    });
+    return attempt;
+  }
+
+  private clearCloseAttempt(attempt: Promise<boolean>): void {
+    if (this.closePromise === attempt) {
+      this.closePromise = undefined;
+    }
+  }
+
+  private async reclaimSession(sessionId: string, epoch: string, closedMessage: string): Promise<boolean> {
+    try {
+      // Even an incomplete add receipt must not leave the viewer running.
+      // The missing epoch still forbids an ACK or an identity reset below.
+      const release = await this.bridge.closeSession(sessionId);
+      if (epoch.length === 0) {
+        return this.markCloseUnconfirmed('文件传输会话未能确认释放：缺少该会话的生命周期标识');
+      }
+      if (!release.ok || release.released !== true) {
+        const detail = release.message === undefined ? '' : release.message.trim();
+        return this.markCloseUnconfirmed(detail.length > 0
+          ? `文件传输会话未能确认释放：${detail}`
+          : '文件传输会话未能确认释放，会话可能仍被占用');
+      }
+      if (!this.isSameSessionReceipt(release, sessionId, epoch)) {
+        // A receipt that names another session id or another epoch is not this
+        // session's release: acknowledging it would retire the wrong one.
+        return this.markCloseUnconfirmed('文件传输会话关闭回执属于其他会话，未确认释放');
+      }
+      const acknowledgement = this.bridge.acknowledgeClose(sessionId, epoch);
+      if (!acknowledgement.ok) {
+        const detail = acknowledgement.message === undefined ? '' : acknowledgement.message.trim();
+        return this.markCloseUnconfirmed(detail.length > 0
+          ? `文件传输关闭回执未被确认：${detail}`
+          : '文件传输关闭回执未被确认，会话仍由本地持有');
+      }
+      this.closeInProgress = false;
+      this.closeUnconfirmed = false;
+      this.resetSessionState(closedMessage);
+      return true;
+    } catch (error) {
+      return this.markCloseUnconfirmed(`文件传输会话关闭请求失败：${String(error)}`);
+    }
+  }
+
+  /**
+   * Records a close native did not confirm, keeping everything that names the
+   * session so the operator can ask again.
+   */
+  private markCloseUnconfirmed(message: string): boolean {
     this.closeInProgress = false;
-    return response.ok;
+    this.closeUnconfirmed = true;
+    this.sessionState = 'closing';
+    this.statusMessage = message;
+    return false;
+  }
+
+  /**
+   * Whether a close receipt really describes this session and its epoch.
+   *
+   * Native always names the session and epoch. Missing identity is not
+   * evidence for this session and must not permit its ACK.
+   */
+  private isSameSessionReceipt(release: ActionResponse, sessionId: string, epoch: string): boolean {
+    const session = release.session;
+    if (session === undefined) {
+      return false;
+    }
+    if (session.sessionId.trim() !== sessionId) {
+      return false;
+    }
+    const receiptEpoch = session.lifecycleEpoch;
+    return receiptEpoch !== undefined && receiptEpoch.trim() === epoch;
+  }
+
+  /**
+   * The epoch native issued for this exact session in a real response, or ''.
+   *
+   * A response that names another session id cannot contribute an epoch: the
+   * ACK must echo a value issued for the session being closed and no other.
+   */
+  private sessionEpochOf(response: ActionResponse, sessionId: string): string {
+    const session = response.session;
+    if (session === undefined) {
+      return '';
+    }
+    if (session.sessionId.trim() !== sessionId) {
+      return '';
+    }
+    const epoch = session.lifecycleEpoch;
+    return epoch === undefined ? '' : epoch.trim();
   }
 
   private startTransfer(
@@ -584,6 +882,7 @@ export class TransferManager {
 
   private resetSessionState(message: string): void {
     this.fileSessionId = '';
+    this.sessionEpoch = '';
     this.downloadRoot = undefined;
     this.remoteDirectory = '/';
     this.remoteEntries = [];
@@ -591,6 +890,9 @@ export class TransferManager {
     this.pendingTransfers = [];
     this.passwordRequested = false;
     this.passwordMessage = '';
+    this.secondFactorRequested = false;
+    this.secondFactorMessage = '';
+    this.secondFactorTrustEnrollmentSupported = false;
     this.sessionState = 'idle';
     this.statusMessage = message;
     this.transferErrorMessage = '';

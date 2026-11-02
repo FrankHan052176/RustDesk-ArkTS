@@ -154,6 +154,17 @@ export interface NativeEvent {
   /** Verdict reason; resolution_refused carries the local reason its requested size was refused. */
   message?: string;
   type?: string;
+  /**
+   * `msgbox` with `type: 'input-2fa'`: whether this build can really enroll a
+   * trusted device, as the native side itself reports it next to the challenge.
+   *
+   * It is the local enrollment capability, not the peer's own
+   * `enable_trusted_devices` policy: this engine refuses `trust = true` outright
+   * until hwid enrollment exists, so a switch must not be offered by a build
+   * whose own answer is `false`. Absent means the event did not say, which is
+   * treated the same as `false`.
+   */
+  trust_this_device_supported?: boolean;
   secure?: string;
   direct?: string;
   stream_type?: string;

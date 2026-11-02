@@ -23,6 +23,16 @@ export interface SessionStartOptions {
    */
   approvedServerProfile?: ApprovedServerProfile;
   /**
+   * The absolute local directory this file-transfer session may write into.
+   *
+   * It travels with the add because the engine records the root once, for this
+   * session; a path supplied after start would be a different root than the one
+   * the session was opened with. Only a file-transfer session reads it: with a
+   * root the engine serves uploads and downloads, without one it can still list
+   * the remote directory but refuses a transfer instead of guessing a location.
+   */
+  transferRoot?: string;
+  /**
    * Requested peer capture rate.
    *
    * It has to travel with the session start because the controlled host reads
@@ -245,6 +255,7 @@ export function mergeQualityStatus(
 
 export interface RemoteAudioState {
   available: boolean;
+  allowed?: boolean;
   muted: boolean;
   rendererActive: boolean;
   errorText: string;

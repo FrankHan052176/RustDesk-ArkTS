@@ -174,16 +174,6 @@ export class RustDeskViewportModel {
   private surfaceHeight: number = 0;
   private rotation: number = 0;
   private displayMode: RustDeskDisplayMode = 'fit';
-  /**
-   * Whether the picture is presented by the RGBA fallback image rather than the
-   * native Surface.
-   *
-   * The two clip differently: the Surface's container is measured at the mode's
-   * rectangle and clips the transformed picture to it, while the fallback image fills
-   * the pane and is transformed outside that container, so the pane is its clip.
-   * Input must follow whichever is presenting.
-   */
-  private fallbackPresentation: boolean = false;
   /** The panel's physical pixels per vp, which `original` mode measures with. */
   private pxPerVp: number = 1;
   private viewScale: number = 1;
@@ -276,16 +266,6 @@ export class RustDeskViewportModel {
     this.displayMode = mode;
   }
 
-  /**
-   * Whether the RGBA fallback image presents the picture instead of the Surface.
-   *
-   * It is the caller's live presentation state: the fallback is used only while an
-   * RGBA frame is on screen, and it changes the clip input is mapped through.
-   */
-  setFallbackPresentation(active: boolean): void {
-    this.fallbackPresentation = active;
-  }
-
   setViewTransform(scale: number, offsetX: number, offsetY: number, rotation: number): void {
     this.viewScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
     this.viewOffsetX = Number.isFinite(offsetX) ? offsetX : 0;
@@ -368,7 +348,6 @@ export class RustDeskViewportModel {
       remoteRect,
       this.rotation,
       presented,
-      this.fallbackPresentation ? new RustDeskRect(0, 0, this.viewportWidth, this.viewportHeight) : presented,
     );
     space.viewScale = this.viewScale;
     space.viewOffsetX = this.viewOffsetX;

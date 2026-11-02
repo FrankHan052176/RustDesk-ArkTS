@@ -19,6 +19,36 @@ export interface NativeClipboardResponse extends ActionResponse {
   image?: NativeClipboardImageDescriptor | null;
 }
 
+/**
+ * One file clipboard fact, exactly as the engine reported it.
+ *
+ * Only `files` carries paths: a peer's files that really landed on this device,
+ * keeping the generation they were received under even if the permission has been
+ * withdrawn since. `offered` is this side's offer that really reached the wire, and
+ * `failed` names a reason from the engine's own vocabulary. Nothing here is derived
+ * from a queued command, so no fact is optimistic.
+ */
+export interface NativeClipboardFileEvent {
+  kind: string;
+  request_id?: number | null;
+  revision?: string;
+  paths?: Array<string>;
+  bytes?: number;
+  files?: number;
+  reason?: string;
+  error?: string;
+}
+
+export interface NativeClipboardFileResponse {
+  ok: boolean;
+  action: string;
+  message?: string;
+  allowed?: boolean;
+  revision?: string;
+  pending?: number;
+  events?: Array<NativeClipboardFileEvent>;
+}
+
 export interface NativeSessionBridge {
   switchDisplay(sessionId: string, display: number): ActionResponse;
   setSize(sessionId: string, display: number, width: number, height: number): ActionResponse;
@@ -27,6 +57,7 @@ export interface NativeSessionBridge {
   changeResolution(sessionId: string, display: number, width: number, height: number): ActionResponse;
   getImageQuality(sessionId: string): string | null;
   getConnToken(sessionId: string): string | null;
+  hasConnToken(sessionId: string): boolean;
   getEnableTrustedDevices(sessionId: string): boolean;
   send2fa(sessionId: string, code: string, trustThisDevice: boolean): ActionResponse;
   inputString(sessionId: string, value: string, inputGeneration?: string): ActionResponse;
@@ -38,6 +69,21 @@ export interface NativeSessionBridge {
   sendClipboardFiles(sessionId: string, paths: Array<string>): ActionResponse;
   sendClipboardImage(sessionId: string, image: Uint8Array): ActionResponse;
   setClipboardFileRoot(sessionId: string, root: string): ActionResponse;
+  /**
+   * The file clipboard's non-consuming state: the permission generation, whether
+   * exchange is allowed, and how many facts are waiting.
+   *
+   * This is what a background poll may look at. It takes no event, so it can never
+   * steal the applying consumer's own batch.
+   */
+  getClipboardFileState(sessionId: string): NativeClipboardFileResponse;
+  /**
+   * The foreground consumer's own batch of file clipboard facts, at most eight.
+   *
+   * Every returned fact must be processed. The batch is taken once and stays taken:
+   * a fact that is not handled is not offered again by a later read.
+   */
+  takeClipboardFileEvents(sessionId: string): NativeClipboardFileResponse;
   takeClipboard(sessionId: string): NativeClipboardResponse;
   takeClipboardImage(sessionId: string): Uint8Array;
   addSession(sessionId: string, target: string, options: SessionStartOptions): ActionResponse;
@@ -95,6 +141,10 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
     return native.sessionGetConnToken(sessionId);
   }
 
+  hasConnToken(sessionId: string): boolean {
+    return native.sessionHasConnToken(sessionId);
+  }
+
   getEnableTrustedDevices(sessionId: string): boolean {
     return native.sessionGetEnableTrustedDevices(sessionId);
   }
@@ -137,6 +187,20 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
 
   setClipboardFileRoot(sessionId: string, root: string): ActionResponse {
     return this.parseNativeResponse(() => native.sessionSetClipboardFileRoot(sessionId, root));
+  }
+
+  getClipboardFileState(sessionId: string): NativeClipboardFileResponse {
+    return this.parseClipboardFileResponse(
+      'session_get_clipboard_file_state',
+      () => native.sessionGetClipboardFileState(sessionId),
+    );
+  }
+
+  takeClipboardFileEvents(sessionId: string): NativeClipboardFileResponse {
+    return this.parseClipboardFileResponse(
+      'session_take_clipboard_file_events',
+      () => native.sessionTakeClipboardFileEvents(sessionId),
+    );
   }
 
   takeClipboard(sessionId: string): NativeClipboardResponse {
@@ -272,6 +336,26 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
       rendererActive: false,
       errorText: '',
     };
+  }
+
+  /**
+   * Parses a clipboard file receipt without copying a parse error into it.
+   *
+   * The rejected document is a native string that may quote clipboard paths, so the
+   * client never echoes it: the failure keeps a fixed message and the action it was
+   * asked for.
+   */
+  private parseClipboardFileResponse(action: string,
+    call: () => string): NativeClipboardFileResponse {
+    try {
+      return JSON.parse(call()) as NativeClipboardFileResponse;
+    } catch (_) {
+      return {
+        ok: false,
+        action: action,
+        message: 'Native clipboard file response parsing failed',
+      };
+    }
   }
 
   private parseNativeResponse(call: () => string): ActionResponse {

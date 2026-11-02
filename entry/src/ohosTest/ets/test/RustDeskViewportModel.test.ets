@@ -446,33 +446,5 @@ export default function viewportModelTest(): void {
       expect(isLocalPointInsidePaintRect(outSpace, 500, 200)).assertFalse();
     });
 
-    it('accepts a point the RGBA fallback shows outside the Surface clip', 0, () => {
-      const display: PeerDisplayInfo = { width: 1600, height: 1200, x: 0, y: 0 };
-      const fallback = presentedModel('fit', display);
-      fallback.setFallbackPresentation(true);
-      fallback.setViewTransform(2, 0, 0, 0);
-      const fallbackSpace = fallback.getCoordinateSpace();
-      expect(fallbackSpace !== undefined).assertTrue();
-      if (!fallbackSpace) {
-        return;
-      }
-      // The fallback image fills the pane and is transformed outside the Surface's
-      // container, so the letterbox beside the fit rectangle is visible there and a
-      // click on it must still reach the peer.
-      expect(isLocalPointInsidePaintRect(fallbackSpace, 500, 50)).assertTrue();
-      expect(isLocalPointInsidePaintRect(fallbackSpace, 500, 500)).assertTrue();
-
-      // Without a transform the fallback letterboxes the picture itself, so the same
-      // point is off the picture.
-      const untransformed = presentedModel('fit', display);
-      untransformed.setFallbackPresentation(true);
-      const untransformedSpace = untransformed.getCoordinateSpace();
-      expect(untransformedSpace !== undefined).assertTrue();
-      if (!untransformedSpace) {
-        return;
-      }
-      expect(isLocalPointInsidePaintRect(untransformedSpace, 500, 50)).assertFalse();
-      expect(isLocalPointInsidePaintRect(untransformedSpace, 500, 500)).assertTrue();
-    });
   });
 }

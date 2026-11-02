@@ -289,13 +289,6 @@ type PeerLaunchKind = EasyTierConnectionKind;
 type ConnectionUiPhase = 'idle' | 'waiting_for_easytier' | 'connecting'
   | 'awaiting_password' | 'authenticating' | 'connected' | 'failed';
 
-interface RuntimeDirectoryResponse {
-  ok: boolean;
-  action: string;
-  message?: string;
-  entries?: string[];
-}
-
 interface InterceptedKeyEvent {
   type: string;
   action: number;
@@ -338,7 +331,6 @@ struct RustDeskIndex {
   private sessionDisplayController: SessionDisplayController = new SessionDisplayController(
     this.viewportModel,
     this.nativeSessionBridge,
-    () => { this.invalidatePreviewFrames(); },
     (response: ActionResponse) => this.updateSessionState(response),
   );
   private cursorModel: RustDeskCursorModel = new RustDeskCursorModel();
@@ -349,7 +341,7 @@ struct RustDeskIndex {
   private imeInputController: RustDeskImeInputController = new RustDeskImeInputController();
   private systemImeTextController: TextInputController = new TextInputController();
   private clipboardController?: RustDeskClipboardController;
-  private clipboardFileRootSessionId: string = '';
+  private clipboardFileRootQueuedSessionId: string = '';
   /**
    * Sessions whose peer clipboard was updated while they were not the active tab.
    *
@@ -375,6 +367,7 @@ struct RustDeskIndex {
   private appForeground: boolean = true;
   private remoteSessionHandoffListenerRegistered: boolean = false;
   private remoteSessionSharingActive: boolean = false;
+  private remoteSessionSharingSessionId: string = '';
   private remoteSessionContinuationActive: boolean = false;
   private activeSessionPassword: string = '';
   private activeSessionShareTarget: string = '';
@@ -502,8 +495,6 @@ struct RustDeskIndex {
   @Local previewUserOffsetX: number = 0;
   @Local previewUserOffsetY: number = 0;
   @Local previewUserRotation: number = 0;
-  @Local previewFramePixelMap: image.PixelMap | undefined = undefined;
-  @Local rgbaFallbackActive: boolean = false;
   @Local isFoldHoverMode: boolean = false;
   @Local softKeyboardVisible: boolean = false;
   @Local systemImeActive: boolean = false;
@@ -537,7 +528,6 @@ struct RustDeskIndex {
   private pollTimer: number = -1;
   private passwordTimeoutId: number = -1;
   private eventPollInFlight: boolean = false;
-  private previewFrameInFlight: boolean = false;
   private performanceTuningApplied: boolean = false;
   private previewSurfaceId: string = '';
   /** The SurfaceHolder node binding id, separate from the decoder's Surface lease id. */
@@ -936,6 +926,8 @@ struct RustDeskIndex {
   private remoteAudioDefaultApplied: boolean = false;
   private transferRoot: DownloadRoot | undefined = undefined;
   private transferSessionTarget: string = '';
+  /** Whether the open file session was started as a claimed-ID route. */
+  private transferSessionRustdeskIdOnly: boolean = false;
   private transferPollTimer: number = -1;
   private transferPollInFlight: boolean = false;
   private transferConnectionPending: boolean = false;
@@ -1049,7 +1041,7 @@ struct RustDeskIndex {
     this.releaseSoftKeyboardKeys();
     this.stopInputInterceptor();
     this.clipboardController?.reset();
-    this.clipboardFileRootSessionId = '';
+    this.clipboardFileRootQueuedSessionId = '';
     this.clipboardPeerUpdateSessions.clear();
     this.setSessionKeyboardEntered(false);
     this.unregisterWindowAvoidAreaListener();
@@ -1774,7 +1766,7 @@ struct RustDeskIndex {
     try {
       connToken = this.nativeSessionBridge.getConnToken(this.activeSessionId) ?? '';
     } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'session connection token unavailable: %{public}s', String(error));
+      hilog.warn(DOMAIN, TAG, 'session reconnect credential export failed');
     }
     snapshot.connToken = connToken;
     if (connToken.length === 0) {
@@ -1792,12 +1784,27 @@ struct RustDeskIndex {
   }
 
   private syncRemoteSessionSharing(): void {
-    const snapshot = this.createRemoteSessionShareSnapshot();
-    const continuationEligible = this.sessionDefaults.sessionSharingEnabled
-      && this.activeSessionId.length > 0
-      && this.sessionPhase === 'connected'
-      && snapshot !== undefined;
-    RemoteSessionHandoffService.setOutgoingSnapshot(continuationEligible ? snapshot : undefined);
+    const sessionId = this.activeSessionId;
+    let continuationEligible = this.sessionDefaults.sessionSharingEnabled
+      && sessionId.length > 0
+      && this.activeSessionShareTarget.length > 0
+      && this.sessionPhase === 'connected';
+    if (continuationEligible) {
+      try {
+        // A boolean capability query, not an automatic credential export.
+        continuationEligible = this.nativeSessionBridge.hasConnToken(sessionId);
+      } catch (_) {
+        continuationEligible = false;
+      }
+    }
+    const provider = continuationEligible ? (): RemoteSessionShareSnapshot | undefined => {
+      if (!this.sessionDefaults.sessionSharingEnabled || this.activeSessionId !== sessionId ||
+        this.sessionPhase !== 'connected') {
+        return undefined;
+      }
+      return this.createRemoteSessionShareSnapshot();
+    } : undefined;
+    RemoteSessionHandoffService.setOutgoingSnapshotProvider(provider);
     if (continuationEligible !== this.remoteSessionContinuationActive) {
       this.remoteSessionContinuationActive = continuationEligible;
       this.abilityContext().eventHub.emit(REMOTE_SESSION_CONTINUE_STATE_EVENT, continuationEligible);
@@ -1806,22 +1813,25 @@ struct RustDeskIndex {
       && this.appForeground
       && this.showPreviewModal
       && continuationEligible;
-    if (shareEligible === this.remoteSessionSharingActive) {
+    if (shareEligible === this.remoteSessionSharingActive &&
+      (!shareEligible || this.remoteSessionSharingSessionId === sessionId)) {
       return;
     }
-    if (!shareEligible || snapshot === undefined) {
+    if (!shareEligible || provider === undefined) {
       this.disableRemoteSessionSharing(true);
       return;
     }
     this.remoteSessionSharingActive = true;
-    this.remoteSessionShareController.setEnabled(this.abilityContext(), snapshot);
+    this.remoteSessionSharingSessionId = sessionId;
+    this.remoteSessionShareController.setEnabled(this.abilityContext(), provider);
   }
 
   private disableRemoteSessionSharing(keepContinuation: boolean = false): void {
     this.remoteSessionSharingActive = false;
+    this.remoteSessionSharingSessionId = '';
     this.remoteSessionShareController.disable();
     if (!keepContinuation) {
-      RemoteSessionHandoffService.setOutgoingSnapshot(undefined);
+      RemoteSessionHandoffService.setOutgoingSnapshotProvider(undefined);
       if (this.remoteSessionContinuationActive) {
         this.remoteSessionContinuationActive = false;
         this.abilityContext().eventHub.emit(REMOTE_SESSION_CONTINUE_STATE_EVENT, false);
@@ -2492,7 +2502,10 @@ struct RustDeskIndex {
       this.errorText = '请输入目标地址';
       return;
     }
-    rustdeskIdOnly = kind === 'remote_control' && rustdeskIdOnly;
+    // A file session carries the same claimed-ID intent as a control session:
+    // its route is the ID route too, and dropping the flag here would silently
+    // turn the file session into an address dial.
+    rustdeskIdOnly = (kind === 'remote_control' || kind === 'file_transfer') && rustdeskIdOnly;
     this.captureSessionReturnTab();
     this.updatePeerTarget(target);
     this.connectPageMode = this.connectPageModeForKind(kind);
@@ -2544,7 +2557,7 @@ struct RustDeskIndex {
     this.updatePeerTarget(target);
     this.preferences?.saveTarget(target, this.connectPageMode);
     if (kind === 'file_transfer') {
-      await this.openTransferWorkspaceDirect();
+      await this.openTransferWorkspaceDirect(rustdeskIdOnly);
       return;
     }
     await this.connectSessionDirect(kind as PrimarySessionKind, undefined, rustdeskIdOnly);
@@ -3459,7 +3472,8 @@ struct RustDeskIndex {
     this.authErrorMessage = message;
     this.passwordDialogVisible = true;
     if (kind === 'file_transfer') {
-      this.transferRootStatus = message.length > 0 ? message : '文件传输等待密码验证';
+      this.transferRootStatus = message.length > 0 ? message
+        : (initialMode === '2fa' ? '文件传输等待二次验证 (2FA)' : '文件传输等待密码验证');
       this.clearConnectionTimeout();
       this.connectionAttemptKind = 'file_transfer';
       this.connectionUiPhase = 'awaiting_password';
@@ -3478,7 +3492,7 @@ struct RustDeskIndex {
       if (this.passwordDialogVisible) {
         this.passwordDialogVisible = false;
         if (this.passwordSessionKind === 'file_transfer') {
-          this.failConnectionAttempt('文件传输密码输入超时');
+          this.failConnectionAttempt(initialMode === '2fa' ? '文件传输 2FA 验证超时' : '文件传输密码输入超时');
         } else {
           this.handleRemoteDisconnect('密码输入超时');
         }
@@ -3508,16 +3522,26 @@ struct RustDeskIndex {
   /**
    * Whether this attempt can really persist the password it collects.
    *
-   * The remember switch writes the credential into Core's peer config on login,
-   * so it is offered only where the login carries the flag: a handoff password is
-   * explicitly one-time and Core folds that in, and a switch whose value could not
-   * be stored would be a promise this component cannot keep.
+   * Handoff and direct-attempt credentials stay session-local, so their prompt
+   * never enables the remember selector. This storage policy does not make a
+   * shared reconnect credential single-use.
    */
   private canPersistSessionPassword(): boolean {
     if (this.passwordSessionKind === 'file_transfer') {
       return true;
     }
     return !this.activeSessionPasswordEphemeral;
+  }
+
+  /**
+   * Names the session this credential prompt answers, for diagnostics.
+   *
+   * A file transfer's prompt belongs to its own file session, whose id this page
+   * does not hold; logging the desktop session id there would name a different
+   * connection than the one the answer travels to.
+   */
+  private authPromptLabel(): string {
+    return this.passwordSessionKind === 'file_transfer' ? 'file_transfer' : this.activeSessionId;
   }
 
   private async submitPassword(passwordInput?: string, rememberPasswordInput?: boolean): Promise<void> {
@@ -3535,8 +3559,8 @@ struct RustDeskIndex {
         hilog.warn(
           DOMAIN,
           TAG,
-          'blocked premature 2fa submit sessionId=%{public}s challenge=%{public}s',
-          this.activeSessionId,
+          'blocked premature 2fa submit session=%{public}s challenge=%{public}s',
+          this.authPromptLabel(),
           this.authChallengeMode,
         );
         return;
@@ -3553,31 +3577,66 @@ struct RustDeskIndex {
       this.connectionUiMessage = '2FA 验证码已提交，正在等待远端验证。';
       this.scheduleConnectionTimeout();
       try {
+        if (this.passwordSessionKind === 'file_transfer') {
+          // This code answers the file session that raised the challenge, never
+          // the desktop session this page may also hold.
+          const submission = this.transferManager.submitSecondFactor(code, this.trustThisDevice);
+          if (submission === undefined) {
+            // That file session is already closed, so no prompt belongs to it.
+            return;
+          }
+          hilog.info(
+            DOMAIN,
+            TAG,
+            'submit2fa session=%{public}s codeLength=%{public}d trust=%{public}s queued=%{public}s message=%{public}s',
+            this.authPromptLabel(),
+            code.length,
+            String(this.trustThisDevice),
+            String(submission.queued),
+            submission.message,
+          );
+          if (!submission.queued) {
+            // Nothing reached the file session's authentication loop, so only
+            // the peer may end that step; the same challenge is offered again.
+            this.reofferSecondFactor(submission.message);
+            return;
+          }
+          // Queued only: the engine owns the code and the peer's next answer
+          // decides it. Nothing here reports the file session as ready --
+          // `peer_info` does, and only the peer sends it.
+          this.code2faDraft = '';
+          this.transferRootStatus = '2FA 验证码已提交，正在等待远端验证';
+          this.connectionUiMessage = this.transferRootStatus;
+          return;
+        }
         const response = this.nativeSessionBridge.send2fa(this.activeSessionId, code, this.trustThisDevice);
         hilog.info(
           DOMAIN,
           TAG,
-          'submit2fa sessionId=%{public}s codeLength=%{public}d trust=%{public}s ok=%{public}s phase=%{public}s message=%{public}s',
-          this.activeSessionId,
+          'submit2fa session=%{public}s codeLength=%{public}d trust=%{public}s ok=%{public}s phase=%{public}s message=%{public}s',
+          this.authPromptLabel(),
           code.length,
           String(this.trustThisDevice),
           String(response.ok),
           response.session?.phase ?? '',
           response.message ?? '',
         );
-        this.updateSessionState(response);
-        if (!response.ok) {
-          if ((response.message ?? '').includes('has not requested 2FA')) {
-            this.connectionUiPhase = 'awaiting_password';
-            this.connectionUiMessage = '远端尚未请求 2FA，请先完成密码验证。';
-            this.openPasswordDialog('primary', this.connectionUiMessage, 'password');
-            return;
-          }
-          this.failConnectionAttempt(response.message ?? '2FA 验证失败');
+        if (!response.ok || response.queued !== true) {
+          // Without a queue receipt the draft and live authentication stay ours;
+          // only the peer may end its challenge.
+          this.reofferSecondFactor(response.message ?? '');
+          return;
         }
+        // `queued` is the whole receipt of this call: the code reached the
+        // session's own authentication loop and the peer has not answered yet.
+        // Nothing here is reported as authenticated — the code leaves the dialog
+        // because the engine now owns it, and the peer's next answer decides it.
+        this.code2faDraft = '';
+        this.updateSessionState(response);
       } catch (error) {
-        this.errorText = String(error);
-        this.failConnectionAttempt(this.errorText);
+        // No receipt was returned. Do not infer authentication or close the
+        // owned session; its next event still decides the challenge.
+        this.reofferSecondFactor(String(error));
       }
       return;
     }
@@ -3589,18 +3648,19 @@ struct RustDeskIndex {
       this.errorText = '请输入密码';
       return;
     }
-    this.passwordDraft = '';
-    if (this.passwordSessionKind === 'primary') {
-      this.activeSessionPassword = password;
-    }
-    this.passwordDialogVisible = false;
-    this.clearPasswordTimeout();
     try {
       if (this.passwordSessionKind === 'file_transfer') {
         if (!this.transferManager.login(password, this.rememberPassword)) {
-          this.errorText = '文件传输密码提交失败';
+          this.errorText = this.transferManager.getStatusMessage();
+          this.authErrorMessage = this.errorText;
+          this.passwordDialogVisible = true;
           return;
         }
+        // Only the native queue receipt releases the draft. The peer, not this
+        // button, decides when the file session has authenticated.
+        this.passwordDraft = '';
+        this.passwordDialogVisible = false;
+        this.clearPasswordTimeout();
         this.transferRootStatus = '正在验证文件传输密码';
         this.connectionAttemptKind = 'file_transfer';
         this.connectionUiPhase = 'authenticating';
@@ -3608,23 +3668,79 @@ struct RustDeskIndex {
         this.scheduleConnectionTimeout();
         return;
       }
-      this.connectionUiPhase = 'authenticating';
-      this.connectionUiMessage = '密码已提交，正在等待远端验证。';
-      this.scheduleConnectionTimeout();
       const remember = this.activeSessionPasswordEphemeral ? false : this.rememberPassword;
       const response = this.nativeSessionBridge.login(this.activeSessionId, password, remember);
       hilog.info(DOMAIN, TAG, 'submitPassword sessionId=%{public}s remember=%{public}s ok=%{public}s', this.activeSessionId, String(remember), String(response.ok));
+      if (!response.ok || response.queued !== true) {
+        // A locally refused answer cannot end a live authentication. Preserve
+        // its draft and wait for this session's own next peer event.
+        this.errorText = response.message?.trim() || '未收到密码入队确认，请重试';
+        this.authErrorMessage = this.errorText;
+        this.passwordDialogVisible = true;
+        return;
+      }
+      this.passwordDraft = '';
+      this.activeSessionPassword = password;
+      this.passwordDialogVisible = false;
+      this.clearPasswordTimeout();
+      this.connectionUiPhase = 'authenticating';
+      this.connectionUiMessage = '密码已提交，正在等待远端验证。';
+      this.scheduleConnectionTimeout();
       this.updateSessionState(response);
-      if (!response.ok) {
-        this.failConnectionAttempt(response.message ?? '密码提交失败');
-      }
     } catch (error) {
+      // No queue receipt means no inferred submission or session failure.
       this.errorText = String(error);
+      this.authErrorMessage = this.errorText;
+      this.passwordDialogVisible = true;
       hilog.error(DOMAIN, TAG, 'submitPassword failed sessionId=%{public}s error=%{public}s', this.activeSessionId, this.errorText);
-      if (this.passwordSessionKind === 'primary') {
-        this.failConnectionAttempt(this.errorText);
-      }
     }
+  }
+
+  /**
+   * Shows the second-factor step again after a refusal that queued no code.
+   *
+   * `session_send_2fa` refuses a code before it takes ownership of it: a peer
+   * that is not currently asking, a slot still holding the previous answer
+   * (Backpressure), a viewer that is already closing, and a trust request this
+   * entry point cannot enroll. In every one of those the live authentication is
+   * untouched, so closing it here would report a refused keystroke as a dead
+   * session. Only the peer ends an authentication.
+   *
+   * The markers are this engine's own local vocabulary (`ViewerError` prints its
+   * variant name; the N-API entry adds its own sentences). Peer text never
+   * reaches a `session_send_2fa` refusal, so nothing here is decided from remote
+   * strings.
+   */
+  private reofferSecondFactor(refusal: string): void {
+    if (this.passwordSessionKind === 'primary' && this.sessionCloseInFlight) {
+      // This client is already tearing the session down: closeSession() hid the
+      // dialog and cleared its timer, and no prompt belongs to it any more.
+      return;
+    }
+    const kind = this.passwordSessionKind;
+    if (kind === 'file_transfer' && (!this.transferManager.isReady() || this.transferManager.hasFailed())) {
+      // The file session this challenge belonged to is closed, so no
+      // authentication is left for a prompt to answer.
+      return;
+    }
+    this.errorText = refusal;
+    if (refusal.includes('trusted-device enrollment is not implemented')) {
+      // This entry point cannot enroll, so the operator's answer is withdrawn
+      // instead of being sent as the same refused true on every retry.
+      this.trustThisDevice = false;
+    }
+    if (refusal.includes('SecondFactorNotAwaiting')) {
+      // The peer stopped asking for a code, so this step is not this client's to
+      // reopen: the password step comes first.
+      const message = '远端尚未请求 2FA，请先完成密码验证。';
+      this.connectionUiMessage = message;
+      this.openPasswordDialog(kind, message, 'password');
+      return;
+    }
+    // Reopened for the session that owns this challenge: the engine took no
+    // code, so its authentication is still live and only the peer may end it.
+    this.openPasswordDialog(kind,
+      refusal.length > 0 ? refusal : '2FA 验证码未提交，请重新输入。', '2fa');
   }
 
   private cancelPasswordDialog(): void {
@@ -4017,7 +4133,7 @@ struct RustDeskIndex {
     this.clipboardSyncEnabled = this.activeSessionDefaults.clipboardEnabled;
     this.performanceTuningApplied = false;
     this.remoteInteractionReady = false;
-    this.clipboardFileRootSessionId = '';
+    this.clipboardFileRootQueuedSessionId = '';
     this.resetPreviewState();
     if (nextTab.uiStateCaptured) {
       this.sessionDisplayController.restoreRefreshRate(nextTab.refreshRate);
@@ -4244,7 +4360,7 @@ struct RustDeskIndex {
       } else {
         this.clipboardController?.reset();
       }
-      this.clipboardFileRootSessionId = '';
+      this.clipboardFileRootQueuedSessionId = '';
       this.clipboardPeerUpdateSessions.delete(sessionId);
       this.clearPreviewKeyboardBlurTimer();
       this.previewKeyboardCaptureFocused = false;
@@ -4499,7 +4615,6 @@ struct RustDeskIndex {
     this.previewSurfaceSetupInFlight = false;
     this.previewSurfaceSetupGeneration = -1;
     this.pendingPreviewPeerInfo = undefined;
-    this.releasePreviewFramePixelMap();
     this.qualityTelemetry = emptyQualityTelemetry();
     this.codecPreferenceApplied = false;
     this.touchMode = this.activeSessionDefaults.touchMode;
@@ -5213,6 +5328,48 @@ struct RustDeskIndex {
     return response.ok;
   }
 
+  private applyRemoteNativeClipboardFiles(): void {
+    if (!this.isClipboardTextSyncAllowed() || !this.remoteInteractionReady
+      || !this.isRemoteControlSessionActive() || this.clipboardController === undefined) {
+      return;
+    }
+    const sessionId = this.activeSessionId;
+    const controller = this.clipboardController;
+    const state = this.nativeSessionBridge.getClipboardFileState(sessionId);
+    if (!state.ok || Number(state.pending ?? 0) === 0) {
+      return;
+    }
+    const response = this.nativeSessionBridge.takeClipboardFileEvents(sessionId);
+    if (!response.ok || response.events === undefined) {
+      return;
+    }
+    for (const fact of response.events) {
+      if (fact.kind === 'files' && fact.paths !== undefined) {
+        const revision = fact.revision ?? '';
+        const admission = (): boolean => {
+          if (revision.length === 0 || sessionId !== this.activeSessionId
+            || !this.isClipboardTextSyncAllowed() || !this.remoteInteractionReady
+            || !this.isRemoteControlSessionActive()) {
+            return false;
+          }
+          const live = this.nativeSessionBridge.getClipboardFileState(sessionId);
+          return live.ok && live.allowed === true && live.revision === revision;
+        };
+        if (admission()) {
+          controller.applyRemoteClipboard(sessionId, { files: fact.paths }, admission);
+        } else {
+          controller.discardRemoteClipboardFiles(sessionId, fact.paths);
+        }
+      } else if (fact.kind === 'failed') {
+        const reason = fact.error ?? fact.reason ?? '对端未完成文件剪贴板操作';
+        this.logRelativeDebug('clipboard_files', `failed reason=${String(fact.reason ?? '')}`);
+        this.showSessionNotice(`文件剪贴板未完成：${reason}`);
+      } else if (fact.kind === 'offered') {
+        this.logRelativeDebug('clipboard_files', `offered files=${Number(fact.files ?? 0)}`);
+      }
+    }
+  }
+
   private applyRemoteNativeClipboard(): void {
     const response = this.nativeSessionBridge.takeClipboard(this.activeSessionId);
     if (!response.ok) {
@@ -5268,26 +5425,31 @@ struct RustDeskIndex {
   }
 
   private syncClipboardController(): void {
+    if (!this.clipboardSyncEnabled) {
+      this.clipboardFileRootQueuedSessionId = '';
+    }
     if (this.clipboardSyncEnabled && this.isRemoteControlSessionActive()
-      && this.clipboardFileRootSessionId !== this.activeSessionId) {
-      const root = this.clipboardController?.incomingFileRoot(this.activeSessionId);
-      if (root !== undefined) {
-        const response = this.nativeSessionBridge.setClipboardFileRoot(this.activeSessionId, root);
-        if (!response.ok) {
-          this.logRelativeDebug('clipboard_files', `root failed=${String(response.message ?? '')}`);
-        } else {
-          this.clipboardFileRootSessionId = this.activeSessionId;
+      && this.clipboardFileRootQueuedSessionId !== this.activeSessionId) {
+      const state = this.nativeSessionBridge.getClipboardFileState(this.activeSessionId);
+      if (state.ok && state.allowed === true) {
+        const root = this.clipboardController?.incomingFileRoot(this.activeSessionId);
+        if (root !== undefined) {
+          const response = this.nativeSessionBridge.setClipboardFileRoot(this.activeSessionId, root);
+          if (!response.ok) {
+            this.logRelativeDebug('clipboard_files', `root queue failed=${String(response.message ?? '')}`);
+          } else {
+            // Admission only: an owner-side filesystem failure arrives as a Failed fact.
+            this.clipboardFileRootQueuedSessionId = this.activeSessionId;
+          }
         }
       }
     }
     if (this.isClipboardTextSyncAllowed() && this.remoteInteractionReady) {
       if (this.clipboardPeerUpdateSessions.has(this.activeSessionId)) {
-        // The peer's latest text is retrieved before the local clipboard is read, so
-        // this session's own — possibly stale — clipboard is not sent over it. The
-        // controller retains the payload and applies it when it starts below.
         this.clipboardPeerUpdateSessions.delete(this.activeSessionId);
         this.applyRemoteNativeClipboard();
       }
+      this.applyRemoteNativeClipboardFiles();
       this.clipboardController?.start(this.activeSessionId);
       return;
     }
@@ -5584,15 +5746,29 @@ struct RustDeskIndex {
 
 
   private async openTransferWorkspace(): Promise<void> {
+    // A re-entry, including a retry, resumes the route the open file session was
+    // really started with: re-dialling a claimed ID as an address would be a
+    // different connection than the one the operator approved.
+    const transferIdOnly = this.transferSessionTarget === this.peerTarget.trim()
+      ? this.transferSessionRustdeskIdOnly : false;
     if (this.transferManager.isReady() && this.transferSessionTarget === this.peerTarget.trim()) {
       this.captureSessionReturnTab();
-      await this.openTransferWorkspaceDirect();
+      await this.openTransferWorkspaceDirect(transferIdOnly);
       return;
     }
-    await this.preparePeerLaunch(this.peerTarget, 'file_transfer');
+    await this.preparePeerLaunch(this.peerTarget, 'file_transfer', transferIdOnly);
   }
 
-  private async openTransferWorkspaceDirect(): Promise<void> {
+  private async openTransferWorkspaceDirect(rustdeskIdOnly: boolean = false): Promise<void> {
+    if (this.transferManager.isClosePending()) {
+      // The manager still owns a file session whose close native has not
+      // confirmed. Showing its workspace now would present a session that may
+      // still be held as connected; the status names the real close failure.
+      this.transferSessionReady = false;
+      this.transferConnectionStatus = this.transferManager.getStatusMessage();
+      this.errorText = this.transferConnectionStatus;
+      return;
+    }
     if (!this.runtimeInitialized) {
       void this.initializeRuntime();
     }
@@ -5649,12 +5825,19 @@ struct RustDeskIndex {
       return;
     }
     this.beginTransferConnectionAttempt(target);
-    if (!this.transferManager.open(target, '', false, this.transferRoot)) {
+    // The route is the profile the operator explicitly saved, captured as a
+    // value-owned copy for this add -- not the draft the settings card may still
+    // be editing, and not the profile of a desktop session that may be open. A
+    // direct address names no server route, so none is attached for it.
+    const approvedRoute = rustdeskIdOnly || this.handoffTargetKind(target) !== 'ip'
+      ? this.serverProfile.captureApproved() : undefined;
+    if (!this.transferManager.open(target, '', false, this.transferRoot, approvedRoute, rustdeskIdOnly)) {
       this.transferRootStatus = this.transferManager.getStatusMessage();
       this.failConnectionAttempt(this.transferRootStatus || '无法启动独立文件传输会话');
       return;
     }
     this.transferSessionTarget = target;
+    this.transferSessionRustdeskIdOnly = rustdeskIdOnly;
     this.startTransferPolling();
     this.scheduleConnectionTimeout();
     this.transferSessionReady = this.transferManager.canTransfer();
@@ -5705,13 +5888,7 @@ struct RustDeskIndex {
         this.errorText = this.transferRootStatus;
         return false;
       }
-      const response = JSON.parse(native.runtimeListLocalDir(root.path)) as RuntimeDirectoryResponse;
-      if (!response.ok || !this.containsFileName(response.entries ?? [], probeName)) {
-        this.transferRootStatus = response.message?.trim() || 'Rust 无法访问 DOWNLOAD 目录';
-        this.errorText = this.transferRootStatus;
-        return false;
-      }
-      this.transferRootStatus = 'DOWNLOAD 路径已通过 ArkTS 与 Rust 访问门禁';
+      this.transferRootStatus = 'DOWNLOAD 路径已通过本地读写检查';
       return true;
     } catch (error) {
       this.transferRootStatus = `DOWNLOAD 路径门禁失败：${String(error)}`;
@@ -5804,6 +5981,24 @@ struct RustDeskIndex {
       const passwordMessage = this.transferManager.consumePasswordRequest();
       if (passwordMessage !== undefined) {
         this.openPasswordDialog('file_transfer', passwordMessage);
+      }
+      const secondFactor = this.transferManager.consumeSecondFactorRequest();
+      if (secondFactor !== undefined) {
+        // Two separate facts decide the switch: this build's own enrollment
+        // capability, which the challenge event carried, and this file
+        // session's peer metadata, which a desktop answer never describes.
+        this.canTrustDevice = secondFactor.trustEnrollmentSupported && this.transferManager.canTrustDevice();
+        if (!this.canTrustDevice) {
+          // The dialog offers the switch only while both facts allow it; a
+          // remembered true would otherwise be sent while the switch is hidden.
+          this.trustThisDevice = false;
+        }
+        this.errorText = secondFactor.message;
+        const secondFactorError = (secondFactor.message.includes('wrong')
+          || secondFactor.message.includes('Wrong') || secondFactor.message.includes('2fa-wrong'))
+          ? '2FA 验证码错误或已过期，请重新输入'
+          : '';
+        this.openPasswordDialog('file_transfer', secondFactorError, '2fa');
       }
       this.syncTransferState();
       if (this.transferManager.canTransfer() && this.transferConnectionPending) {
@@ -5956,21 +6151,48 @@ struct RustDeskIndex {
     this.syncTransferState();
   }
 
-  private closeTransferSession(preserveDownloadRoot: boolean = false,
-    preserveConnectionFailure: boolean = false): void {
+  private async closeTransferSession(preserveDownloadRoot: boolean = false,
+    preserveConnectionFailure: boolean = false): Promise<void> {
     if (!preserveConnectionFailure && this.connectionAttemptKind === 'file_transfer') {
       this.clearConnectionTimeout();
       this.connectionUiPhase = 'idle';
       this.connectionUiMessage = '';
       this.connectionAttemptKind = 'primary';
     }
-    this.showTransferWorkspace = false;
     this.transferSessionReady = false;
     this.transferConnectionPending = false;
+    // The credential prompt a file session opened belongs to that session: once
+    // it is gone the prompt is dismissed, so no answer is offered to a closed
+    // one and no late challenge can raise a new one through it.
+    this.dismissPasswordDialogFor('file_transfer');
     this.cancelAllTransfers();
     this.stopTransferPolling();
-    this.transferManager.close();
+    const manager = this.transferManager;
+    let released = false;
+    let closeFailure = '';
+    try {
+      // One close attempt per session: a second caller shares this manager's
+      // attempt and receives its real result, never an invented success.
+      released = await manager.close();
+    } catch (error) {
+      closeFailure = `文件传输关闭失败：${String(error)}`;
+    }
+    if (!released) {
+      // Native did not confirm that this session was released, so it is still
+      // this manager's: the target, the root and the listing stay, the workspace
+      // stays up so the close can be asked again, and the real failure is shown
+      // instead of a closed session.
+      this.transferConnectionStatus = closeFailure.length > 0
+        ? closeFailure
+        : manager.getStatusMessage();
+      this.errorText = this.transferConnectionStatus;
+      this.refreshDirectorySnapshot();
+      this.publishDataTransferChanged();
+      return;
+    }
+    this.showTransferWorkspace = false;
     this.transferSessionTarget = '';
+    this.transferSessionRustdeskIdOnly = false;
     this.transferRemoteEntries = [];
     this.transferItems = [];
     this.selectedTransferLocalName = '';
@@ -6015,7 +6237,7 @@ struct RustDeskIndex {
       getTransfers: () => this.transferManager.snapshot(),
       cancelAllNativeTransfers: () => this.cancelAllTransfers(),
       closeRemoteSession: () => { void this.closeSession('数据传输长时任务已停止'); },
-      closeFileTransferSession: () => this.closeTransferSession(),
+      closeFileTransferSession: () => { void this.closeTransferSession(); },
       reportFailure: (message: string) => this.errorText = message,
     }));
   }
@@ -8048,19 +8270,6 @@ struct RustDeskIndex {
   }
 
   /**
-   * Fit of the RGBA fallback picture.
-   *
-   * The fallback draws in the view rather than in the native Surface, so it has
-   * to follow the same control instead of its own fixed choice.
-   */
-  private previewFallbackFit(): ImageFit {
-    if (this.previewDisplayMode === 'stretch') {
-      return ImageFit.Fill;
-    }
-    return this.previewDisplayMode === 'original' ? ImageFit.None : ImageFit.Contain;
-  }
-
-  /**
    * Changes how the remote frame is fitted.
    *
    * The surface re-measures on its own, but the renderer is only told the new
@@ -8085,10 +8294,8 @@ struct RustDeskIndex {
       return;
     }
     // Input is mapped through the rectangle the picture occupies, which is the
-    // mode's own rectangle, and through the clip of whichever presentation is on
-    // screen, so the model is told both before it is read.
+    // mode's own rectangle, so the model is told it before it is read.
     this.viewportModel.setDisplayMode(this.previewDisplayMode);
-    this.viewportModel.setFallbackPresentation(this.previewFramePixelMap !== undefined && this.rgbaFallbackActive);
     const plan = this.viewportModel.buildRenderPlan();
     if (!plan) {
       this.frameStatus = 'Display geometry not ready';
@@ -8662,22 +8869,9 @@ struct RustDeskIndex {
         this.nativeSessionBridge.setRemoteAudioMuted(tab.sessionId, true);
         continue;
       }
-      if (event.name === 'rgba') {
-        native.sessionNextRgba(tab.sessionId, Number(event.display ?? 0));
-        continue;
-      }
       if (event.name === 'clipboard_multi') {
-        if (isDirectWireKind(tab.kind)) {
-          // A direct wire's take is non-consuming and its notification arrives once
-          // per peer revision, so the fact is kept for activation: discarding it
-          // here would lose the text the peer copied while this tab was in the
-          // background, and no later notification would bring it back.
-          this.clipboardPeerUpdateSessions.add(tab.sessionId);
-        }
-        const clipboard = this.nativeSessionBridge.takeClipboard(tab.sessionId);
-        if (clipboard.image !== undefined && clipboard.image !== null) {
-          this.nativeSessionBridge.takeClipboardImage(tab.sessionId);
-        }
+        // Leave the latest payload in its native mailbox until this tab is active.
+        this.clipboardPeerUpdateSessions.add(tab.sessionId);
         continue;
       }
       if (event.name === 'cursor_data' || event.name === 'cursor_id') {
@@ -8963,10 +9157,6 @@ struct RustDeskIndex {
       });
       return;
     }
-    if (event.name === 'rgba' || event.name === 'texture') {
-      this.handleFrameTransportEvent(event);
-      return;
-    }
     if (event.name === 'cursor_data') {
       this.remoteSessionTabsController.cacheCursorEvent(this.activeSessionId, event);
       this.updateRemoteCursorData(event);
@@ -8990,15 +9180,8 @@ struct RustDeskIndex {
     if (event.name === 'clipboard_multi') {
       if (this.isClipboardTextSyncAllowed() && this.remoteInteractionReady) {
         this.applyRemoteNativeClipboard();
-      } else if (this.isDirectWireSession() && this.isClipboardTextAdmitted()) {
-        // Policy admits this session, but it is not usable right now — the app is not
-        // in front, or its preview is not ready. The notification arrives once per
-        // peer revision and the direct wire keeps the text in its own mailbox, so the
-        // fact is remembered instead of handing the payload to a controller that is
-        // not running: the newest text is retrieved when this session is admitted and
-        // ready again, before its own local clipboard is read. Only a notification
-        // consumed here is marked — work dropped at a lifecycle boundary stays
-        // dropped, and a policy refusal is not marked at all.
+      } else if (this.isClipboardTextAdmitted()) {
+        // Read the pending payload only when foreground and preview are ready.
         this.clipboardPeerUpdateSessions.add(this.activeSessionId);
       }
       return;
@@ -9008,10 +9191,8 @@ struct RustDeskIndex {
       return;
     }
     if (event.name === 'clipboard_files') {
-      if (this.clipboardSyncEnabled && this.isRemoteControlSessionActive()
-        && event.paths !== undefined && event.paths.length > 0) {
-        this.clipboardController?.applyRemoteClipboard(this.activeSessionId, { files: event.paths });
-      }
+      // A pending marker is not a payload. Background polls never take file facts.
+      this.applyRemoteNativeClipboardFiles();
       return;
     }
     if (event.name === 'msgbox') {
@@ -9062,7 +9243,8 @@ struct RustDeskIndex {
       this.connectionSummary = '等待二次验证 (2FA)';
       this.errorText = message;
       try {
-        this.canTrustDevice = this.nativeSessionBridge.getEnableTrustedDevices(this.activeSessionId);
+        this.canTrustDevice = event.trust_this_device_supported === true
+          && this.nativeSessionBridge.getEnableTrustedDevices(this.activeSessionId);
       } catch (error) {
         // Trust-device support is optional metadata. A stale/mismatched HAR
         // must never prevent the mandatory 2FA challenge from being shown.
@@ -9073,6 +9255,12 @@ struct RustDeskIndex {
           'sessionGetEnableTrustedDevices failed; continuing 2fa challenge: %{public}s',
           String(error),
         );
+      }
+      if (!this.canTrustDevice) {
+        // The dialog offers the trust switch only while this device's own metadata
+        // allows it. A remembered true would otherwise keep being sent while the
+        // switch is hidden, and the engine refuses such a code outright.
+        this.trustThisDevice = false;
       }
       this.openPasswordDialog('primary', errorMsg, '2fa');
       return;
@@ -9196,7 +9384,7 @@ struct RustDeskIndex {
     }
     this.handoffPasswordAutoSubmitAttempted = true;
     this.passwordSessionKind = 'primary';
-    hilog.info(DOMAIN, TAG, 'retrying one-time handoff password automatically');
+    hilog.info(DOMAIN, TAG, 'answering this session password challenge with its transient credential');
     void this.submitPassword(this.activeSessionPassword, false);
     return true;
   }
@@ -9219,157 +9407,6 @@ struct RustDeskIndex {
       }
     } catch (error) {
       this.errorText = `Refresh error: ${String(error)}`;
-    }
-  }
-
-  private invalidatePreviewFrames(): void {
-    this.releasePreviewFramePixelMap();
-    this.previewFrameInFlight = false;
-  }
-
-  private releasePreviewFramePixelMap(): void {
-    const previous = this.previewFramePixelMap;
-    this.previewFramePixelMap = undefined;
-    this.rgbaFallbackActive = false;
-    // The fallback is the presentation no longer, so input goes back to the Surface's
-    // own clip without waiting for the next display configuration pass.
-    this.viewportModel.setFallbackPresentation(false);
-    if (previous) {
-      previous.release().catch((_error: BusinessError) => {});
-    }
-  }
-
-  private updatePreviewFramePixelMap(pixelMap: image.PixelMap, width: number, height: number, display: number): void {
-    const previous = this.previewFramePixelMap;
-    this.previewFramePixelMap = pixelMap;
-    this.rgbaFallbackActive = true;
-    this.frameWidth = width;
-    this.frameHeight = height;
-    this.viewportModel.setSurfaceSize(width, height);
-    this.frameStatus = `RGBA fallback ${width}x${height}`;
-    if (previous && previous !== pixelMap) {
-      previous.release().catch((_error: BusinessError) => {});
-    }
-    if (this.pendingDisplayIndex === display) {
-      this.pendingDisplayIndex = -1;
-      this.refreshSessionOrientation();
-      if (this.previewSurfaceId.length > 0) {
-        this.syncSurfaceBinding(false);
-      }
-      this.sessionMessage = `显示器 ${display + 1} 已收到画面`;
-      this.applyDisplayConfiguration();
-      this.reprojectVirtualCursorOverlay();
-    } else {
-      this.applyDisplayConfiguration();
-    }
-  }
-
-  private consumePreviewRgbaFrame(display: number): void {
-    if (!this.activeSessionId) {
-      return;
-    }
-    if (this.previewFrameInFlight) {
-      native.sessionNextRgba(this.activeSessionId, display);
-      return;
-    }
-    const displayInfo = this.peerDisplays[display];
-    const width = Math.max(Math.round(displayInfo?.width ?? 0), 0);
-    const height = Math.max(Math.round(displayInfo?.height ?? 0), 0);
-    if (width <= 0 || height <= 0) {
-      native.sessionNextRgba(this.activeSessionId, display);
-      return;
-    }
-    const expectedLength = width * height * 4;
-    this.previewFrameInFlight = true;
-    try {
-      const rgbaSize = Number(native.sessionGetRgbaSize(this.activeSessionId, display));
-      if (rgbaSize <= 0 || rgbaSize !== expectedLength) {
-        if (rgbaSize > 0) {
-          hilog.warn(
-            DOMAIN,
-            TAG,
-            'consumePreviewRgbaFrame unexpected size display=%{public}d size=%{public}d expected=%{public}d',
-            display,
-            rgbaSize,
-            expectedLength,
-          );
-        }
-        this.previewFrameInFlight = false;
-        native.sessionNextRgba(this.activeSessionId, display);
-        return;
-      }
-      const rgbaPayload = native.sessionTakeRgbaFrame(this.activeSessionId, display) as Uint8Array | number[];
-      const rgbaLength = rgbaPayload.length;
-      if (rgbaLength !== expectedLength) {
-        hilog.warn(
-          DOMAIN,
-          TAG,
-          'consumePreviewRgbaFrame length mismatch display=%{public}d len=%{public}d expected=%{public}d',
-          display,
-          rgbaLength,
-          expectedLength,
-        );
-        this.previewFrameInFlight = false;
-        native.sessionNextRgba(this.activeSessionId, display);
-        return;
-      }
-      const rgba = rgbaPayload instanceof Uint8Array
-        ? rgbaPayload
-        : Uint8Array.from(rgbaPayload);
-      const options: image.InitializationOptions = {
-        editable: false,
-        srcPixelFormat: image.PixelMapFormat.RGBA_8888,
-        pixelFormat: image.PixelMapFormat.RGBA_8888,
-        size: { width, height },
-        alphaType: image.AlphaType.UNPREMUL,
-      };
-      image.createPixelMap(rgba.buffer, options)
-        .then((pixelMap: image.PixelMap) => {
-          this.updatePreviewFramePixelMap(pixelMap, width, height, display);
-        })
-        .catch((error: BusinessError) => {
-          hilog.error(
-            DOMAIN,
-            TAG,
-            'consumePreviewRgbaFrame createPixelMap failed display=%{public}d error=%{public}s',
-            display,
-            JSON.stringify(error) ?? String(error),
-          );
-        })
-        .finally(() => {
-          this.previewFrameInFlight = false;
-          if (this.activeSessionId) {
-            native.sessionNextRgba(this.activeSessionId, display);
-          }
-        });
-    } catch (error) {
-      this.previewFrameInFlight = false;
-      hilog.error(
-        DOMAIN,
-        TAG,
-        'consumePreviewRgbaFrame failed display=%{public}d error=%{public}s',
-        display,
-        String(error),
-      );
-      native.sessionNextRgba(this.activeSessionId, display);
-    }
-  }
-
-  private handleFrameTransportEvent(event: NativeEvent): void {
-    const display = Number(event.display ?? `${this.viewportModel.getCurrentDisplayIndex()}`);
-    const currentDisplay = this.sessionDisplayController.getCurrentDisplayIndex();
-    if (display !== currentDisplay) {
-      if (event.name === 'rgba' && this.activeSessionId) {
-        native.sessionNextRgba(this.activeSessionId, display);
-      }
-      return;
-    }
-    if (event.name === 'rgba') {
-      this.consumePreviewRgbaFrame(display);
-      return;
-    }
-    if (event.name === 'texture') {
-      this.frameStatus = `Texture frame event display ${display}`;
     }
   }
 
@@ -9487,19 +9524,6 @@ struct RustDeskIndex {
           Text('Preparing preview...')
             .fontSize(14)
             .fontColor($r('app.color.white'));
-        }
-
-        if (this.previewFramePixelMap && this.rgbaFallbackActive) {
-          Image(this.previewFramePixelMap)
-            .width('100%')
-            .height('100%')
-            .objectFit(this.previewFallbackFit())
-            .interpolation(ImageInterpolation.Medium)
-            .scale({ x: this.previewUserScale, y: this.previewUserScale, centerX: '50%', centerY: '50%' })
-            .rotate({ angle: this.previewUserRotation, centerX: '50%', centerY: '50%' })
-            .translate({ x: this.previewUserOffsetX, y: this.previewUserOffsetY })
-            .hitTestBehavior(HitTestMode.None)
-            .zIndex(1);
         }
 
         Button({ type: ButtonType.Normal, stateEffect: false }) {
@@ -10101,7 +10125,7 @@ struct RustDeskIndex {
               label: '结束会话',
               icon: $r('sys.symbol.xmark'),
               type: IconStyleMode.NORMAL,
-              action: () => this.closeTransferSession(),
+              action: () => { void this.closeTransferSession(); },
             },
           }],
         },

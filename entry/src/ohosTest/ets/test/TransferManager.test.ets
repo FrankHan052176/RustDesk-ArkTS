@@ -1,12 +1,18 @@
 import { describe, expect, it } from '@ohos/hypium';
-import { NativeSessionBridge } from '../../../main/ets/pages/rustdesk/NativeSessionBridge';
+import { NativeClipboardFileResponse, NativeSessionBridge } from '../../../main/ets/pages/rustdesk/NativeSessionBridge';
 import { RemoteAudioState, SessionStartOptions } from '../../../main/ets/pages/rustdesk/RustDeskSessionTypes';
 import { TransferManager } from '../../../main/ets/pages/rustdesk/TransferManager';
-import { ActionResponse, NativeEvent } from '../../../main/ets/pages/rustdesk/RustDeskTypes';
+import { ActionResponse, NativeEvent, SessionSnapshot } from '../../../main/ets/pages/rustdesk/RustDeskTypes';
 
 class RecordingTransferBridge implements NativeSessionBridge {
   calls: string[] = [];
+  /** One entry per ACK, kept apart so the existing call-index assertions stay exact. */
+  acknowledgements: string[] = [];
   events: NativeEvent[] = [];
+  /** Scripted close receipts, one per close call; later calls report a real release. */
+  closeReceipts: ActionResponse[] = [];
+  /** Scripted ACK verdicts, one per ACK call; later ACKs are accepted. */
+  acknowledgeReceipts: ActionResponse[] = [];
   lastOptions: SessionStartOptions = {
     password: '',
     forceRelay: false,
@@ -15,27 +21,43 @@ class RecordingTransferBridge implements NativeSessionBridge {
   };
   private nextJobId: number = 7;
 
+  /** The lifecycle metadata a real add/start/close receipt carries. */
+  sessionMetadata(sessionId: string): SessionSnapshot {
+    return { sessionId, lifecycleEpoch: `lifecycle-${sessionId}`, phase: 'new' };
+  }
+
   addSession(sessionId: string, target: string, options: SessionStartOptions): ActionResponse {
     this.lastOptions = options;
     this.calls.push(`add:${sessionId}:${target}:${options.isFileTransfer ? 'transfer' : 'desktop'}`);
-    return this.ok('add_session');
+    return { ok: true, action: 'add_session', session: this.sessionMetadata(sessionId) };
   }
 
   startSession(sessionId: string): ActionResponse {
     this.calls.push(`start:${sessionId}`);
-    return this.ok('start_session');
+    return { ok: true, action: 'start_session', session: this.sessionMetadata(sessionId) };
   }
 
   async closeSession(sessionId: string): Promise<ActionResponse> {
     this.calls.push(`close:${sessionId}`);
-    return this.ok('close_session');
+    if (this.closeReceipts.length > 0) {
+      const scripted = this.closeReceipts[0];
+      this.closeReceipts.shift();
+      return scripted;
+    }
+    return { ok: true, action: 'close_session', released: true, session: this.sessionMetadata(sessionId) };
   }
 
   surfaceDestroyed(_sessionId: string, _surfaceId: string, _lifecycleEpoch: string): ActionResponse {
     return this.ok('surface_destroyed');
   }
 
-  acknowledgeClose(_sessionId: string, _lifecycleEpoch: string): ActionResponse {
+  acknowledgeClose(sessionId: string, lifecycleEpoch: string): ActionResponse {
+    this.acknowledgements.push(`${sessionId}:${lifecycleEpoch}`);
+    if (this.acknowledgeReceipts.length > 0) {
+      const scripted = this.acknowledgeReceipts[0];
+      this.acknowledgeReceipts.shift();
+      return scripted;
+    }
     return this.ok('acknowledge_close');
   }
 
@@ -103,6 +125,11 @@ class RecordingTransferBridge implements NativeSessionBridge {
     return null;
   }
 
+  /** This bridge never holds a connection token, so it may not claim one. */
+  hasConnToken(_sessionId: string): boolean {
+    return false;
+  }
+
   getEnableTrustedDevices(_sessionId: string): boolean {
     return false;
   }
@@ -147,6 +174,15 @@ class RecordingTransferBridge implements NativeSessionBridge {
     return this.ok('set_clipboard_file_root');
   }
 
+  /** No file clipboard facts exist in this fixture; the absence is reported, never faked. */
+  getClipboardFileState(_sessionId: string): NativeClipboardFileResponse {
+    return this.noClipboardFileFacts('session_get_clipboard_file_state');
+  }
+
+  takeClipboardFileEvents(_sessionId: string): NativeClipboardFileResponse {
+    return this.noClipboardFileFacts('session_take_clipboard_file_events');
+  }
+
   takeClipboard(_sessionId: string): ActionResponse {
     return this.ok('take_clipboard');
   }
@@ -184,6 +220,14 @@ class RecordingTransferBridge implements NativeSessionBridge {
     return true;
   }
 
+  private noClipboardFileFacts(action: string): NativeClipboardFileResponse {
+    return {
+      ok: false,
+      action,
+      message: 'Test fixture carries no file clipboard facts',
+    };
+  }
+
   private ok(action: string): ActionResponse {
     return { ok: true, action };
   }
@@ -194,7 +238,13 @@ function createManager(bridge: RecordingTransferBridge): TransferManager {
 }
 
 function openManager(manager: TransferManager): boolean {
-  return manager.open('peer', 'secret', true, { uri: 'file:///root', path: '/root' });
+  const opened = manager.open('peer', 'secret', true, { uri: 'file:///root', path: '/root' });
+  if (opened) {
+    // open() leaves the file session connecting: the peer's own metadata is what
+    // marks it ready, and only then may a transfer be started.
+    manager.handleEvent({ name: 'peer_info' });
+  }
+  return opened;
 }
 
 export default function transferManagerTest(): void {
@@ -319,11 +369,12 @@ export default function transferManagerTest(): void {
       expect(manager.snapshot()[0].state).assertEqual('cancelled');
     });
 
-    it('creates a fresh file session after close when the factory repeats an ID', 0, () => {
+    it('creates a fresh file session after close when the factory repeats an ID', 0, async () => {
       const bridge = new RecordingTransferBridge();
       const manager = createManager(bridge);
       expect(openManager(manager)).assertTrue();
-      expect(manager.close()).assertTrue();
+      expect(await manager.close()).assertTrue();
+      expect(bridge.acknowledgements[0]).assertEqual('file-session:lifecycle-file-session');
 
       expect(openManager(manager)).assertTrue();
       expect(bridge.calls[4]).assertEqual('add:file-session-1:peer:transfer');
@@ -347,7 +398,7 @@ export default function transferManagerTest(): void {
       expect(manager.snapshot()[0].state).assertEqual('running');
     });
 
-    it('sends downloads, cancels jobs, and closes only the file session', 0, () => {
+    it('sends downloads, cancels jobs, and closes only the file session', 0, async () => {
       const bridge = new RecordingTransferBridge();
       const manager = createManager(bridge);
       openManager(manager);
@@ -356,8 +407,9 @@ export default function transferManagerTest(): void {
       expect(manager.cancel(7)).assertTrue();
       expect(manager.snapshot()[0].state).assertEqual('cancelled');
 
-      expect(manager.close()).assertTrue();
+      expect(await manager.close()).assertTrue();
       expect(bridge.calls[5]).assertEqual('close:file-session');
+      expect(bridge.acknowledgements[0]).assertEqual('file-session:lifecycle-file-session');
       expect(bridge.calls.some((call: string) => call.includes('desktop-session'))).assertFalse();
     });
   });

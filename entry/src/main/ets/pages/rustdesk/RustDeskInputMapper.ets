@@ -59,11 +59,9 @@ export class RustDeskCoordinateSpace {
    * The rectangle the current presentation clips the picture to, in pane
    * coordinates.
    *
-   * It is the picture's own rectangle for the native Surface, whose enclosing
-   * container is measured at that rectangle and clips the transformed picture to it,
-   * and the whole pane for the RGBA fallback, whose image fills the pane and is
-   * transformed outside that container. Hit testing has to follow whichever is
-   * presenting.
+   * The native Surface's enclosing container is measured at the picture's own
+   * rectangle and clips the transformed picture to it. Hit testing follows that
+   * visible clip.
    */
   clipRect: RustDeskRect;
   viewScale: number;
@@ -460,8 +458,7 @@ export function resolvePreviewTransform(
  * size may exceed it, so normalizing against the fit rect would offset every point
  * in those modes. A caller that presents in a known rectangle passes it here.
  * @param clipRect the rectangle the presentation clips the picture to, when it is
- * not the picture's own rectangle (the RGBA fallback fills and is clipped by the
- * whole pane).
+ * not the picture's own rectangle.
  */
 export function resolveCoordinateSpace(
   viewWidth: number,
@@ -499,8 +496,8 @@ export function resolveCoordinateSpace(
  * Whether a pane point is on the presented picture.
  *
  * Two things must hold. The picture is rendered inside a clip the presentation owns
- * — the mode's rectangle for the native Surface, the whole pane for the RGBA
- * fallback — and a point outside that clip is not on the picture however the inverse
+ * — the mode's rectangle for the native Surface — and a point outside that clip
+ * is not on the picture however the inverse
  * transform maps it: at a zoom-in the transformed picture reaches past the clip, and
  * a click on the letterbox beside it must not reach the peer. Inside the clip, the
  * point is mapped back through the user transform and must land on the picture

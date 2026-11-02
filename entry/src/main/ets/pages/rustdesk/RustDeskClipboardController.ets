@@ -299,6 +299,15 @@ export class RustDeskClipboardController {
   private peerApplyRevision: number = 0;
   private pendingRemoteClipboard: RustDeskRemoteClipboardPayload | undefined = undefined;
   private pendingRemoteSessionId: string = '';
+  /**
+   * The admission check the pending payload was queued with.
+   *
+   * It belongs to that payload and not to the controller: a payload queued for one
+   * generation is refused on its own terms even if the generation that is live when
+   * it finally flushes looks acceptable, and a later payload never inherits an
+   * older one's check.
+   */
+  private pendingRemoteAdmission: (() => boolean) | undefined = undefined;
   private lastRemoteText: string | undefined = undefined;
   private lastRemoteImageSignature: string | undefined = undefined;
   private lastRemoteFileSignature: string | undefined = undefined;
@@ -343,8 +352,7 @@ export class RustDeskClipboardController {
     this.sessionId = sessionId;
     if (sessionChanged) {
       if (this.pendingRemoteSessionId !== sessionId) {
-        this.pendingRemoteClipboard = undefined;
-        this.pendingRemoteSessionId = '';
+        this.discardPendingRemoteClipboard();
       }
       this.lastRemoteText = undefined;
       this.lastRemoteImageSignature = undefined;
@@ -383,8 +391,7 @@ export class RustDeskClipboardController {
     // here rather than carried into the next start, where it would be applied under
     // a fresh generation and could overwrite what the user copied meanwhile: a
     // clear queued before a pause must not erase a newer local clipboard on resume.
-    this.pendingRemoteClipboard = undefined;
-    this.pendingRemoteSessionId = '';
+    this.discardPendingRemoteClipboard();
     this.readAgain = false;
     this.host.resetReadAccess();
   }
@@ -409,8 +416,7 @@ export class RustDeskClipboardController {
 
   reset(): void {
     this.stop();
-    this.pendingRemoteClipboard = undefined;
-    this.pendingRemoteSessionId = '';
+    this.discardPendingRemoteClipboard();
     this.lastRemoteText = undefined;
     this.lastRemoteImageSignature = undefined;
     this.lastRemoteFileSignature = undefined;
@@ -425,7 +431,18 @@ export class RustDeskClipboardController {
     this.applyRemoteClipboard(sessionId, { text: content });
   }
 
-  applyRemoteClipboard(sessionId: string, payload: RustDeskRemoteClipboardPayload): void {
+  /**
+   * Queues a peer clipboard payload for the system pasteboard.
+   *
+   * `admission` is this payload's own last-word check on whether the fact it carries
+   * may still be written: the caller passes the generation test of the event it took
+   * from the engine. It is consulted immediately before the synchronous commit,
+   * after every await this flush performs, so a flush delayed by an in-flight write
+   * or an image decode cannot carry a withdrawn payload into the pasteboard. A
+   * `false` answer writes nothing.
+   */
+  applyRemoteClipboard(sessionId: string, payload: RustDeskRemoteClipboardPayload,
+    admission?: () => boolean): void {
     if (sessionId.length === 0) {
       return;
     }
@@ -434,10 +451,21 @@ export class RustDeskClipboardController {
     // survive a session switch, and only the payload that actually reaches the
     // pasteboard may be recognized as the peer's own. What is recorded here is only
     // that the peer moved on, so the local send history is no longer current.
+    this.discardPendingRemoteClipboard();
     this.lastLocalSignature = undefined;
     this.pendingRemoteClipboard = payload;
     this.pendingRemoteSessionId = sessionId;
+    this.pendingRemoteAdmission = admission;
     this.flushRemoteClipboard();
+  }
+
+  private discardPendingRemoteClipboard(): void {
+    if (this.pendingRemoteClipboard?.files !== undefined) {
+      this.discardRemoteClipboardFiles(this.pendingRemoteSessionId, this.pendingRemoteClipboard.files);
+    }
+    this.pendingRemoteClipboard = undefined;
+    this.pendingRemoteSessionId = '';
+    this.pendingRemoteAdmission = undefined;
   }
 
   incomingFileRoot(sessionId: string): string {
@@ -487,6 +515,65 @@ export class RustDeskClipboardController {
       }
     } catch (error) {
       this.callbacks.log('clipboard_cleanup', `closed session cleanup skipped=${String(error)}`);
+    }
+  }
+
+  /**
+   * Removes peer files this session received but never applied to the pasteboard.
+   *
+   * The engine lands each peer batch in its own job directory under the incoming root
+   * the client set (`<incoming root>/.cliprdr-<request id>/`, the shape
+   * `rd-engine/src/cliprdr.rs` creates) and publishes only the top-level entries, so
+   * this removes exactly the paths it is given: each one has to sit under this
+   * session's own `rustdesk-clipboard-in/<session>` root, inside a real job
+   * directory, with normalized components. The job directory is then removed only if
+   * it is empty, so no other job's files and no earlier generation's root is touched
+   * and no filesystem tree is invented.
+   *
+   * A path that was already committed to the pasteboard must never reach here: what
+   * the system clipboard still publishes is removed by the retained-root cleanup
+   * instead, and only once it has been superseded. A path the engine already removed
+   * is a no-op.
+   */
+  discardRemoteClipboardFiles(sessionId: string, paths: Array<string>): void {
+    if (sessionId.length === 0 || paths.length === 0) {
+      return;
+    }
+    const safeSessionId = sessionId.replace(/[^A-Za-z0-9_-]/g, '_');
+    if (safeSessionId.length === 0) {
+      return;
+    }
+    const root = `${this.host.filesDir}/rustdesk-clipboard-in/${safeSessionId}`;
+    const rootPrefix = `${root}/`;
+    const jobDirectories: Array<string> = [];
+    for (const path of paths) {
+      if (path.length === 0 || !path.startsWith(rootPrefix)) {
+        continue;
+      }
+      const components = path.substring(rootPrefix.length).split('/');
+      if (components.length < 2
+        || components.some((component: string): boolean =>
+          component.length === 0 || component === '.' || component === '..')) {
+        continue;
+      }
+      // Only the directory name this owner's own receive jobs are given, never the
+      // root itself and never a shape a peer's file name could have produced.
+      if (!/^\.cliprdr-[0-9]+$/.test(components[0])) {
+        continue;
+      }
+      this.removeTree(path);
+      const jobDirectory = `${root}/${components[0]}`;
+      if (!jobDirectories.includes(jobDirectory)) {
+        jobDirectories.push(jobDirectory);
+      }
+    }
+    for (const jobDirectory of jobDirectories) {
+      try {
+        if (fileIo.listFileSync(jobDirectory).length === 0) {
+          fileIo.rmdirSync(jobDirectory);
+        }
+      } catch (_) {
+      }
     }
   }
 
@@ -566,10 +653,12 @@ export class RustDeskClipboardController {
       return;
     }
     const payload = this.pendingRemoteClipboard;
+    const admission = this.pendingRemoteAdmission;
     const generation = this.lifecycleGeneration;
     const sessionId = this.sessionId;
     this.pendingRemoteClipboard = undefined;
     this.pendingRemoteSessionId = '';
+    this.pendingRemoteAdmission = undefined;
     this.remoteWriteInFlight = true;
     // This is the payload the peer's clipboard now holds, so its echo identity is
     // recorded here: after any session-switch reset, and before its own pasteboard
@@ -585,9 +674,10 @@ export class RustDeskClipboardController {
     // a read is holding is older than the peer's state.
     this.peerApplyRevision += 1;
     let pixelMap: image.PixelMap | undefined = undefined;
+    let commitAttempted = false;
     try {
       if (isRemoteClipboardClear(payload)) {
-        await this.applyRemoteClipboardClear(generation, sessionId);
+        await this.applyRemoteClipboardClear(generation, sessionId, admission);
         return;
       }
       let data: pasteboard.PasteData | undefined = undefined;
@@ -621,11 +711,14 @@ export class RustDeskClipboardController {
       property.shareOption = pasteboard.ShareOption.LOCALDEVICE;
       data.setProperty(property);
       // Admission is checked before the write, not only after it, and the commit is
-      // synchronous: no await separates the check from the mutation, so a stop or a
-      // session change cannot leave a pasteboard write outstanding behind it.
-      if (!this.isCurrentSession(generation, sessionId)) {
+      // synchronous: no await separates the check from the mutation, so a stop, a
+      // session change or a withdrawn event cannot leave a pasteboard write
+      // outstanding behind it. The payload's own callback is part of that check,
+      // because this point is reached long after the payload was queued.
+      if (!this.admits(admission, generation, sessionId)) {
         return;
       }
+      commitAttempted = true;
       this.host.setDataSync(data);
       await this.cleanupRetainedIncomingRoots();
       if (!this.isCurrentSession(generation, sessionId)) {
@@ -638,6 +731,9 @@ export class RustDeskClipboardController {
     } catch (error) {
       this.callbacks.log('clipboard_remote', `failed=${String(error)}`);
     } finally {
+      if (!commitAttempted && payload.files !== undefined) {
+        this.discardRemoteClipboardFiles(sessionId, payload.files);
+      }
       if (pixelMap !== undefined) {
         try {
           await pixelMap.release();
@@ -669,12 +765,14 @@ export class RustDeskClipboardController {
    * roots are re-examined exactly as after a write, so a root the peer no longer
    * publishes is not kept alive by the clear.
    */
-  private async applyRemoteClipboardClear(generation: number, sessionId: string): Promise<void> {
+  private async applyRemoteClipboardClear(generation: number, sessionId: string,
+    admission: (() => boolean) | undefined): Promise<void> {
     // A clear cannot be undone, so admission is checked before it runs rather than
     // after, and the clear is committed synchronously in the same turn: no await
     // separates the check from the mutation, so a stop cannot be overtaken by a
-    // clear that was already submitted.
-    if (!this.isCurrentSession(generation, sessionId)) {
+    // clear that was already submitted, and a payload whose events were withdrawn
+    // never clears the user's clipboard.
+    if (!this.admits(admission, generation, sessionId)) {
       return;
     }
     this.host.clearDataSync();
@@ -1024,6 +1122,31 @@ export class RustDeskClipboardController {
       }
     }
     return paths;
+  }
+
+  /**
+   * Whether a payload queued earlier may still be committed now.
+   *
+   * The session test and the payload's own callback are one decision taken at the
+   * commit site: the callback alone would accept a payload whose session ended
+   * meanwhile, and the session test alone would accept a payload the events it was
+   * taken from no longer admit. A callback that throws admits nothing, and nothing
+   * about the payload is logged here.
+   */
+  private admits(admission: (() => boolean) | undefined, generation: number,
+    sessionId: string): boolean {
+    if (!this.isCurrentSession(generation, sessionId)) {
+      return false;
+    }
+    if (admission === undefined) {
+      return true;
+    }
+    try {
+      return admission();
+    } catch (_) {
+      this.callbacks.log('clipboard_admission', 'check failed');
+      return false;
+    }
   }
 
   private isCurrentSession(generation: number, sessionId: string): boolean {

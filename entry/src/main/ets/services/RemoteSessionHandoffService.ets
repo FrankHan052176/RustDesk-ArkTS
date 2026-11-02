@@ -11,7 +11,7 @@ export const REMOTE_SESSION_CONTINUE_STATE_EVENT = 'rustdesk.remote_session_cont
 export const REMOTE_SESSION_CONTINUE_HANDOFF_EVENT = 'rustdesk.remote_session_continue_handoff';
 export const REMOTE_SESSION_APP_STATE_EVENT = 'rustdesk.remote_session_app_state';
 
-const HANDOFF_VERSION = 1;
+const HANDOFF_VERSION = 2;
 const HANDOFF_TTL_MS = 120000;
 const MAX_HANDOFF_PAYLOAD_LENGTH = 24576;
 const MAX_CONSUMED_NONCES = 64;
@@ -35,28 +35,29 @@ export class RemoteSessionShareSnapshot {
   forceRelay: boolean = false;
 }
 
+export type RemoteSessionShareSnapshotProvider = () => RemoteSessionShareSnapshot | undefined;
+
 export class RemoteSessionHandoffEnvelope extends RemoteSessionShareSnapshot {
   version: number = HANDOFF_VERSION;
   nonce: string = '';
   issuedAt: number = 0;
   expiresAt: number = 0;
   source: RemoteSessionHandoffSource = 'gesture';
-  oneTime: boolean = true;
+  credentialReusable: boolean = true;
 }
 
 export class RemoteSessionHandoffService {
   private static pendingIncoming: RemoteSessionHandoffEnvelope | undefined = undefined;
-  private static outgoingSnapshot: RemoteSessionShareSnapshot | undefined = undefined;
+  private static outgoingSnapshotProvider: RemoteSessionShareSnapshotProvider | undefined = undefined;
   private static consumedNonces: string[] = [];
 
-  static setOutgoingSnapshot(snapshot: RemoteSessionShareSnapshot | undefined): void {
-    RemoteSessionHandoffService.outgoingSnapshot = snapshot === undefined
-      ? undefined
-      : RemoteSessionHandoffService.copySnapshot(snapshot);
+  // The retained callback names a live session, never a serialized credential.
+  static setOutgoingSnapshotProvider(provider: RemoteSessionShareSnapshotProvider | undefined): void {
+    RemoteSessionHandoffService.outgoingSnapshotProvider = provider;
   }
 
   static createContinuationPayload(): string | undefined {
-    const snapshot = RemoteSessionHandoffService.outgoingSnapshot;
+    const snapshot = RemoteSessionHandoffService.outgoingSnapshotProvider?.();
     if (snapshot === undefined || !RemoteSessionHandoffService.isShareableSnapshot(snapshot)) {
       return undefined;
     }
@@ -148,24 +149,9 @@ export class RemoteSessionHandoffService {
     return new systemShare.SharedData({
       utd: utd.UniformDataType.HYPERLINK,
       content: link,
-      title: 'RustDesk 一次性远控',
-      description: '在另一台设备上继续当前远控会话',
+      title: 'RustDesk 远控连接',
+      description: '含可重复免密重连凭据，请仅发送给信任的设备',
     });
-  }
-
-  static copySnapshot(source: RemoteSessionShareSnapshot): RemoteSessionShareSnapshot {
-    const snapshot = new RemoteSessionShareSnapshot();
-    snapshot.target = source.target;
-    snapshot.targetKind = source.targetKind;
-    snapshot.connToken = source.connToken;
-    snapshot.idServer = source.idServer;
-    snapshot.relayServer = source.relayServer;
-    snapshot.apiServer = source.apiServer;
-    snapshot.key = source.key;
-    snapshot.connectionMode = source.connectionMode;
-    snapshot.forceRelay = source.forceRelay;
-    RemoteSessionHandoffService.normalizeTransportContext(snapshot);
-    return snapshot;
   }
 
   private static createEnvelope(
@@ -221,7 +207,7 @@ export class RemoteSessionHandoffService {
       }
       return RemoteSessionHandoffService.parseQueryEnvelope(parsed.params);
     } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'deep link URL parsing threw: %{public}s', String(error));
+      hilog.warn(DOMAIN, TAG, 'deep link URL parsing failed');
       return undefined;
     }
   }
@@ -235,10 +221,10 @@ export class RemoteSessionHandoffService {
     const target = params.get('target');
     const targetKind = params.get('target_kind');
     const connectionMode = params.get('connection_mode');
-    const oneTime = params.get('one_time');
+    const credentialReusable = params.get('credential_reusable');
     if (version === null || nonce === null || issuedAt === null || expiresAt === null ||
       sourceValue === null || target === null || targetKind === null || connectionMode === null ||
-      oneTime === null) {
+      credentialReusable === null) {
       return undefined;
     }
     const source = RemoteSessionHandoffService.parseSource(sourceValue);
@@ -260,7 +246,7 @@ export class RemoteSessionHandoffService {
     envelope.key = params.get('key') ?? '';
     envelope.connectionMode = connectionMode.trim();
     envelope.forceRelay = params.get('force_relay') === '1';
-    envelope.oneTime = oneTime === '1' || oneTime.toLowerCase() === 'true';
+    envelope.credentialReusable = credentialReusable === '1' || credentialReusable.toLowerCase() === 'true';
     RemoteSessionHandoffService.normalizeTransportContext(envelope);
     return RemoteSessionHandoffService.isEnvelopeValid(envelope) ? envelope : undefined;
   }
@@ -290,7 +276,7 @@ export class RemoteSessionHandoffService {
       envelope.key = String(value.key ?? '').trim();
       envelope.connectionMode = String(value.connectionMode ?? '').trim();
       envelope.forceRelay = Boolean(value.forceRelay);
-      envelope.oneTime = Boolean(value.oneTime);
+      envelope.credentialReusable = value.credentialReusable === true;
       RemoteSessionHandoffService.normalizeTransportContext(envelope);
       return RemoteSessionHandoffService.isEnvelopeValid(envelope) ? envelope : undefined;
     } catch (_) {
@@ -313,7 +299,7 @@ export class RemoteSessionHandoffService {
 
   private static isEnvelopeValid(envelope: RemoteSessionHandoffEnvelope): boolean {
     const now = Date.now();
-    if (envelope.version !== HANDOFF_VERSION || !envelope.oneTime || envelope.nonce.length < 16) {
+    if (envelope.version !== HANDOFF_VERSION || !envelope.credentialReusable || envelope.nonce.length < 16) {
       return false;
     }
     if (envelope.issuedAt <= 0 || envelope.expiresAt <= now || envelope.expiresAt < envelope.issuedAt) {
@@ -388,26 +374,26 @@ export class RemoteSessionHandoffService {
 }
 
 export class RemoteSessionShareController {
-  private snapshot: RemoteSessionShareSnapshot | undefined = undefined;
+  private snapshotProvider: RemoteSessionShareSnapshotProvider | undefined = undefined;
   private registry: harmonyShare.SendCapabilityRegistry | undefined = undefined;
   private gesturesRegistered: boolean = false;
   private knockRegistered: boolean = false;
   private registrationGeneration: number = 0;
   private gesturesCallback: Callback<harmonyShare.SharableTarget> =
-    (target: harmonyShare.SharableTarget): void => this.share(target, 'gesture');
+    (target: harmonyShare.SharableTarget): void => this.share(target, 'gesture', 0);
   private knockCallback: Callback<harmonyShare.SharableTarget> =
-    (target: harmonyShare.SharableTarget): void => this.share(target, 'knock');
+    (target: harmonyShare.SharableTarget): void => this.share(target, 'knock', 0);
 
-  setEnabled(context: common.UIAbilityContext, snapshot: RemoteSessionShareSnapshot | undefined): void {
+  setEnabled(context: common.UIAbilityContext, provider: RemoteSessionShareSnapshotProvider | undefined): void {
     this.registrationGeneration += 1;
     this.unregister();
-    this.snapshot = snapshot === undefined ? undefined : RemoteSessionHandoffService.copySnapshot(snapshot);
-    if (this.snapshot === undefined) {
+    this.snapshotProvider = provider;
+    if (this.snapshotProvider === undefined) {
       return;
     }
     const generation = this.registrationGeneration;
     window.getLastWindow(context).then((currentWindow: window.Window): void => {
-      if (generation !== this.registrationGeneration || this.snapshot === undefined) {
+      if (generation !== this.registrationGeneration || this.snapshotProvider === undefined) {
         return;
       }
       if (!canIUse('SystemCapability.Collaboration.HarmonyShare')) {
@@ -419,6 +405,10 @@ export class RemoteSessionShareController {
         ? { windowId: currentWindow.getWindowProperties().id }
         : undefined;
       this.registry = registry;
+      this.gesturesCallback = (target: harmonyShare.SharableTarget): void =>
+        this.share(target, 'gesture', generation);
+      this.knockCallback = (target: harmonyShare.SharableTarget): void =>
+        this.share(target, 'knock', generation);
       try {
         if (registry === undefined) {
           harmonyShare.on('knockShare', this.knockCallback);
@@ -454,7 +444,7 @@ export class RemoteSessionShareController {
   disable(): void {
     this.registrationGeneration += 1;
     this.unregister();
-    this.snapshot = undefined;
+    this.snapshotProvider = undefined;
   }
 
   private unregister(): void {
@@ -505,8 +495,14 @@ export class RemoteSessionShareController {
     }
   }
 
-  private share(target: harmonyShare.SharableTarget, source: RemoteSessionHandoffSource): void {
-    const snapshot = this.snapshot;
+  private share(target: harmonyShare.SharableTarget, source: RemoteSessionHandoffSource,
+    generation: number): void {
+    if (generation !== this.registrationGeneration) {
+      void target.reject(harmonyShare.SharableErrorCode.NO_CONTENT_ERROR);
+      return;
+    }
+    // Only this explicit gesture callback (or onContinue) asks native for h1.
+    const snapshot = this.snapshotProvider?.();
     if (snapshot === undefined) {
       void target.reject(harmonyShare.SharableErrorCode.NO_CONTENT_ERROR);
       return;

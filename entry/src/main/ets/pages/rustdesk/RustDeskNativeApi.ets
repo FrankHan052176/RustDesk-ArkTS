@@ -1,27 +1,16 @@
 import {
-  backendSummary as bridgeBackendSummary,
-  buildMarker as bridgeBuildMarker,
-  healthcheck as bridgeHealthcheck,
   inputInterceptorPollEvents as bridgeInputInterceptorPollEvents,
   inputInterceptorStart as bridgeInputInterceptorStart,
   inputInterceptorStop as bridgeInputInterceptorStop,
   nativeVersion as bridgeNativeVersion,
-  runtimeGetApiServer as bridgeRuntimeGetApiServer,
   runtimeGetDecoderCapabilities as bridgeRuntimeGetDecoderCapabilities,
   runtimeGetServerConfig as bridgeRuntimeGetServerConfig,
-  runtimeInit as bridgeRuntimeInit,
   runtimeListFavorites as bridgeRuntimeListFavorites,
-  runtimeListLanPeers as bridgeRuntimeListLanPeers,
-  runtimeListLocalDir as bridgeRuntimeListLocalDir,
   runtimeListRecentPeers as bridgeRuntimeListRecentPeers,
   peerQueryOnline as bridgePeerQueryOnline,
   runtimeRecordRecentPeer as bridgeRuntimeRecordRecentPeer,
-  runtimeRemoveDiscoveredPeer as bridgeRuntimeRemoveDiscoveredPeer,
   runtimeRemoveRecentPeer as bridgeRuntimeRemoveRecentPeer,
-  runtimeScanLanPeers as bridgeRuntimeScanLanPeers,
   runtimeSetFavorite as bridgeRuntimeSetFavorite,
-  runtimeSetLifecycle as bridgeRuntimeSetLifecycle,
-  runtimeSetRecordingDirectory as bridgeRuntimeSetRecordingDirectory,
   runtimeSetServerConfig as bridgeRuntimeSetServerConfig,
   runtimeTestServerConfig as bridgeRuntimeTestServerConfig,
   sessionAcknowledgeClose as bridgeSessionAcknowledgeClose,
@@ -31,23 +20,21 @@ import {
   sessionChangeResolution as bridgeSessionChangeResolution,
   sessionClose as bridgeSessionClose,
   sessionEnterOrLeave as bridgeSessionEnterOrLeave,
+  sessionGetClipboardFileState as bridgeSessionGetClipboardFileState,
   sessionGetConnToken as bridgeSessionGetConnToken,
+  sessionHasConnToken as bridgeSessionHasConnToken,
   sessionGetEnableTrustedDevices as bridgeSessionGetEnableTrustedDevices,
   sessionGetFrameRateSnapshot as bridgeSessionGetFrameRateSnapshot,
   sessionGetImageQuality as bridgeSessionGetImageQuality,
-  sessionGetIsRecording as bridgeSessionGetIsRecording,
   sessionGetRemoteAudioState as bridgeSessionGetRemoteAudioState,
-  sessionGetRgbaSize as bridgeSessionGetRgbaSize,
   sessionGetToggleOption as bridgeSessionGetToggleOption,
   sessionHandleFlutterKeyEvent as bridgeSessionHandleFlutterKeyEvent,
   sessionInputKey as bridgeSessionInputKey,
   sessionInputString as bridgeSessionInputString,
   sessionLogin as bridgeSessionLogin,
-  sessionNextRgba as bridgeSessionNextRgba,
   sessionOnWaitingForImageDialogShow as bridgeSessionOnWaitingForImageDialogShow,
   sessionPollEvents as bridgeSessionPollEvents,
   sessionReadRemoteDir as bridgeSessionReadRemoteDir,
-  sessionRecordScreen as bridgeSessionRecordScreen,
   sessionRefresh as bridgeSessionRefresh,
   sessionSend2fa as bridgeSessionSend2fa,
   sessionSendClipboard as bridgeSessionSendClipboard,
@@ -69,8 +56,8 @@ import {
   sessionStart as bridgeSessionStart,
   sessionSwitchDisplay as bridgeSessionSwitchDisplay,
   sessionTakeClipboard as bridgeSessionTakeClipboard,
+  sessionTakeClipboardFileEvents as bridgeSessionTakeClipboardFileEvents,
   sessionTakeClipboardImage as bridgeSessionTakeClipboardImage,
-  sessionTakeRgbaFrame as bridgeSessionTakeRgbaFrame,
   sessionToggleOption as bridgeSessionToggleOption,
   transferNextJobId as bridgeTransferNextJobId,
   xcomponentAttach as bridgeXcomponentAttach,
@@ -79,18 +66,6 @@ import {
 } from 'rustdesk-ohrs';
 
 export class RustDeskNativeApi {
-  backendSummary(): string {
-    return bridgeBackendSummary();
-  }
-
-  buildMarker(): string {
-    return bridgeBuildMarker();
-  }
-
-  healthcheck(): string {
-    return bridgeHealthcheck();
-  }
-
   inputInterceptorPollEvents(limit: number): string {
     return bridgeInputInterceptorPollEvents(limit);
   }
@@ -107,10 +82,6 @@ export class RustDeskNativeApi {
     return bridgeNativeVersion();
   }
 
-  runtimeGetApiServer(): string {
-    return bridgeRuntimeGetApiServer();
-  }
-
   runtimeGetDecoderCapabilities(): Promise<string> {
     return bridgeRuntimeGetDecoderCapabilities();
   }
@@ -119,20 +90,8 @@ export class RustDeskNativeApi {
     return bridgeRuntimeGetServerConfig();
   }
 
-  runtimeInit(appDir: string, deviceName: string): Promise<string> {
-    return bridgeRuntimeInit(appDir, deviceName);
-  }
-
   runtimeListFavorites(): Promise<string> {
     return bridgeRuntimeListFavorites();
-  }
-
-  runtimeListLanPeers(): string {
-    return bridgeRuntimeListLanPeers();
-  }
-
-  runtimeListLocalDir(path: string): string {
-    return bridgeRuntimeListLocalDir(path);
   }
 
   runtimeListRecentPeers(): Promise<string> {
@@ -141,10 +100,6 @@ export class RustDeskNativeApi {
 
   peerQueryOnline(peerIdsJson: string, approvedProfileJson: string): Promise<string> {
     return bridgePeerQueryOnline(peerIdsJson, approvedProfileJson);
-  }
-
-  runtimeRemoveDiscoveredPeer(peerId: string): string {
-    return bridgeRuntimeRemoveDiscoveredPeer(peerId);
   }
 
   runtimeSetFavorite(peerId: string, favorite: boolean): Promise<string> {
@@ -157,21 +112,6 @@ export class RustDeskNativeApi {
 
   runtimeRemoveRecentPeer(peerId: string): Promise<string> {
     return bridgeRuntimeRemoveRecentPeer(peerId);
-  }
-
-
-  runtimeScanLanPeers(): Promise<string> {
-    return bridgeRuntimeScanLanPeers();
-  }
-
-
-  runtimeSetLifecycle(privacyAccepted: boolean, foreground: boolean): Promise<string> {
-    return bridgeRuntimeSetLifecycle(privacyAccepted, foreground);
-  }
-
-
-  runtimeSetRecordingDirectory(path: string): string {
-    return bridgeRuntimeSetRecordingDirectory(path);
   }
 
   runtimeSetServerConfig(configJson: string): Promise<string> {
@@ -212,8 +152,16 @@ export class RustDeskNativeApi {
     return bridgeSessionEnterOrLeave(sessionId, enter);
   }
 
+  sessionGetClipboardFileState(sessionId: string): string {
+    return bridgeSessionGetClipboardFileState(sessionId);
+  }
+
   sessionGetConnToken(sessionId: string): string | null {
     return bridgeSessionGetConnToken(sessionId);
+  }
+
+  sessionHasConnToken(sessionId: string): boolean {
+    return bridgeSessionHasConnToken(sessionId);
   }
 
   sessionGetEnableTrustedDevices(sessionId: string): boolean {
@@ -228,16 +176,8 @@ export class RustDeskNativeApi {
     return bridgeSessionGetImageQuality(sessionId);
   }
 
-  sessionGetIsRecording(sessionId: string): boolean {
-    return bridgeSessionGetIsRecording(sessionId);
-  }
-
   sessionGetRemoteAudioState(sessionId: string): string {
     return bridgeSessionGetRemoteAudioState(sessionId);
-  }
-
-  sessionGetRgbaSize(sessionId: string, display: number): number {
-    return bridgeSessionGetRgbaSize(sessionId, display);
   }
 
   sessionGetToggleOption(sessionId: string, option: string): boolean {
@@ -260,10 +200,6 @@ export class RustDeskNativeApi {
     return bridgeSessionLogin(sessionId, loginJson);
   }
 
-  sessionNextRgba(sessionId: string, display: number): void {
-    bridgeSessionNextRgba(sessionId, display);
-  }
-
   sessionOnWaitingForImageDialogShow(sessionId: string): string {
     return bridgeSessionOnWaitingForImageDialogShow(sessionId);
   }
@@ -274,10 +210,6 @@ export class RustDeskNativeApi {
 
   sessionReadRemoteDir(sessionId: string, path: string, includeHidden: boolean): string {
     return bridgeSessionReadRemoteDir(sessionId, path, includeHidden);
-  }
-
-  sessionRecordScreen(sessionId: string, start: boolean): string {
-    return bridgeSessionRecordScreen(sessionId, start);
   }
 
   sessionRefresh(sessionId: string, display: number): string {
@@ -366,12 +298,12 @@ export class RustDeskNativeApi {
     return bridgeSessionTakeClipboard(sessionId);
   }
 
-  sessionTakeClipboardImage(sessionId: string): Uint8Array {
-    return bridgeSessionTakeClipboardImage(sessionId);
+  sessionTakeClipboardFileEvents(sessionId: string): string {
+    return bridgeSessionTakeClipboardFileEvents(sessionId);
   }
 
-  sessionTakeRgbaFrame(sessionId: string, display: number): Uint8Array {
-    return bridgeSessionTakeRgbaFrame(sessionId, display);
+  sessionTakeClipboardImage(sessionId: string): Uint8Array {
+    return bridgeSessionTakeClipboardImage(sessionId);
   }
 
   sessionToggleOption(sessionId: string, option: string): string {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@ohos/hypium';
-import { NativeSessionBridge } from '../../../main/ets/pages/rustdesk/NativeSessionBridge';
+import { NativeClipboardFileResponse, NativeSessionBridge } from '../../../main/ets/pages/rustdesk/NativeSessionBridge';
 import { RemoteAudioState, SessionStartOptions } from '../../../main/ets/pages/rustdesk/RustDeskSessionTypes';
 import { DEFAULT_REFRESH_RATE, matchesResolutionRefusal, SessionDisplayController } from '../../../main/ets/pages/rustdesk/SessionDisplayController';
 import { RustDeskViewportModel } from '../../../main/ets/pages/rustdesk/RustDeskViewportModel';
@@ -39,6 +39,11 @@ class RecordingNativeSessionBridge implements NativeSessionBridge {
 
   getConnToken(_sessionId: string): string | null {
     return null;
+  }
+
+  /** This bridge never holds a connection token, so it may not claim one. */
+  hasConnToken(_sessionId: string): boolean {
+    return false;
   }
 
   getEnableTrustedDevices(_sessionId: string): boolean {
@@ -86,6 +91,15 @@ class RecordingNativeSessionBridge implements NativeSessionBridge {
 
   setClipboardFileRoot(_sessionId: string, _root: string): ActionResponse {
     return this.ok('set_clipboard_file_root');
+  }
+
+  /** No file clipboard facts exist in this fixture; the absence is reported, never faked. */
+  getClipboardFileState(_sessionId: string): NativeClipboardFileResponse {
+    return this.noClipboardFileFacts('session_get_clipboard_file_state');
+  }
+
+  takeClipboardFileEvents(_sessionId: string): NativeClipboardFileResponse {
+    return this.noClipboardFileFacts('session_take_clipboard_file_events');
   }
 
   takeClipboard(_sessionId: string): ActionResponse {
@@ -174,6 +188,14 @@ class RecordingNativeSessionBridge implements NativeSessionBridge {
     return true;
   }
 
+  private noClipboardFileFacts(action: string): NativeClipboardFileResponse {
+    return {
+      ok: false,
+      action,
+      message: 'Test fixture carries no file clipboard facts',
+    };
+  }
+
   private ok(action: string): ActionResponse {
     return { ok: true, action };
   }
@@ -196,7 +218,7 @@ function resolutions(): ResolutionInfo[] {
 function createController(bridge: RecordingNativeSessionBridge): SessionDisplayController {
   const viewport = new RustDeskViewportModel();
   viewport.setViewportSize(1280, 1024);
-  return new SessionDisplayController(viewport, bridge, () => {}, () => {});
+  return new SessionDisplayController(viewport, bridge, () => {});
 }
 
 export default function sessionDisplayControllerTest(): void {
@@ -220,7 +242,7 @@ export default function sessionDisplayControllerTest(): void {
       const bridge = new RecordingNativeSessionBridge();
       const viewport = new RustDeskViewportModel();
       viewport.setViewportSize(1280, 800);
-      const controller = new SessionDisplayController(viewport, bridge, () => {}, () => {});
+      const controller = new SessionDisplayController(viewport, bridge, () => {});
       const peerDisplays: PeerDisplayInfo[] = [
         { width: 7680, height: 4320, x: 0, y: 0, scaled_width: 3840, scaled_height: 2160 },
         { width: 5120, height: 2880, x: 7680, y: 0, scaled_width: 2560, scaled_height: 1440 },
