@@ -1,13 +1,17 @@
 import {
   isLocalPointInsidePaintRect,
-  mapHarmonyKeyCodeToUsbHid,
+  mapHarmonyKeyCodeToKeysym,
+  mapLegacyKeyToKeysym,
+  unicodeKeysym,
+  validInputGeneration,
+  vncKeyChord,
   mapHarmonyKeyCode,
   mapLocalToRemote,
   mapMouseButton,
   mapViewDeltaToBase,
   RemotePointerPosition,
   RustDeskCoordinateSpace,
-  RustDeskFlutterKeyPayload,
+  RustDeskInputBinding,
   RustDeskKeyPayload,
   RustDeskKeyMapping,
   RustDeskModifierKey,
@@ -36,14 +40,11 @@ const RELATIVE_MOUSE_FLUSH_MS = 16;
 const RELATIVE_MOUSE_MAX_DELTA = 10000;
 const RELATIVE_MOUSE_BUTTON_SUPPRESS_MS = 120;
 const RELATIVE_MOUSE_WARP_MIN_THRESHOLD = 96;
-const LOCK_MODE_CAPS = 1 << 1;
-const LOCK_MODE_NUM = 1 << 2;
-const LOCK_MODE_SCROLL = 1 << 3;
 
 export interface RustDeskInputControllerCallbacks {
   isSessionActive: () => boolean;
-  // Only Core consumes raw Flutter keys; other sessions use the legacy bridge.
-  usesCoreRawKeyRoute: () => boolean;
+  getInputBinding: () => RustDeskInputBinding | undefined;
+  usesVncKeysym: () => boolean;
   isMouseMode: () => boolean;
   isPeerMacOS: () => boolean;
   isPeerAndroid: () => boolean;
@@ -52,9 +53,12 @@ export interface RustDeskInputControllerCallbacks {
   gesturesEnabled: () => boolean;
   rightClickGesture: () => RustDeskRightClickGesture;
   getCoordinateSpace: () => RustDeskCoordinateSpace | undefined;
-  sendMouse: (payload: RustDeskMousePayload) => void;
-  sendFlutterKey: (payload: RustDeskFlutterKeyPayload) => boolean;
-  sendKey: (payload: RustDeskKeyPayload) => boolean;
+  sendMouse: (payload: RustDeskMousePayload, binding: RustDeskInputBinding) => boolean;
+  sendKey: (payload: RustDeskKeyPayload, binding: RustDeskInputBinding) => boolean;
+  sendKeysym: (keysym: number, down: boolean, binding: RustDeskInputBinding) => boolean;
+  sendText: (text: string, binding: RustDeskInputBinding) => boolean;
+  releaseInput: (sessionId: string) => void;
+  reportInputError: (message: string) => void;
   log: (label: string, payload: string) => void;
   remoteCursorDebugText: () => string;
   overlayCursorDebugText: (label: string) => string;
@@ -84,13 +88,14 @@ export class RustDeskInputController {
   private pointerTouchLatchUntil: number = 0;
   private relativeModeActive: boolean;
   private activeModifiers: Set<RustDeskModifierKey> = new Set();
-  /**
-   * The key codes this controller has sent down and has not released: the Core
-   * interceptor's keys, and the hardware keys of a session that takes the legacy
-   * route, which the interceptor never sees. A key-up removes its own entry, so a
-   * release pass sends only the holds still owed.
-   */
+  /** Only keys whose down was actually admitted under this session's generation. */
   private heldKeyCodes: Set<number> = new Set();
+  private heldKeyNames: Map<number, string> = new Map();
+  private heldKeySyms: Map<number, number> = new Map();
+  private heldNamedKeySyms: Map<string, number> = new Map();
+  private eventBinding: RustDeskInputBinding | undefined = undefined;
+  private eventRejected: boolean = false;
+  private inputOwnerSessionId: string = '';
   private touchGestureState: RustDeskTouchGestureState = new RustDeskTouchGestureState();
   private touchPrimaryId: number = -1;
   private touchSecondaryId: number = -1;
@@ -141,63 +146,112 @@ export class RustDeskInputController {
   }
 
   reset(): void {
+    this.releaseCurrentInput();
+  }
+
+  /** Native retired the old epoch. Forget local state without emitting any UP. */
+  discardInputState(): void {
     this.cancelTouchTimers();
-    this.applyTouchActions(this.touchGestureState.reset());
-    this.flushRelativeMouseMove();
+    this.touchGestureState.reset();
     this.clearRelativeMouseState(false);
     this.clearTouchPointerState();
     this.touchSuppressedIds.clear();
-    this.releasePressedButtons();
-    this.releaseHeldKeys();
+    this.pressedButtons.releaseAll();
+    this.heldKeyCodes.clear();
+    this.heldKeyNames.clear();
+    this.heldKeySyms.clear();
+    this.heldNamedKeySyms.clear();
     this.activeModifiers.clear();
     this.virtualCursorValid = false;
+    this.eventBinding = undefined;
+    this.eventRejected = true;
+    this.inputOwnerSessionId = '';
   }
 
-  /**
-   * Stops every mouse and keyboard emission. This is the local half of the
-   * "input off" mode: the remote side is never told, because nothing is sent.
-   */
+  /** Temporary local suppression retires holds, but never changes view-only policy. */
   setInputSuppressed(suppressed: boolean): void {
     if (this.inputSuppressed === suppressed) {
       return;
     }
-    this.cancelTouchTimers();
-    this.applyTouchActions(this.touchGestureState.reset());
-    this.clearTouchPointerState();
-    this.touchSuppressedIds.clear();
-    this.releasePressedButtons();
-    this.releaseHeldKeys();
+    if (suppressed) {
+      this.releaseCurrentInput();
+    }
     this.inputSuppressed = suppressed;
     this.callbacks.log('mode', `input=${suppressed ? 'off' : 'on'}`);
+  }
+
+  private releaseCurrentInput(): void {
+    const sessionId = this.inputOwnerSessionId;
+    this.discardInputState();
+    if (sessionId.length > 0) {
+      this.callbacks.releaseInput(sessionId);
+    }
+  }
+
+  private retireInput(binding: RustDeskInputBinding): void {
+    this.discardInputState();
+    this.callbacks.releaseInput(binding.sessionId);
   }
 
   isInputSuppressed(): boolean {
     return this.inputSuppressed;
   }
 
-  /**
-   * Every emission path consults this, so turning input off is a single switch
-   * rather than a condition repeated at a dozen call sites. Releasing a held
-   * button after the switch is flipped is not delivered on purpose: the remote
-   * keeps the button it already saw, which is the same state it is left in when
-   * a session drops.
-   */
   private inputAllowed(): boolean {
     return !this.inputSuppressed;
   }
 
-  private sendMouseIfAllowed(payload: RustDeskMousePayload): void {
-    if (this.inputAllowed()) {
-      this.callbacks.sendMouse(payload);
+  private beginInputEvent(expected?: RustDeskInputBinding): boolean {
+    const binding = this.callbacks.getInputBinding();
+    if (!this.inputAllowed() || !this.callbacks.isSessionActive() || binding === undefined
+      || !validInputGeneration(binding.inputGeneration)
+      || (expected !== undefined && (binding.sessionId !== expected.sessionId
+        || binding.inputGeneration !== expected.inputGeneration))) {
+      this.eventBinding = undefined;
+      this.eventRejected = true;
+      return false;
     }
+    this.eventBinding = { sessionId: binding.sessionId, inputGeneration: binding.inputGeneration };
+    this.eventRejected = false;
+    this.inputOwnerSessionId = binding.sessionId;
+    return true;
   }
 
-  private sendFlutterKeyIfAllowed(payload: RustDeskFlutterKeyPayload): boolean {
-    return this.inputAllowed() ? this.callbacks.sendFlutterKey(payload) : false;
+  private currentEventBinding(): RustDeskInputBinding | undefined {
+    const binding = this.eventBinding;
+    const live = this.callbacks.getInputBinding();
+    if (!this.inputAllowed() || this.eventRejected || binding === undefined || live === undefined
+      || live.sessionId !== binding.sessionId || live.inputGeneration !== binding.inputGeneration) {
+      return undefined;
+    }
+    return binding;
+  }
+
+  private sendMouseIfAllowed(payload: RustDeskMousePayload): boolean {
+    const binding = this.currentEventBinding();
+    const admitted = binding !== undefined && this.callbacks.sendMouse(payload, binding);
+    if (!admitted) {
+      this.eventRejected = true;
+    }
+    return admitted;
   }
 
   private sendKeyIfAllowed(payload: RustDeskKeyPayload): boolean {
-    return this.inputAllowed() ? this.callbacks.sendKey(payload) : false;
+    const binding = this.currentEventBinding();
+    const admitted = binding !== undefined && this.callbacks.sendKey(payload, binding);
+    if (!admitted) {
+      this.eventRejected = true;
+    }
+    return admitted;
+  }
+
+  private sendKeysymIfAllowed(keysym: number, down: boolean): boolean {
+    const binding = this.currentEventBinding();
+    const admitted = binding !== undefined && this.callbacks.sendKeysym(keysym, down, binding);
+    if (!admitted) {
+      this.eventRejected = true;
+    }
+    return admitted;
   }
 
   setMouseMode(active: boolean): void {
@@ -233,7 +287,6 @@ export class RustDeskInputController {
       this.flushRelativeMouseMove();
     }
     this.clearRelativeMouseState(false);
-    this.sendRelativeModeMarker(active);
     this.relativeModeActive = active;
     this.callbacks.log(
       'relative_mode',
@@ -242,7 +295,7 @@ export class RustDeskInputController {
   }
 
   handleMouseEvent(event: MouseEvent): void {
-    if (!this.callbacks.isSessionActive() || !this.inputAllowed()) {
+    if (!this.beginInputEvent()) {
       return;
     }
     event.stopPropagation();
@@ -257,7 +310,7 @@ export class RustDeskInputController {
   }
 
   handleAxisEvent(event: AxisEvent): void {
-    if (!this.callbacks.isSessionActive() || !this.inputAllowed()) {
+    if (!this.beginInputEvent()) {
       return;
     }
     const isTrackpad = event.sourceTool === SourceTool.TOUCHPAD;
@@ -289,169 +342,228 @@ export class RustDeskInputController {
     this.sendMouseIfAllowed(payload);
   }
 
-  /**
-   * Routes one hardware key event to the vocabulary this session admits.
-   *
-   * Its diagnostics name the route, the event type and the outcome, never the key:
-   * a key code, key text, character or USB usage identifies a key, and the sequence
-   * of them reconstructs what was typed, which on a remote desktop can be a
-   * password. The same rule holds for the direct wire's keys, which now take the
-   * legacy route below.
-   */
+  /** ArkUI is the physical acquisition owner; never retry a refused key via another route. */
   handleKeyEvent(event: KeyEvent): boolean {
-    if (!this.inputAllowed()) {
-      return false;
-    }
-    if (!this.callbacks.isSessionActive()) {
-      this.callbacks.log('keyboard_ignored', `inactive type=${this.keyEventTypeName(event.type)}`);
+    if (!this.beginInputEvent()) {
       return false;
     }
     const isDown = event.type === KeyType.Down;
-    const isUp = event.type === KeyType.Up;
-    if (!isDown && !isUp) {
-      this.callbacks.log('keyboard_ignored', `unsupported_type type=${this.keyEventTypeName(event.type)}`);
+    if (!isDown && event.type !== KeyType.Up) {
       return false;
     }
-    const mapping = mapHarmonyKeyCode(event.keyCode);
-    if (!mapping) {
-      this.callbacks.log('keyboard_unmapped', `type=${this.keyEventTypeName(event.type)}`);
+    const mapping: RustDeskKeyMapping | undefined = mapHarmonyKeyCode(event.keyCode)
+      ?? (this.callbacks.usesVncKeysym() && event.keyCode === 2102 ? { name: 'VK_NUMLOCK' } : undefined);
+    if (mapping === undefined) {
+      this.callbacks.reportInputError('当前协议不支持此按键');
       return false;
     }
-    if (mapping.modifier && isUp) {
+    // Also stop bubbling on refusal: a root handler must not resend this event
+    // after the refusal has adopted a newer native generation.
+    event.stopPropagation();
+    if (!isDown && !this.heldKeyCodes.has(event.keyCode)) {
+      return false;
+    }
+    const binding = this.currentEventBinding();
+    if (binding === undefined) {
+      return false;
+    }
+    const name = this.heldKeyNames.get(event.keyCode) ?? this.mapLegacyKeyNameForPeer(mapping);
+    if (!isDown && mapping.modifier !== undefined) {
+      // Preserve the legacy contract: a modifier UP must not ask native to
+      // press that same modifier again via its accompanying modifier flags.
       this.activeModifiers.delete(mapping.modifier);
     }
-    let sent = false;
-    let rawRouteAttempted = false;
-    // A session that does not take the Core's raw key route never constructs this
-    // payload: its key goes straight to the legacy vocabulary below.
-    const flutterPayload = this.callbacks.usesCoreRawKeyRoute()
-      ? this.buildFlutterKeyPayload(event, isDown)
-      : undefined;
-    if (flutterPayload) {
-      rawRouteAttempted = true;
-      sent = this.sendFlutterKeyIfAllowed(flutterPayload);
-      this.callbacks.log(
-        'keyboard_flutter',
-        `sent=${sent} type=${this.keyEventTypeName(event.type)}`,
-      );
+    let admitted: boolean;
+    let keysym: number | undefined = undefined;
+    if (this.callbacks.usesVncKeysym()) {
+      keysym = this.heldKeySyms.get(event.keyCode) ?? (name !== mapping.name
+        ? mapLegacyKeyToKeysym(name) : mapHarmonyKeyCodeToKeysym(event.keyCode));
+      admitted = keysym !== undefined && this.sendKeysymIfAllowed(keysym, isDown);
+    } else {
+      admitted = this.sendKeyIfAllowed(this.legacyKeyPayload(name, isDown));
     }
-    if (!sent && rawRouteAttempted) {
-      // The raw key route was chosen for this event and the native side refused it,
-      // so its generation is what refused it. Re-sending the same event through the
-      // legacy route would launder it into the newly adopted generation; only an
-      // event whose raw route was never chosen falls through.
-      this.callbacks.log('keyboard_legacy_skipped',
-        `type=${this.keyEventTypeName(event.type)}`);
-      return false;
-    }
-    if (!sent) {
-      sent = this.sendLegacyKey(mapping, isDown);
-      this.callbacks.log(
-        'keyboard_legacy',
-        `sent=${sent} type=${this.keyEventTypeName(event.type)}`,
-      );
-    }
-    if (!sent) {
-      return false;
-    }
-    if (!this.callbacks.usesCoreRawKeyRoute()) {
-      // A direct wire's hardware key takes the legacy route above, and the Core
-      // interceptor never sees it, so the hold is owned here. The release pass runs
-      // before input is suppressed, while this key's own up is refused afterwards.
-      if (isDown) {
-        this.heldKeyCodes.add(event.keyCode);
-      } else {
-        this.heldKeyCodes.delete(event.keyCode);
+    this.callbacks.log('keyboard_send', `queued=${admitted} type=${this.keyEventTypeName(event.type)}`);
+    if (!admitted) {
+      if (!isDown) {
+        this.retireInput(binding);
       }
+      return false;
     }
-    if (mapping.modifier && isDown) {
-      this.activeModifiers.add(mapping.modifier);
+    if (isDown) {
+      this.heldKeyCodes.add(event.keyCode);
+      this.heldKeyNames.set(event.keyCode, name);
+      if (keysym !== undefined) {
+        this.heldKeySyms.set(event.keyCode, keysym);
+      }
+      if (mapping.modifier !== undefined) {
+        this.activeModifiers.add(mapping.modifier);
+      }
+    } else {
+      this.heldKeyCodes.delete(event.keyCode);
+      this.heldKeyNames.delete(event.keyCode);
+      this.heldKeySyms.delete(event.keyCode);
+      this.rebuildActiveModifiers();
     }
-    event.stopPropagation();
     return true;
   }
 
-  handleInterceptedKeyEvent(keyCode: number, action: number): boolean {
-    if (!this.inputAllowed()) {
-      return false;
-    }
-    if (!this.callbacks.isSessionActive()) {
-      this.callbacks.log('keyboard_intercepted_ignored', `inactive action=${action}`);
-      return false;
-    }
-    const isDown = action === 1;
-    const isUp = action === 0 || action === 2;
-    if (!isDown && !isUp) {
-      this.callbacks.log('keyboard_intercepted_ignored', `unsupported action=${action}`);
-      return false;
-    }
-    const mapping = mapHarmonyKeyCode(keyCode);
-    if (!mapping) {
-      this.callbacks.log('keyboard_intercepted_unmapped', `action=${action}`);
-      return false;
-    }
-    if (mapping.modifier && isUp) {
-      this.activeModifiers.delete(mapping.modifier);
-    }
-    let sent = false;
-    let rawRouteAttempted = false;
-    // Same rule as handleKeyEvent: a session that does not take the Core's raw key
-    // route is not asked for a USB HID code, so the key falls through to the legacy
-    // vocabulary rather than being dropped by a route that cannot carry it.
-    const usbHid = this.callbacks.usesCoreRawKeyRoute() ? mapHarmonyKeyCodeToUsbHid(keyCode) : undefined;
-    if (usbHid !== undefined) {
-      const flutterPayload = new RustDeskFlutterKeyPayload('', this.mapUsbHidForPeer(usbHid), 0, isDown);
-      rawRouteAttempted = true;
-      sent = this.sendFlutterKeyIfAllowed(flutterPayload);
-      this.callbacks.log(
-        'keyboard_intercepted_flutter',
-        `sent=${sent} action=${action}`,
-      );
-    }
-    if (!sent && rawRouteAttempted) {
-      // The raw key route was chosen for this event and the native side refused it,
-      // so its generation is what refused it. Re-sending the same event through the
-      // legacy route would launder it into the newly adopted generation; only an
-      // event whose raw route was never chosen falls through.
-      this.callbacks.log('keyboard_intercepted_legacy_skipped', `action=${action}`);
-      return false;
-    }
-    if (!sent) {
-      sent = this.sendLegacyKey(mapping, isDown);
-      this.callbacks.log(
-        'keyboard_intercepted_legacy',
-        `sent=${sent} action=${action}`,
-      );
-    }
-    if (sent) {
-      if (isDown) {
-        this.heldKeyCodes.add(keyCode);
-      } else {
-        this.heldKeyCodes.delete(keyCode);
-      }
-      if (mapping.modifier && isDown) {
-        this.activeModifiers.add(mapping.modifier);
-      }
-    }
-    return sent;
+  releaseHeldKeys(): void {
+    this.releaseCurrentInput();
   }
 
-  /**
-   * Releases every key this controller still owns, in the vocabulary it was sent
-   * in. It must run before input is suppressed: the gate is what refuses releases
-   * afterwards, and a hold the peer was left with is never taken back.
-   */
-  releaseHeldKeys(): void {
-    if (this.heldKeyCodes.size === 0) {
-      return;
-    }
-    const keyCodes: number[] = [];
-    this.heldKeyCodes.forEach((keyCode: number) => keyCodes.push(keyCode));
-    for (let index = 0; index < keyCodes.length; index++) {
-      this.handleInterceptedKeyEvent(keyCodes[index], 2);
-    }
-    this.heldKeyCodes.clear();
+  private rebuildActiveModifiers(): void {
     this.activeModifiers.clear();
+    this.heldKeyCodes.forEach((keyCode: number): void => {
+      const mapping = mapHarmonyKeyCode(keyCode);
+      if (mapping?.modifier !== undefined) {
+        this.activeModifiers.add(mapping.modifier);
+      }
+    });
+  }
+
+  /** Soft keys, functional taps and chords share the physical key's real protocol route. */
+  sendKey(payload: RustDeskKeyPayload): boolean {
+    return this.beginInputEvent() && this.sendMappedKey(payload);
+  }
+
+  sendText(text: string): boolean {
+    return this.beginInputEvent() && this.sendTextForCurrentEvent(text);
+  }
+
+  /** One IME edit is one event: a rejected backspace prevents the remaining insertion. */
+  sendImeDelta(backspaceCount: number, insertedText: string): boolean {
+    if (!this.beginInputEvent()) {
+      return false;
+    }
+    for (let index = 0; index < backspaceCount; index++) {
+      const backspace = new RustDeskKeyPayload('VK_BACK', false);
+      backspace.press = true;
+      if (!this.sendMappedKey(backspace)) {
+        return false;
+      }
+    }
+    return insertedText.length === 0 || this.sendTextForCurrentEvent(insertedText);
+  }
+
+  private sendMappedKey(payload: RustDeskKeyPayload): boolean {
+    if (!this.callbacks.usesVncKeysym()) {
+      return this.sendKeyIfAllowed(payload);
+    }
+    if (payload.press || payload.name === 'CTRL_ALT_DEL' || payload.name === 'LOCK_SCREEN') {
+      const chord = vncKeyChord(payload);
+      if (chord === undefined) {
+        this.callbacks.reportInputError('VNC 不支持此按键');
+        return false;
+      }
+      return this.sendVncTap(chord);
+    }
+    const binding = this.currentEventBinding();
+    const held = this.heldNamedKeySyms.get(payload.name);
+    const keysym = held ?? mapLegacyKeyToKeysym(payload.name);
+    if (binding === undefined || keysym === undefined || (!payload.down && held === undefined)) {
+      this.callbacks.reportInputError('VNC 不支持此按键或按键已退役');
+      return false;
+    }
+    const admitted = this.sendKeysymIfAllowed(keysym, payload.down);
+    if (admitted) {
+      if (payload.down) {
+        this.heldNamedKeySyms.set(payload.name, keysym);
+      } else {
+        this.heldNamedKeySyms.delete(payload.name);
+      }
+    } else if (!payload.down) {
+      this.retireInput(binding);
+    }
+    return admitted;
+  }
+
+  private keysymHeld(keysym: number): boolean {
+    let held = false;
+    this.heldKeySyms.forEach((value: number): void => { held = held || value === keysym; });
+    this.heldNamedKeySyms.forEach((value: number): void => { held = held || value === keysym; });
+    return held;
+  }
+
+  private modifierKeysymHeld(keysym: number): boolean {
+    return this.keysymHeld(keysym) || this.keysymHeld(keysym + 1);
+  }
+
+  private sendVncTap(chord: Array<number>): boolean {
+    const binding = this.currentEventBinding();
+    if (binding === undefined) {
+      return false;
+    }
+    const main = chord[chord.length - 1];
+    if (this.keysymHeld(main)) {
+      this.callbacks.reportInputError('请先松开仍按住的按键');
+      return false;
+    }
+    const temporary: number[] = [];
+    for (let index = 0; index + 1 < chord.length; index++) {
+      const modifier = chord[index];
+      if (this.modifierKeysymHeld(modifier)) {
+        continue;
+      }
+      if (!this.sendKeysymIfAllowed(modifier, true)) {
+        if (temporary.length > 0) {
+          this.retireInput(binding);
+        }
+        return false;
+      }
+      temporary.push(modifier);
+    }
+    if (!this.sendKeysymIfAllowed(main, true)) {
+      if (temporary.length > 0) {
+        this.retireInput(binding);
+      }
+      return false;
+    }
+    if (!this.sendKeysymIfAllowed(main, false)) {
+      // Down reached the queue but Up did not: retire once, adopt native's new
+      // generation via releaseInput, stop this event and never replay its rest.
+      this.retireInput(binding);
+      return false;
+    }
+    for (let index = temporary.length - 1; index >= 0; index--) {
+      if (!this.sendKeysymIfAllowed(temporary[index], false)) {
+        this.retireInput(binding);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private sendTextForCurrentEvent(text: string): boolean {
+    const binding = this.currentEventBinding();
+    if (binding === undefined || text.length === 0) {
+      return false;
+    }
+    if (!this.callbacks.usesVncKeysym()) {
+      const admitted = this.callbacks.sendText(text, binding);
+      this.eventRejected = !admitted;
+      return admitted;
+    }
+    for (let index = 0; index < text.length; index++) {
+      let codePoint = text.charCodeAt(index);
+      if (codePoint >= 0xD800 && codePoint <= 0xDBFF) {
+        const low = text.charCodeAt(index + 1);
+        if (!(low >= 0xDC00 && low <= 0xDFFF)) {
+          this.callbacks.reportInputError('文本含无效 Unicode 字符');
+          return false;
+        }
+        codePoint = 0x10000 + (codePoint - 0xD800) * 0x400 + low - 0xDC00;
+        index++;
+      }
+      const keysym = unicodeKeysym(codePoint);
+      if (keysym === undefined) {
+        this.callbacks.reportInputError('文本含不支持的 Unicode 字符');
+        return false;
+      }
+      if (!this.sendVncTap([keysym])) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private keyEventTypeName(type: KeyType): string {
@@ -465,8 +577,8 @@ export class RustDeskInputController {
     }
   }
 
-  private sendLegacyKey(mapping: RustDeskKeyMapping, isDown: boolean): boolean {
-    const payload = new RustDeskKeyPayload(this.mapLegacyKeyNameForPeer(mapping), isDown);
+  private legacyKeyPayload(name: string, isDown: boolean): RustDeskKeyPayload {
+    const payload = new RustDeskKeyPayload(name, isDown);
     payload.alt = this.activeModifiers.has('alt');
     payload.shift = this.activeModifiers.has('shift');
     payload.command = this.activeModifiers.has('command');
@@ -475,20 +587,7 @@ export class RustDeskInputController {
       payload.command = payload.command || payload.ctrl;
       payload.ctrl = false;
     }
-    return this.sendKeyIfAllowed(payload);
-  }
-
-  private buildFlutterKeyPayload(event: KeyEvent, isDown: boolean): RustDeskFlutterKeyPayload | undefined {
-    const usbHid = mapHarmonyKeyCodeToUsbHid(event.keyCode);
-    if (usbHid === undefined) {
-      return undefined;
-    }
-    return new RustDeskFlutterKeyPayload(
-      this.resolveKeyCharacter(event, isDown),
-      this.mapUsbHidForPeer(usbHid),
-      this.buildLockModes(event),
-      isDown,
-    );
+    return payload;
   }
 
   private shouldTreatLocalCtrlAsCommand(): boolean {
@@ -502,75 +601,8 @@ export class RustDeskInputController {
     return mapping.name === 'RControl' ? 'RWin' : 'Meta';
   }
 
-  private mapUsbHidForPeer(usbHid: number): number {
-    if (!this.shouldTreatLocalCtrlAsCommand()) {
-      return usbHid;
-    }
-    if (usbHid === 0xE0) {
-      return 0xE3;
-    }
-    if (usbHid === 0xE4) {
-      return 0xE7;
-    }
-    return usbHid;
-  }
-
-  private buildLockModes(event: KeyEvent): number {
-    let lockModes = 0;
-    if (event.isCapsLockOn === true) {
-      lockModes |= LOCK_MODE_CAPS;
-    }
-    if (event.isNumLockOn === true) {
-      lockModes |= LOCK_MODE_NUM;
-    }
-    if (event.isScrollLockOn === true) {
-      lockModes |= LOCK_MODE_SCROLL;
-    }
-    return lockModes;
-  }
-
-  private resolveKeyCharacter(event: KeyEvent, isDown: boolean): string {
-    if (!isDown) {
-      return '';
-    }
-    const unicode = event.unicode;
-    if (unicode !== undefined && this.isPrintableUnicode(unicode)) {
-      return this.unicodeToString(unicode);
-    }
-    const keyText = event.keyText ?? '';
-    return this.isPrintableText(keyText) ? keyText : '';
-  }
-
-  private isPrintableUnicode(value: number): boolean {
-    return value >= 0x20 && value !== 0x7F && value <= 0x10FFFF;
-  }
-
-  private unicodeToString(value: number): string {
-    if (value <= 0xFFFF) {
-      return String.fromCharCode(value);
-    }
-    const shifted = value - 0x10000;
-    return String.fromCharCode(0xD800 + (shifted >> 10), 0xDC00 + (shifted & 0x3FF));
-  }
-
-  private isPrintableText(value: string): boolean {
-    if (value.length === 0 || value.length > 2) {
-      return false;
-    }
-    for (let index = 0; index < value.length; index++) {
-      const code = value.charCodeAt(index);
-      if (code < 0x20 || code === 0x7F) {
-        return false;
-      }
-    }
-    return true;
-  }
-
   handleTouchEvent(event: TouchEvent): void {
-    if (!this.inputAllowed()) {
-      return;
-    }
-    if (!this.callbacks.isSessionActive()) {
+    if (!this.beginInputEvent()) {
       return;
     }
     event.stopPropagation();
@@ -1112,8 +1144,15 @@ export class RustDeskInputController {
     if (delay < 0) {
       return;
     }
+    const binding = this.currentEventBinding();
+    if (binding === undefined) {
+      return;
+    }
     this.touchLongPressTimer = setTimeout(() => {
       this.touchLongPressTimer = -1;
+      if (!this.beginInputEvent(binding)) {
+        return;
+      }
       const preserveMobileLongPress = this.callbacks.isPeerMobile()
         && this.callbacks.rightClickGesture() !== 'long_press';
       const allowLongPressDrag = this.callbacks.isLocalPhone()
@@ -1131,8 +1170,15 @@ export class RustDeskInputController {
       return;
     }
     const timeoutDelay = delay === 0 ? 1 : delay;
+    const binding = this.currentEventBinding();
+    if (binding === undefined) {
+      return;
+    }
     this.touchTapTimeoutTimer = setTimeout(() => {
       this.touchTapTimeoutTimer = -1;
+      if (!this.beginInputEvent(binding)) {
+        return;
+      }
       const timeoutAt = Date.now();
       this.applyTouchActions(this.touchGestureState.onTapTimeout(timeoutAt));
       this.syncTouchTapTimeout(timeoutAt);
@@ -1222,7 +1268,9 @@ export class RustDeskInputController {
     const payload = new RustDeskMousePayload();
     payload.x = String(position.x);
     payload.y = String(position.y);
-    this.sendMouseIfAllowed(payload);
+    if (!this.sendMouseIfAllowed(payload)) {
+      return false;
+    }
     this.setVirtualCursorRemote(position.x, position.y);
     return true;
   }
@@ -1250,10 +1298,7 @@ export class RustDeskInputController {
   }
 
   releasePressedButtons(): void {
-    const transitions = this.pressedButtons.releaseAll();
-    for (let index = 0; index < transitions.length; index++) {
-      this.sendPressedButtonTransition(transitions[index]);
-    }
+    this.releaseCurrentInput();
   }
 
   private clickCurrentCursor(button: string): void {
@@ -1269,39 +1314,22 @@ export class RustDeskInputController {
   }
 
   private sendPressedButtonTransition(transition: RustDeskPressedButtonTransition, flushPending: boolean = true): void {
-    if (transition.mode === 'relative') {
-      this.sendRelativeMouseButton(transition.button, transition.type === 'down', flushPending);
-      return;
-    }
-    this.sendAbsoluteMouseButton(transition.button, transition.type === 'down');
-  }
-
-  private sendAbsoluteMouseButton(button: string, isDown: boolean): void {
-    const payload = new RustDeskMousePayload();
-    payload.type = isDown ? 'down' : 'up';
-    payload.buttons = button;
-    this.sendMouseIfAllowed(payload);
-  }
-
-  private sendRelativeMouseButton(button: string, isDown: boolean, flushPending: boolean = true): void {
-    if (flushPending) {
+    const binding = this.currentEventBinding();
+    if (transition.mode === 'relative' && flushPending) {
       this.flushRelativeMouseMove();
     }
     const payload = new RustDeskMousePayload();
-    payload.type = isDown ? 'down' : 'up';
-    payload.buttons = button;
-    this.sendMouseIfAllowed(payload);
-  }
-
-  private sendRelativeModeMarker(active: boolean): void {
-    const payload = new RustDeskMousePayload();
-    payload.relative_mouse_mode = active ? '1' : '0';
-    if (active) {
-      payload.type = 'move_relative';
-      payload.x = '0';
-      payload.y = '0';
+    payload.type = transition.type;
+    payload.buttons = transition.button;
+    if (!this.sendMouseIfAllowed(payload)) {
+      // If Up was refused after an admitted Down, retire the original session;
+      // the writer knows which position and holds actually reached its wire.
+      if (transition.type === 'up' && binding !== undefined) {
+        this.retireInput(binding);
+      } else {
+        this.discardInputState();
+      }
     }
-    this.sendMouseIfAllowed(payload);
   }
 
   private queueRelativeMouseMove(deltaX: number, deltaY: number): void {
@@ -1317,9 +1345,15 @@ export class RustDeskInputController {
     if (this.relativeFlushTimer !== -1) {
       return;
     }
+    const binding = this.currentEventBinding();
+    if (binding === undefined) {
+      return;
+    }
     this.relativeFlushTimer = setTimeout(() => {
       this.relativeFlushTimer = -1;
-      this.flushRelativeMouseMove();
+      if (this.beginInputEvent(binding)) {
+        this.flushRelativeMouseMove();
+      }
     }, RELATIVE_MOUSE_FLUSH_MS) as number;
   }
 

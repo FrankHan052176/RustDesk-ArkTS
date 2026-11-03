@@ -99,7 +99,6 @@ export class RustDeskMousePayload {
   buttons?: string;
   x?: string;
   y?: string;
-  relative_mouse_mode?: string;
 }
 
 export class RustDeskKeyPayload {
@@ -118,28 +117,13 @@ export class RustDeskKeyPayload {
   }
 }
 
-export class RustDeskFlutterKeyPayload {
-  character: string;
-  usb_hid: number;
-  lock_modes: number;
-  down_or_up: boolean;
-  /**
-   * The input generation this event is admitted under.
-   *
-   * A mapper that is not bound to a session leaves it unset; the sender fills it
-   * from the session's own adopted value at the moment the real event is sent, and
-   * never rewrites a value a caller already captured. A payload that already names
-   * one keeps it, so an event held across a generation change is refused instead of
-   * being laundered into the new generation.
-   */
-  inputGeneration?: string;
+export interface RustDeskInputBinding {
+  sessionId: string;
+  inputGeneration: number;
+}
 
-  constructor(character: string, usbHid: number, lockModes: number, downOrUp: boolean) {
-    this.character = character;
-    this.usb_hid = usbHid;
-    this.lock_modes = lockModes;
-    this.down_or_up = downOrUp;
-  }
+export function validInputGeneration(value: number | undefined): boolean {
+  return value !== undefined && Number.isSafeInteger(value) && value >= 1;
 }
 
 const KEYCODE_0 = 2000;
@@ -278,124 +262,110 @@ export function mapHarmonyKeyCode(keyCode: number): RustDeskKeyMapping | undefin
   }
 }
 
-export function mapHarmonyKeyCodeToUsbHid(keyCode: number): number | undefined {
-  if (keyCode >= KEYCODE_A && keyCode <= KEYCODE_Z) {
-    return 0x04 + keyCode - KEYCODE_A;
+// X11 keysym definitions used by RFB, not Harmony key codes or RustDesk wire bits.
+export function unicodeKeysym(codePoint: number): number | undefined {
+  if (!Number.isInteger(codePoint) || codePoint < 1 || codePoint > 0x10FFFF
+    || (codePoint >= 0xD800 && codePoint <= 0xDFFF)) {
+    return undefined;
   }
-  if (keyCode >= 2001 && keyCode <= KEYCODE_9) {
-    return 0x1E + keyCode - 2001;
-  }
-  if (keyCode === KEYCODE_0) {
-    return 0x27;
-  }
-  if (keyCode >= KEYCODE_F1 && keyCode <= KEYCODE_F12) {
-    return 0x3A + keyCode - KEYCODE_F1;
-  }
-  if (keyCode === KEYCODE_NUMPAD0) {
-    return 0x62;
-  }
-  if (keyCode >= KEYCODE_NUMPAD0 + 1 && keyCode <= KEYCODE_NUMPAD9) {
-    return 0x59 + keyCode - (KEYCODE_NUMPAD0 + 1);
-  }
+  return codePoint <= 0xFF ? codePoint : 0x01000000 + codePoint;
+}
 
-  switch (keyCode) {
-    case 2012:
-      return 0x52;
-    case 2013:
-      return 0x51;
-    case 2014:
-      return 0x50;
-    case 2015:
-      return 0x4F;
-    case 2016:
-      return 0x28;
-    case 2043:
-      return 0x36;
-    case 2044:
-      return 0x37;
-    case 2045:
-      return 0xE2;
-    case 2046:
-      return 0xE6;
-    case 2047:
-      return 0xE1;
-    case 2048:
-      return 0xE5;
-    case 2049:
-      return 0x2B;
-    case 2050:
-      return 0x2C;
-    case 2054:
-      return 0x28;
-    case 2055:
-      return 0x2A;
-    case 2056:
-      return 0x35;
-    case 2057:
-      return 0x2D;
-    case 2058:
-      return 0x2E;
-    case 2059:
-      return 0x2F;
-    case 2060:
-      return 0x30;
-    case 2061:
-      return 0x31;
-    case 2062:
-      return 0x33;
-    case 2063:
-      return 0x34;
-    case 2064:
-      return 0x38;
-    case 2066:
-      return 0x2E;
-    case 2068:
-      return 0x4B;
-    case 2069:
-      return 0x4E;
-    case 2070:
-      return 0x29;
-    case 2071:
-      return 0x4C;
-    case 2072:
-      return 0xE0;
-    case 2073:
-      return 0xE4;
-    case 2074:
-      return 0x39;
-    case 2075:
-      return 0x47;
-    case 2076:
-      return 0xE3;
-    case 2077:
-      return 0xE7;
-    case 2079:
-      return 0x46;
-    case 2080:
-      return 0x48;
-    case 2081:
-      return 0x4A;
-    case 2082:
-      return 0x4D;
-    case 2083:
-      return 0x49;
-    case 2102:
-      return 0x53;
-    case 2113:
-      return 0x54;
-    case 2114:
-      return 0x55;
-    case 2115:
-      return 0x56;
-    case 2116:
-      return 0x57;
-    case 2117:
-      return 0x63;
-    case 2119:
-      return 0x58;
-    default:
-      return undefined;
+export function mapLegacyKeyToKeysym(name: string): number | undefined {
+  if (/^VK_F([1-9]|1[0-2])$/.test(name)) {
+    return 0xFFBE + Number(name.substring(4)) - 1;
   }
+  if (/^VK_NUMPAD[0-9]$/.test(name)) {
+    return 0xFFB0 + Number(name.substring(9));
+  }
+  if (/^VK_[A-Z0-9]$/.test(name)) {
+    return name.substring(3).toLowerCase().charCodeAt(0);
+  }
+  if (name.length === 1) {
+    return unicodeKeysym(name.charCodeAt(0));
+  }
+  if (name.length === 2) {
+    const high = name.charCodeAt(0);
+    const low = name.charCodeAt(1);
+    if (high >= 0xD800 && high <= 0xDBFF && low >= 0xDC00 && low <= 0xDFFF) {
+      return unicodeKeysym(0x10000 + (high - 0xD800) * 0x400 + low - 0xDC00);
+    }
+  }
+  switch (name) {
+    case 'VK_BACK': return 0xFF08;
+    case 'VK_TAB': return 0xFF09;
+    case 'VK_CLEAR': return 0xFF0B;
+    case 'VK_ENTER':
+    case 'VK_RETURN': return 0xFF0D;
+    case 'VK_PAUSE': return 0xFF13;
+    case 'VK_SCROLL': return 0xFF14;
+    case 'VK_ESCAPE': return 0xFF1B;
+    case 'VK_SPACE': return 0x20;
+    case 'VK_HOME': return 0xFF50;
+    case 'VK_LEFT': return 0xFF51;
+    case 'VK_UP': return 0xFF52;
+    case 'VK_RIGHT': return 0xFF53;
+    case 'VK_DOWN': return 0xFF54;
+    case 'VK_PRIOR': return 0xFF55;
+    case 'VK_NEXT': return 0xFF56;
+    case 'VK_END': return 0xFF57;
+    case 'VK_SNAPSHOT': return 0xFF61;
+    case 'VK_INSERT': return 0xFF63;
+    case 'Apps': return 0xFF67;
+    case 'VK_CANCEL': return 0xFF69;
+    case 'VK_DELETE': return 0xFFFF;
+    case 'VK_NUMLOCK': return 0xFF7F;
+    case 'VK_MULTIPLY': return 0xFFAA;
+    case 'VK_ADD': return 0xFFAB;
+    case 'VK_SUBTRACT': return 0xFFAD;
+    case 'VK_DECIMAL': return 0xFFAE;
+    case 'VK_DIVIDE': return 0xFFAF;
+    case 'VK_SHIFT': return 0xFFE1;
+    case 'RShift': return 0xFFE2;
+    case 'VK_CONTROL': return 0xFFE3;
+    case 'RControl': return 0xFFE4;
+    case 'VK_CAPITAL': return 0xFFE5;
+    case 'VK_MENU': return 0xFFE9;
+    case 'RAlt': return 0xFFEA;
+    case 'Meta': return 0xFFEB;
+    case 'RWin': return 0xFFEC;
+    default: return undefined;
+  }
+}
+
+export function mapHarmonyKeyCodeToKeysym(keyCode: number): number | undefined {
+  if (keyCode === 2102) {
+    return 0xFF7F;
+  }
+  if (keyCode === 2119) {
+    return 0xFF8D;
+  }
+  const mapping = mapHarmonyKeyCode(keyCode);
+  return mapping === undefined ? undefined : mapLegacyKeyToKeysym(mapping.name);
+}
+
+/** The last item is the tapped key; preceding items are temporary modifiers. */
+export function vncKeyChord(payload: RustDeskKeyPayload): Array<number> | undefined {
+  const key = payload.name === 'CTRL_ALT_DEL' ? 0xFFFF
+    : (payload.name === 'LOCK_SCREEN' ? 0x6C : mapLegacyKeyToKeysym(payload.name));
+  if (key === undefined) {
+    return undefined;
+  }
+  const chord: number[] = [];
+  if ((payload.ctrl || payload.name === 'CTRL_ALT_DEL') && key !== 0xFFE3 && key !== 0xFFE4) {
+    chord.push(0xFFE3);
+  }
+  if ((payload.alt || payload.name === 'CTRL_ALT_DEL') && key !== 0xFFE9 && key !== 0xFFEA) {
+    chord.push(0xFFE9);
+  }
+  if (payload.shift && key !== 0xFFE1 && key !== 0xFFE2) {
+    chord.push(0xFFE1);
+  }
+  if ((payload.command || payload.name === 'LOCK_SCREEN') && key !== 0xFFEB && key !== 0xFFEC) {
+    chord.push(0xFFEB);
+  }
+  chord.push(key);
+  return chord;
 }
 
 export function mapMouseButton(button: MouseButton): string | undefined {

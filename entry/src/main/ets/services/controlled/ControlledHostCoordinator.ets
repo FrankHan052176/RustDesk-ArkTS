@@ -5,6 +5,8 @@ import { ControlledHostBackgroundService } from './ControlledHostBackgroundServi
 import {
   ControlledHostState,
   ControlledHostStateListener,
+  ControlledInputAuthorizationPayload,
+  ControlledInputAuthorizationStatus,
   ControlledIncomingPeer,
   ControlledPasswordMode,
   ControlledTrustedDevice,
@@ -28,9 +30,10 @@ const STOPPING_RECHECK_LIMIT = 120;
  * `requireLocalApproval: true` is the real policy this service runs: the engine
  * pins the run to per-connection local approval (a click on this machine), and
  * `false` would only fall back to password-or-click, which still authenticates a
- * password or a local click and never auto-approves. Input and clipboard stay
- * off, which is what a view-only host accepts. Desktop audio is requested and
- * reported: this engine has no audio owner yet, so the answer carries
+ * password or a local click and never auto-approves. Clipboard stays off. Input
+ * is opt-in for one explicit control-start action and only a fresh OS-authorized
+ * fact admits it; ordinary start remains view-only. Desktop audio is requested
+ * and reported: this engine has no audio owner yet, so the answer carries
  * `audioEnabled: false` instead of a silent success.
  *
  * `approvedServerProfile` is the explicitly saved v2 profile the run registers
@@ -40,6 +43,7 @@ const STOPPING_RECHECK_LIMIT = 120;
 class ControlledStartOptions {
   requireLocalApproval: boolean = true;
   enableInput: boolean = false;
+  inputAuthorizationRequestId: string = '';
   enableClipboard: boolean = false;
   enableAudio: boolean = true;
   approvedServerProfile: Object | undefined = undefined;
@@ -78,6 +82,8 @@ interface HostPayload {
   localApprovalEnforced?: boolean;
   approveModeScoped?: boolean;
   audioEnabled?: boolean;
+  inputEnabled?: boolean;
+  inputAuthorization?: ControlledInputAuthorizationStatus;
   audioSupported?: boolean;
   audioRequested?: boolean;
   registration?: string;
@@ -156,6 +162,29 @@ class SecurityTicket {
   }
 }
 
+/** One explicit authorization wait, owned by the start and panel that requested it. */
+class InputAuthorizationWait {
+  readonly generation: number;
+  readonly panel: number;
+  readonly requestId: string;
+  readonly finish: (error: Error | undefined) => void;
+
+  constructor(generation: number, panel: number, requestId: string, finish: (error: Error | undefined) => void) {
+    this.generation = generation;
+    this.panel = panel;
+    this.requestId = requestId;
+    this.finish = finish;
+  }
+}
+
+/** Unknown/missing native authorization is never promoted to a grant. */
+function inputAuthorizationOf(value: string | undefined): ControlledInputAuthorizationStatus {
+  if (value === 'unauthorized' || value === 'authorizing' || value === 'authorized' || value === 'unsupported') {
+    return value;
+  }
+  return 'failed';
+}
+
 export class ControlledHostCoordinator {
   readonly state: ControlledHostState = new ControlledHostState();
   readonly twoFactorState: ControlledTwoFactorState = new ControlledTwoFactorState();
@@ -168,6 +197,11 @@ export class ControlledHostCoordinator {
   private generation: number = 0;
   /** The one start attempt in flight, kept until its run is closed or admitted. */
   private startTask: Promise<void> | undefined = undefined;
+  private inputAuthorizationWait: InputAuthorizationWait | undefined = undefined;
+  /** Pending/pre-run authorization only; a run that really starts owns its own grant. */
+  private inputAuthorizationRequestId: string = '';
+  /** A control run must fail closed on revocation, not silently become view-only. */
+  private runRequiresInput: boolean = false;
   private initialized: boolean = false;
   private runtimeReady: boolean = false;
   private resolvingRequestId: string = '';
@@ -256,14 +290,28 @@ export class ControlledHostCoordinator {
    * can be reached", never "this screen is being shared". The approved profile is
    * the explicitly saved one; a run never derives a server from a draft or scan.
    */
-  async start(): Promise<void> {
+  start(): Promise<void> {
+    return this.startHost(false);
+  }
+
+  /** Called only by the foreground card's explicit authorization/start action. */
+  startWithInput(): Promise<void> {
+    if (this.running()) {
+      this.state.lastError = '请先停止当前服务，确认停止后再授权并启用远程控制。';
+      this.emitState();
+      return Promise.resolve();
+    }
+    return this.startHost(true);
+  }
+
+  private async startHost(enableInput: boolean): Promise<void> {
     if (!this.initialized || this.startTask !== undefined || this.running()) {
       return;
     }
     if (this.state.phase === 'starting') {
       return;
     }
-    const task: Promise<void> = this.performStart();
+    const task: Promise<void> = this.performStart(enableInput);
     this.startTask = task;
     try {
       await task;
@@ -282,7 +330,7 @@ export class ControlledHostCoordinator {
    * the engine really created, but it dispatches no further start, adopts no
    * epoch and rewrites none of the newer generation's state or policy.
    */
-  private async performStart(): Promise<void> {
+  private async performStart(enableInput: boolean): Promise<void> {
     if (this.state.phase === 'stopping') {
       this.stoppingAttempts = 0;
       this.reconcileStoppedRun();
@@ -308,6 +356,8 @@ export class ControlledHostCoordinator {
     this.state.statusText = '正在启动被看服务（等待本机监听就绪）';
     this.state.lastError = '';
     this.emitState();
+    let attemptedEpoch: string = '';
+    let authorizationRequestId: string = '';
     try {
       const config = this.parse(await this.bridge.serverConfig());
       if (currentGeneration !== this.generation) {
@@ -344,11 +394,33 @@ export class ControlledHostCoordinator {
         backgroundService?.stop();
         return;
       }
+      // Query on every start, including view-only. Only this explicit input
+      // path requests a new authorization-owner token; a previous grant or a
+      // local setting cannot supply one. The existing poll observes its dialog.
+      this.readInputAuthorization();
+      if (enableInput) {
+        authorizationRequestId = await this.authorizeInput(currentGeneration);
+        if (currentGeneration !== this.generation) {
+          return;
+        }
+        const admission = this.readInputAuthorization();
+        if (admission.requestId !== authorizationRequestId) {
+          throw new Error('远程控制授权请求已失效，请重新操作。');
+        }
+        if (admission.ok !== true || admission.status !== 'authorized') {
+          throw this.inputAuthorizationError(admission);
+        }
+      }
+      if (currentGeneration !== this.generation) {
+        return;
+      }
       const startOptions = new ControlledStartOptions();
       startOptions.approvedServerProfile = config.approvedProfile;
+      startOptions.enableInput = enableInput;
+      startOptions.inputAuthorizationRequestId = authorizationRequestId;
       // Everything above is admission; this is the one call that creates a run.
       const rawStartReply = this.parse(await this.bridge.start(JSON.stringify(startOptions)));
-      const attemptedEpoch: string = runEpochOf(rawStartReply);
+      attemptedEpoch = runEpochOf(rawStartReply);
       if (currentGeneration !== this.generation) {
         // Native start was already dispatched under the superseded generation.
         // The run it really created is closed by the epoch that reply named and
@@ -361,7 +433,13 @@ export class ControlledHostCoordinator {
       // that run instead of a stale one.
       if (attemptedEpoch.length > 0) {
         this.runEpoch = attemptedEpoch;
+        // The native run now owns authorization cleanup through its checked
+        // close. Only that epoch stop may release it; pending cancel may not.
+        if (this.inputAuthorizationRequestId === authorizationRequestId) {
+          this.inputAuthorizationRequestId = '';
+        }
       }
+      this.applyInputPolicy(rawStartReply);
       const startReply = this.requireSuccess(rawStartReply, 'RustDesk 被看服务启动失败');
       if (startReply.serverRunning !== true || startReply.state !== 'listening') {
         throw new Error(this.failureText(startReply, '原生被看服务未进入监听状态'));
@@ -371,6 +449,11 @@ export class ControlledHostCoordinator {
         throw new Error('原生被看服务未返回本次运行的 epoch，无法停止或复核该次运行');
       }
       this.runEpoch = epoch;
+      if (this.state.inputEnabled !== enableInput ||
+        (enableInput && this.state.inputAuthorization !== 'authorized')) {
+        throw new Error('原生服务未确认本次远程控制模式，正在停止；未将其视为控制成功。');
+      }
+      this.runRequiresInput = enableInput;
       // A listening run is one the engine really owns: an unconfirmed earlier
       // reclamation would have refused this launch, so nothing is stale here.
       this.state.teardownUnconfirmed = '';
@@ -395,13 +478,14 @@ export class ControlledHostCoordinator {
       // A stop admitted while this start was in flight owns the close; a failed
       // start must not overwrite that newer generation's state.
       if (currentGeneration === this.generation) {
-        await this.failClosed(`启动失败：${String(error)}`);
+        await this.failClosed(`启动失败：${String(error)}`, attemptedEpoch);
       }
     }
   }
 
   async stop(reason: string = '被看服务已停止'): Promise<void> {
     this.generation += 1;
+    this.cancelPendingInputAuthorization();
     const stopGeneration = this.generation;
     this.state.temporaryPassword = '';
     this.clearPoll();
@@ -409,7 +493,7 @@ export class ControlledHostCoordinator {
     this.stoppingAttempts = 0;
     const backgroundService = this.backgroundService;
     this.state.phase = 'stopping';
-    this.state.statusText = reason;
+    this.state.statusText = '正在停止被看服务，等待原生确认';
     this.emitState();
     backgroundService?.stop();
     this.state.runningInBackground = false;
@@ -497,7 +581,9 @@ export class ControlledHostCoordinator {
       this.resolvingRequestId = incoming.requestId;
       this.resolvingAccepted = allow;
       this.state.incomingResolving = true;
-      this.state.statusText = allow ? '已在本机同意观看，正在建立仅观看会话' : '正在拒绝并断开该请求';
+      this.state.statusText = allow
+        ? (this.state.inputEnabled ? '已在本机同意连接，正在建立远程控制会话' : '已在本机同意观看，正在建立仅观看会话')
+        : '正在拒绝并断开该请求';
       this.emitState();
       this.schedulePoll(0);
     } catch (error) {
@@ -690,6 +776,7 @@ export class ControlledHostCoordinator {
       // itself ready in the background: it closes whatever the engine really
       // created and leaves the state to the newer generation.
       this.generation += 1;
+      this.cancelPendingInputAuthorization();
     }
     this.clearPoll();
     this.clearStoppingTimer();
@@ -741,7 +828,8 @@ export class ControlledHostCoordinator {
   private stillListening(): boolean {
     try {
       const payload = this.parse(this.bridge.status());
-      return payload.ok === true && payload.serverRunning === true && payload.state === 'listening';
+      return payload.ok === true && payload.serverRunning === true && payload.state === 'listening'
+        && runEpochOf(payload) === this.runEpoch;
     } catch (error) {
       return false;
     }
@@ -781,6 +869,129 @@ export class ControlledHostCoordinator {
 
   private parse(document: string): HostPayload {
     return JSON.parse(document) as HostPayload;
+  }
+
+  /** The run's input capability comes only from a server answer, never capture status. */
+  private applyInputPolicy(payload: HostPayload): void {
+    this.state.inputEnabled = payload.inputEnabled === true;
+    this.state.inputAuthorization = inputAuthorizationOf(payload.inputAuthorization);
+    if (this.state.inputAuthorization === 'unauthorized') {
+      this.state.inputAuthorizationError = '';
+    }
+  }
+
+  /** Pure OS query, including its opaque current request owner; no dialog or retries. */
+  private readInputAuthorization(): ControlledInputAuthorizationPayload {
+    const payload = JSON.parse(this.bridge.inputAuthorizationStatus()) as ControlledInputAuthorizationPayload;
+    this.state.inputAuthorization = inputAuthorizationOf(payload.status);
+    if (this.state.inputAuthorization === 'unauthorized') {
+      this.state.inputAuthorizationError = '';
+    }
+    return payload;
+  }
+
+  private inputAuthorizationError(payload: ControlledInputAuthorizationPayload): Error {
+    const code: string = payload.resultCode !== undefined && payload.resultCode !== 0
+      ? `（结果码 ${payload.resultCode}）` : '';
+    return new Error(`未获远程控制系统授权${code}：${payload.message ?? payload.status ?? '无法确认系统状态'}`);
+  }
+
+  /** One request per explicit control-start; even an old OS grant supplies no new owner token. */
+  private async authorizeInput(generation: number): Promise<string> {
+    const requested = JSON.parse(this.bridge.requestInputAuthorization()) as ControlledInputAuthorizationPayload;
+    const requestId: string = requested.requestId ?? '';
+    this.state.inputAuthorization = inputAuthorizationOf(requested.status);
+    // Native request never lends an older token on refusal. If it created one,
+    // keep it through admission/failure so only that request can be cancelled.
+    if (requestId.length > 0) {
+      this.inputAuthorizationRequestId = requestId;
+    }
+    if (requested.ok !== true || requestId.length === 0 ||
+      (requested.status !== 'authorized' && requested.status !== 'authorizing')) {
+      throw this.inputAuthorizationError(requested);
+    }
+    this.state.inputAuthorizationError = '';
+    if (requested.status === 'authorized') {
+      return requestId;
+    }
+    await new Promise<void>((resolve, reject): void => {
+      this.inputAuthorizationWait = new InputAuthorizationWait(generation, this.panelGeneration, requestId,
+        (error: Error | undefined): void => {
+          if (error === undefined) {
+            resolve();
+          } else {
+            reject(error);
+          }
+        });
+      this.state.statusText = '等待系统远程控制授权';
+      this.emitState();
+      this.schedulePoll(0);
+    });
+    return requestId;
+  }
+
+  /** The existing poll services exactly this start's dialog; it never requests another. */
+  private pollInputAuthorization(): void {
+    const waiting = this.inputAuthorizationWait;
+    if (waiting === undefined) {
+      return;
+    }
+    if (waiting.generation !== this.generation || waiting.panel !== this.panelGeneration) {
+      this.inputAuthorizationWait = undefined;
+      waiting.finish(undefined);
+      return;
+    }
+    try {
+      const payload = this.readInputAuthorization();
+      if (payload.requestId !== waiting.requestId) {
+        throw new Error('远程控制授权请求已失效，请重新操作。');
+      }
+      if (payload.ok !== true || (payload.status !== 'authorizing' && payload.status !== 'authorized')) {
+        throw this.inputAuthorizationError(payload);
+      }
+      if (payload.status === 'authorized') {
+        this.inputAuthorizationWait = undefined;
+        waiting.finish(undefined);
+      }
+      this.emitState();
+    } catch (error) {
+      this.inputAuthorizationWait = undefined;
+      waiting.finish(new Error(String(error)));
+    }
+    if (this.inputAuthorizationWait === waiting) {
+      this.schedulePoll(POLL_INTERVAL_MS);
+    }
+  }
+
+  /**
+   * Retires only the pending authorization token. A run's grant belongs to its
+   * checked epoch close instead. Local wait retirement is not OS cancellation:
+   * Cancel is void in the SDK, and only the following Unauthorized query proves
+   * system revocation. An authorizing/authorized/error result stays visible.
+   */
+  private cancelPendingInputAuthorization(): void {
+    const waiting = this.inputAuthorizationWait;
+    this.inputAuthorizationWait = undefined;
+    waiting?.finish(undefined);
+    const requestId: string = this.inputAuthorizationRequestId;
+    this.inputAuthorizationRequestId = '';
+    if (requestId.length === 0) {
+      return;
+    }
+    try {
+      const payload = JSON.parse(this.bridge.cancelInputAuthorization(requestId)) as ControlledInputAuthorizationPayload;
+      this.state.inputAuthorization = inputAuthorizationOf(payload.status);
+      if (payload.ok === true && payload.status === 'unauthorized') {
+        this.state.inputAuthorizationError = '';
+      } else {
+        const code: string = payload.resultCode !== undefined && payload.resultCode !== 0
+          ? `（结果码 ${payload.resultCode}）` : '';
+        this.state.inputAuthorizationError =
+          `远程控制启动已取消，但系统授权撤回未确认${code}：${payload.message ?? payload.status ?? '无法确认系统状态'}`;
+      }
+    } catch (error) {
+      this.state.inputAuthorizationError = `远程控制启动已取消，但系统授权撤回未确认：${String(error)}`;
+    }
   }
 
   private requireSuccess(payload: HostPayload, fallback: string): HostPayload {
@@ -911,7 +1122,7 @@ export class ControlledHostCoordinator {
 
   /** The ready text, naming the real approval policy and the real audio state. */
   private readyStatusText(): string {
-    const parts: string[] = [];
+    const parts: string[] = [this.state.inputEnabled ? '远程控制已开启' : '仅观看'];
     const approval: string = this.approveModeText();
     if (approval.length > 0) {
       parts.push(approval);
@@ -925,7 +1136,7 @@ export class ControlledHostCoordinator {
   }
 
   private schedulePoll(delayMs: number): void {
-    if (this.pollTimer >= 0 || !this.running()) {
+    if (this.pollTimer >= 0 || (!this.running() && this.inputAuthorizationWait === undefined)) {
       return;
     }
     this.pollTimer = setTimeout((): void => {
@@ -957,10 +1168,15 @@ export class ControlledHostCoordinator {
       this.state.myId = myId;
     }
     const epoch: string = runEpochOf(payload);
-    if (epoch.length > 0) {
-      this.runEpoch = epoch;
+    if (epoch !== this.runEpoch) {
+      throw new Error('原生服务状态不属于本次运行，不能继续报告远程控制状态。');
     }
     this.applyHostPolicy(payload);
+    this.applyInputPolicy(payload);
+    if (this.runRequiresInput &&
+      (!this.state.inputEnabled || this.state.inputAuthorization !== 'authorized')) {
+      throw new Error('系统远程控制授权已失效或输入已关闭，正在停止本次服务。');
+    }
     this.state.terminalReason = payload.terminalReason ?? payload.error ?? '';
     const nativeState: string = payload.state ?? '';
     if (payload.ok !== true || payload.serverRunning !== true || nativeState !== 'listening') {
@@ -982,6 +1198,10 @@ export class ControlledHostCoordinator {
   }
 
   private async pollOnce(): Promise<void> {
+    if (this.inputAuthorizationWait !== undefined) {
+      this.pollInputAuthorization();
+      return;
+    }
     if (this.pollInFlight || !this.running()) {
       return;
     }
@@ -1053,26 +1273,27 @@ export class ControlledHostCoordinator {
     }
     const capture: string = this.captureText(status);
     const captureSuffix: string = capture.length > 0 ? `；${capture}` : '';
+    const inputSuffix: string = this.state.inputEnabled ? '；远程控制已开启' : '；仅观看';
     if (nextRequest !== undefined) {
       this.state.incoming = nextRequest;
       this.state.incomingResolving = resolutionStillPending && nextRequest.requestId === this.resolvingRequestId;
       const peerLabel: string = nextRequest.peerName.length > 0 ? nextRequest.peerName : nextRequest.peerId;
       this.state.phase = 'incoming';
       if (this.state.incomingResolving) {
-        this.state.statusText = this.resolvingAccepted ? '已在本机同意观看；等待系统屏幕共享确认' :
+        this.state.statusText = this.resolvingAccepted ? `已在本机同意连接${inputSuffix}；等待系统屏幕共享确认` :
           '正在拒绝并断开该请求';
       } else if (activePeer !== undefined) {
         this.state.statusText =
-          `正在连接 ${this.state.activePeerName}${captureSuffix}；${peerLabel} 请求连接，${this.approveRequirementText()}`;
+          `正在连接 ${this.state.activePeerName}${captureSuffix}${inputSuffix}；${peerLabel} 请求连接，${this.approveRequirementText()}`;
       } else {
-        this.state.statusText = `${peerLabel} 请求连接，${this.approveRequirementText()}`;
+        this.state.statusText = `${peerLabel} 请求连接，${this.approveRequirementText()}${inputSuffix}`;
       }
     } else if (activePeer !== undefined) {
       this.state.incoming = undefined;
       this.state.phase = 'active';
       this.state.statusText = capture.length > 0
-        ? `已连接 ${this.state.activePeerName}${captureSuffix}`
-        : `已连接 ${this.state.activePeerName}，等待系统屏幕共享确认`;
+        ? `已连接 ${this.state.activePeerName}${captureSuffix}${inputSuffix}`
+        : `已连接 ${this.state.activePeerName}${inputSuffix}，等待系统屏幕共享确认`;
     } else {
       this.state.incoming = undefined;
       if (this.state.phase === 'incoming' || this.state.phase === 'active') {
@@ -1114,6 +1335,7 @@ export class ControlledHostCoordinator {
         this.emitState();
         return;
       }
+      this.applyInputPolicy(payload);
       if (this.runEpoch.length > 0 && runEpochOf(payload) === this.runEpoch &&
         payload.teardownUnconfirmed === null) {
         // Only an explicit clean verdict for this same run clears a held owner.
@@ -1126,6 +1348,7 @@ export class ControlledHostCoordinator {
         this.emitState();
         return;
       }
+      this.runRequiresInput = false;
       this.state.phase = 'disabled';
       this.state.captureActive = false;
       this.state.captureAuthorized = false;
@@ -1183,6 +1406,7 @@ export class ControlledHostCoordinator {
       const replyEpoch: string = runEpochOf(payload);
       if (generation === this.generation && replyEpoch === epoch) {
         this.applyHostPolicy(payload);
+        this.applyInputPolicy(payload);
         this.runEpoch = replyEpoch;
       }
       if (payload.ok !== true) {
@@ -1196,20 +1420,27 @@ export class ControlledHostCoordinator {
       } else if (payload.state !== 'disabled' || payload.serverRunning !== false) {
         message = this.failureText(payload, '原生尚未确认本次运行已停止');
       }
+      if (message.length === 0 && generation === this.generation) {
+        this.runRequiresInput = false;
+      }
     } catch (error) {
       message = `原生被看服务停止失败：${String(error)}`;
     }
     return message;
   }
 
-  private async failClosed(message: string): Promise<void> {
+  private async failClosed(message: string, epoch: string = this.runEpoch): Promise<void> {
     this.generation += 1;
+    this.cancelPendingInputAuthorization();
     const failedGeneration = this.generation;
     this.clearPoll();
     this.clearStoppingTimer();
     this.stoppingAttempts = 0;
     this.backgroundService?.stop();
-    const stopError = await this.stopNative(this.runEpoch, failedGeneration);
+    this.state.phase = 'stopping';
+    this.state.statusText = message;
+    this.emitState();
+    const stopError = await this.stopNative(epoch, failedGeneration);
     if (failedGeneration !== this.generation) {
       // A newer generation owns the panel now; this close must not relabel it.
       return;

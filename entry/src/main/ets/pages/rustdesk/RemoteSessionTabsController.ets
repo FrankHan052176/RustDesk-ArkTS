@@ -11,8 +11,9 @@ export class RemoteSessionTab {
   coreSessionId: string = '';
   /** Native lifecycle epoch (decimal string) for bind/ACK; never a UI guess. */
   lifecycleEpoch: string = '';
-  /** Engine input generation (decimal string) the viewer must echo on input. */
-  inputGeneration: string = '';
+  /** This session's last native numeric input_generation; absent means not yet known. */
+  inputGeneration: number | undefined = undefined;
+  peerVerified: boolean | undefined = undefined;
   target: string = '';
   label: string = '';
   kind: RemoteSessionKind = 'remote_control';

@@ -13,6 +13,7 @@ export interface ViewedHostPageProps {
   bottomAvoidInset: number;
   wideLayout: boolean;
   onStart: () => void;
+  onStartWithInput: () => void;
   onStop: () => void;
   onAccept: (requestId: string, peerId: string) => void;
   onReject: (requestId: string, peerId: string) => void;
@@ -28,6 +29,7 @@ export struct ViewedHostPage {
   @Param wideLayout: boolean = false;
   @Local viewportWidth: number = 760;
   @Event onStart: () => void = () => {};
+  @Event onStartWithInput: () => void = () => {};
   @Event onStop: () => void = () => {};
   @Event onAccept: (requestId: string, peerId: string) => void = (_requestId: string, _peerId: string) => {};
   @Event onReject: (requestId: string, peerId: string) => void = (_requestId: string, _peerId: string) => {};
@@ -52,7 +54,7 @@ export struct ViewedHostPage {
   }
 
   private modeItems(): LuminousSelectionItem[] {
-    return [new LuminousSelectionItem('viewed', '被观看', '仅共享本机屏幕和系统音频')];
+    return [new LuminousSelectionItem('viewed', '被控端', '')];
   }
 
   private contentTitleSpacerHeight(): number {
@@ -83,6 +85,7 @@ export struct ViewedHostPage {
           state: this.state,
           surfaceWidth: this.contentWidth(),
           onStart: () => this.onStart(),
+          onStartWithInput: () => this.onStartWithInput(),
           onStop: () => this.onStop(),
           onAccept: (requestId: string, peerId: string) => this.onAccept(requestId, peerId),
           onReject: (requestId: string, peerId: string) => this.onReject(requestId, peerId),

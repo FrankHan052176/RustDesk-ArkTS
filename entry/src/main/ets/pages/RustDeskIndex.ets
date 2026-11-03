@@ -96,6 +96,7 @@ import { DeviceLivenessProbe } from '../services/DeviceLivenessProbe';
 import { copyPeerRecord, peerProtocolOf } from './rustdesk/RustDeskPeerDirectoryModel';
 import { RustDeskSurfaceController } from './rustdesk/RustDeskSurfaceController';
 import { RustDeskInputController } from './rustdesk/RustDeskInputController';
+import { sendNativeMouse } from './rustdesk/RustDeskMouseTransport';
 import {
   RUSTDESK_IME_INITIAL_TEXT,
   RustDeskImeInputController,
@@ -111,7 +112,8 @@ import {
 } from './rustdesk/RustDeskClipboardController';
 import {
   RustDeskCoordinateSpace,
-  RustDeskFlutterKeyPayload,
+  RustDeskInputBinding,
+  validInputGeneration,
   RustDeskKeyPayload,
   RustDeskMousePayload,
   RustDeskSize,
@@ -289,34 +291,6 @@ type PeerLaunchKind = EasyTierConnectionKind;
 type ConnectionUiPhase = 'idle' | 'waiting_for_easytier' | 'connecting'
   | 'awaiting_password' | 'authenticating' | 'connected' | 'failed';
 
-interface InterceptedKeyEvent {
-  type: string;
-  action: number;
-  keyCode: number;
-}
-
-interface InputInterceptorResponse {
-  ok: boolean;
-  action: string;
-  message?: string;
-  /** This module owns an installed interceptor. */
-  active?: boolean;
-  /** A key arriving now would really be captured; the phase `active` alone does not say. */
-  admitting?: boolean;
-  /**
-   * Capture was closed on purpose (stop or a revocation).
-   *
-   * A sealed poll answers `ok:false` and discards its queue: keys captured before
-   * the seal must not be forwarded, so the caller releases what it still holds and
-   * stops instead of reading events.
-   */
-  sealed?: boolean;
-  result?: number;
-  events?: InterceptedKeyEvent[];
-  /** True when the bounded native callback queue overflowed; admission is then closed. */
-  overflow?: boolean;
-}
-
 @Entry
 @ComponentV2
 struct RustDeskIndex {
@@ -361,7 +335,6 @@ struct RustDeskIndex {
   private settingsScroller: Scroller = new Scroller();
   private viewedHostScroller: Scroller = new Scroller();
   private transferScroller: Scroller = new Scroller();
-  private keyboardEnteredSessionId: string = '';
   private lastKeyboardFocusLogAt: number = 0;
   @Local pageVisible: boolean = true;
   private appForeground: boolean = true;
@@ -378,10 +351,11 @@ struct RustDeskIndex {
   private handoffPasswordAutoSubmitAttempted: boolean = false;
   private activeSessionForceRelay: boolean = false;
   private remoteInteractionReady: boolean = false;
-  private inputInterceptorActive: boolean = false;
+  private inputCaptureSessionId: string = '';
   private previewKeyboardCaptureFocused: boolean = false;
   private previewKeyboardBlurTimer: number = -1;
   private systemImeBlurTimer: number = -1;
+  private systemImeSessionId: string = '';
   private softKeyboardPressedKeys: string[] = [];
   /**
    * The modifier latches the remote soft keyboard draws.
@@ -472,8 +446,7 @@ struct RustDeskIndex {
   @Local previewSurfaceGeneration: number = 0;
   @Local touchMode: boolean = true;
   @Local relativeMouseMode: boolean = false;
-  // Input is a local switch: turning it off stops every pointer and keyboard
-  // emission without telling the peer, so it can be flipped back instantly.
+  // Explicit input off is enforced by the engine's per-session view-only policy.
   @Local inputEnabled: boolean = true;
   @Local rightClickGesture: RustDeskRightClickGesture = 'two_finger_tap';
   @Local previewViewWidth: number = 0;
@@ -551,8 +524,8 @@ struct RustDeskIndex {
   private previewSurfaceBindFailure: string = '';
   /** Native lifecycle epoch of the active session; bind/ACK echo it verbatim. */
   private activeSessionLifecycleEpoch: string = '';
-  /** Engine input generation the active viewer published; RustDesk leaves it empty. */
-  private activeInputGeneration: string = '';
+  /** Only a native top-level safe numeric input_generation authorizes input. */
+  private activeInputGeneration: number | undefined = undefined;
   /**
    * Holds whose release this session attempted and the peer refused, as native
    * reported it. Empty means unknown: it is never assumed to be zero.
@@ -964,6 +937,7 @@ struct RustDeskIndex {
   };
   private onRemoteSessionAppState = (foreground: boolean): void => {
     this.appForeground = foreground;
+    this.syncInputCapture();
     if (foreground && this.pageVisible) {
       this.refreshDirectorySnapshot(true);
       if (this.showPreviewModal && this.activeSessionId.length > 0) {
@@ -1022,6 +996,7 @@ struct RustDeskIndex {
 
   aboutToDisappear(): void {
     this.pageVisible = false;
+    this.releaseSessionInput(this.activeSessionId);
     this.discardAllRdpCertificateSecrets();
     this.rejectPendingInsecureConnection();
     this.clearActiveSessionHandoffState();
@@ -1039,11 +1014,10 @@ struct RustDeskIndex {
     this.previewKeyboardCaptureFocused = false;
     this.hideSystemIme(false);
     this.releaseSoftKeyboardKeys();
-    this.stopInputInterceptor();
+    this.stopInputCapture();
     this.clipboardController?.reset();
     this.clipboardFileRootQueuedSessionId = '';
     this.clipboardPeerUpdateSessions.clear();
-    this.setSessionKeyboardEntered(false);
     this.unregisterWindowAvoidAreaListener();
     this.unregisterFoldHoverListeners();
     this.clearSurfaceBinding();
@@ -1063,7 +1037,7 @@ struct RustDeskIndex {
     this.appForeground = rustDeskRuntimeController.state().foreground;
     void this.initializeRuntime();
     this.syncClipboardController();
-    this.syncInputInterceptor();
+    this.syncInputCapture();
     this.refreshFreeWindowChrome();
     this.refreshSessionOrientation();
     this.refreshDirectorySnapshot(true);
@@ -1083,6 +1057,7 @@ struct RustDeskIndex {
 
   onPageHide(): void {
     this.pageVisible = false;
+    this.releaseSessionInput(this.activeSessionId);
     this.detachRuntimeObserver();
     this.discardAllRdpCertificateSecrets();
     this.discardDirectCredentialSecrets();
@@ -1092,7 +1067,7 @@ struct RustDeskIndex {
     this.stopPeerOnlinePolling();
     this.clearRdpFollowResize();
     this.clipboardController?.stop();
-    this.stopInputInterceptor();
+    this.stopInputCapture();
     this.stopPolling();
     for (const tab of this.remoteSessionTabsController.snapshot()) {
       if (tab.sessionId === this.activeSessionId) {
@@ -1162,7 +1137,8 @@ struct RustDeskIndex {
     if (!this.inputController) {
       this.inputController = new RustDeskInputController({
         isSessionActive: () => this.isInteractiveSessionActive(),
-        usesCoreRawKeyRoute: () => this.isRemoteControlSessionActive(),
+        getInputBinding: () => this.currentInputBinding(),
+        usesVncKeysym: () => this.activeSessionKind === 'vnc',
         isMouseMode: () => this.inputEnabled && !this.touchMode,
         isPeerMacOS: () => this.isPeerMacOS(),
         isPeerAndroid: () => this.isPeerAndroid(),
@@ -1171,9 +1147,15 @@ struct RustDeskIndex {
         gesturesEnabled: () => this.activeSessionDefaults.gesturesEnabled,
         rightClickGesture: () => this.rightClickGesture,
         getCoordinateSpace: () => this.getCoordinateSpace(),
-        sendMouse: (payload: RustDeskMousePayload) => this.sendMousePayload(payload),
-        sendFlutterKey: (payload: RustDeskFlutterKeyPayload) => this.sendFlutterKeyPayloadObject(payload),
-        sendKey: (payload: RustDeskKeyPayload) => this.sendKeyPayloadObject(payload),
+        sendMouse: (payload: RustDeskMousePayload, binding: RustDeskInputBinding) =>
+          this.sendMousePayloadToSession(binding, payload, true),
+        sendKey: (payload: RustDeskKeyPayload, binding: RustDeskInputBinding) =>
+          this.sendLegacyKeyToEngine(payload, binding),
+        sendKeysym: (keysym: number, down: boolean, binding: RustDeskInputBinding) =>
+          this.sendKeysymToEngine(keysym, down, binding),
+        sendText: (text: string, binding: RustDeskInputBinding) => this.sendTextToEngine(text, binding),
+        releaseInput: (sessionId: string) => this.releaseSessionInput(sessionId),
+        reportInputError: (message: string) => { this.errorText = message; },
         log: (label: string, payload: string) => this.logRelativeDebug(label, payload),
         remoteCursorDebugText: () => this.remoteCursorDebugText(),
         overlayCursorDebugText: (label: string) => this.overlayCursorDebugText(label),
@@ -1350,28 +1332,33 @@ struct RustDeskIndex {
     this.preferences?.saveAndroidNavigationVisible(expanded);
   }
 
-  private sendAndroidNavigationButton(button: string, down: boolean): void {
-    if (!this.androidNavigationAvailable()) {
-      return;
-    }
-    this.sendAndroidNavigationButtonToSession(this.activeSessionId, button, down, true);
-  }
-
   private sendAndroidNavigationButtonToSession(
-    sessionId: string,
+    binding: RustDeskInputBinding,
     button: string,
     down: boolean,
     reportFailure: boolean,
-  ): void {
+  ): boolean {
+    if (!this.inputBindingIsCurrent(binding)) {
+      return false;
+    }
     const payload = new RustDeskMousePayload();
     payload.type = down ? 'down' : 'up';
     payload.buttons = button;
-    this.sendMousePayloadToSession(sessionId, payload, reportFailure);
+    const admitted = this.sendMousePayloadToSession(binding, payload, reportFailure);
+    if (!admitted && !down) {
+      this.releaseSessionInput(binding.sessionId);
+    }
+    return admitted;
   }
 
   private tapAndroidNavigationButton(button: string): void {
-    this.sendAndroidNavigationButton(button, true);
-    this.sendAndroidNavigationButton(button, false);
+    if (!this.androidNavigationAvailable()) {
+      return;
+    }
+    const binding = this.currentInputBinding();
+    if (binding !== undefined && this.sendAndroidNavigationButtonToSession(binding, button, true, true)) {
+      this.sendAndroidNavigationButtonToSession(binding, button, false, true);
+    }
   }
 
   private sendAndroidBack(): void {
@@ -1387,10 +1374,14 @@ struct RustDeskIndex {
     if (!this.androidNavigationAvailable()) {
       return;
     }
-    const sessionId = this.activeSessionId;
-    this.sendAndroidNavigationButtonToSession(sessionId, 'wheel', true, true);
+    const binding = this.currentInputBinding();
+    if (binding === undefined || !this.sendAndroidNavigationButtonToSession(binding, 'wheel', true, true)) {
+      return;
+    }
     setTimeout((): void => {
-      this.sendAndroidNavigationButtonToSession(sessionId, 'wheel', false, false);
+      // A focus/tab/epoch change already retired this Down. Never release a new
+      // active session or a fresh hold under its newer generation.
+      this.sendAndroidNavigationButtonToSession(binding, 'wheel', false, false);
     }, ANDROID_RECENT_PRESS_DURATION_MS);
   }
 
@@ -1513,6 +1504,7 @@ struct RustDeskIndex {
     this.runtimeOwnerGeneration = state.ownerGeneration;
     this.runtimeInitialized = !state.pending && state.ready && state.discoveryAllowed;
     this.appForeground = state.foreground;
+    this.syncInputCapture();
     const reply = state.lan;
     this.lanScanActive = state.lanPending || (reply !== undefined && reply.ok &&
       (reply.state === 'scanning' || reply.state === 'stopping' || reply.state === 'removing'));
@@ -2977,6 +2969,7 @@ struct RustDeskIndex {
       return;
     }
     const sessionId = this.activeSessionId;
+    this.releaseSessionInput(sessionId);
     const tab = this.remoteSessionTabsController.get(sessionId);
     if (tab !== undefined) {
       tab.coreSessionId = this.activeCoreSessionId;
@@ -3008,7 +3001,7 @@ struct RustDeskIndex {
       tab.forceRelay = this.activeSessionForceRelay;
     }
     await this.clipboardController?.stopAndDrainRemoteWrite();
-    this.inputController?.releasePressedButtons();
+    this.inputController?.discardInputState();
     this.hideSystemIme(false);
     this.hideSoftKeyboard();
     const surfaceReleased = this.clearSurfaceBinding();
@@ -3032,7 +3025,7 @@ struct RustDeskIndex {
     this.activeSessionId = '';
     this.activeCoreSessionId = '';
     this.syncClipboardController();
-    this.syncInputInterceptor();
+    this.syncInputCapture();
     this.syncRemoteSessionSharing();
     this.syncRemoteSessionTabs();
   }
@@ -3191,7 +3184,7 @@ struct RustDeskIndex {
     );
     this.remoteInteractionReady = false;
     this.syncClipboardController();
-    this.syncInputInterceptor();
+    this.syncInputCapture();
     this.errorText = '';
     this.connectionSummary = sessionKind === 'vnc'
       ? '正在连接 VNC 服务端...'
@@ -3363,7 +3356,7 @@ struct RustDeskIndex {
         connToken,
         forceRelay,
         isFileTransfer: false,
-        isViewOnly: false,
+        isViewOnly: !this.inputEnabled,
         passwordEphemeral,
       };
       if (kind === 'remote_control') {
@@ -3403,13 +3396,8 @@ struct RustDeskIndex {
         return false;
       }
       this.syncClipboardController();
-      if (kind === 'vnc' || kind === 'rdp') {
-        // The engine decides input policy for these protocols from what the
-        // server grants, so the viewer must not also force a local view-only
-        // ceiling on top of it.
-        return true;
-      }
-      const policy = this.nativeSessionBridge.setViewOnly(this.activeSessionId, false);
+      const policy = this.nativeSessionBridge.setViewOnly(this.activeSessionId, !this.inputEnabled);
+      this.adoptInputGeneration(policy, this.activeSessionId);
       this.updateSessionState(policy);
       return policy.ok;
     } catch (error) {
@@ -3471,6 +3459,7 @@ struct RustDeskIndex {
     this.authDialogMode = initialMode;
     this.authErrorMessage = message;
     this.passwordDialogVisible = true;
+    this.syncInputCapture();
     if (kind === 'file_transfer') {
       this.transferRootStatus = message.length > 0 ? message
         : (initialMode === '2fa' ? '文件传输等待二次验证 (2FA)' : '文件传输等待密码验证');
@@ -4158,10 +4147,10 @@ struct RustDeskIndex {
     // The generation this tab's session last reported, so input after a switch
     // starts from the boundary the native side gave instead of none; a stale
     // value is refused with the current one, which the next poll adopts.
-    this.activeInputGeneration = nextTab.inputGeneration;
+    this.activeInputGeneration = validInputGeneration(nextTab.inputGeneration) ? nextTab.inputGeneration : undefined;
     this.showPreviewModal = true;
     this.syncClipboardController();
-    this.syncInputInterceptor();
+    this.syncInputCapture();
     this.syncRemoteSessionTabs();
     if (nextTab.peerInfo !== undefined) {
       this.handleSessionEvent(nextTab.peerInfo);
@@ -4295,6 +4284,7 @@ struct RustDeskIndex {
       return;
     }
     this.sessionCloseInFlight = true;
+    this.releaseSessionInput(sessionId);
     try {
       await this.clipboardController?.cleanupIncomingRootForClosedSession(sessionId);
       const tab = this.remoteSessionTabsController.get(sessionId);
@@ -4343,6 +4333,7 @@ struct RustDeskIndex {
         this.connectionUiMessage = '';
       }
       const sessionId = this.activeSessionId;
+      this.releaseSessionInput(sessionId);
       const holdsOwedBeforeClose = this.activeInputHoldsOwed;
       this.rejectPendingInsecureConnection();
       hilog.info(DOMAIN, TAG, 'closeSession sessionId=%{public}s reason=%{public}s', sessionId, reason ?? '');
@@ -4352,7 +4343,7 @@ struct RustDeskIndex {
         this.syncRelativeMouseMode(false);
       }
       this.remoteInteractionReady = false;
-      this.stopInputInterceptor();
+      this.stopInputCapture();
       await this.clipboardController?.stopAndDrainRemoteWrite();
       await this.clipboardController?.cleanupIncomingRootForClosedSession(sessionId);
       if (this.remoteSessionTabsController.count() > 1) {
@@ -4364,7 +4355,6 @@ struct RustDeskIndex {
       this.clipboardPeerUpdateSessions.delete(sessionId);
       this.clearPreviewKeyboardBlurTimer();
       this.previewKeyboardCaptureFocused = false;
-      this.setSessionKeyboardEntered(false);
       await this.applySessionFullscreen(false, true);
       this.unregisterFoldHoverListeners();
       this.passwordDialogVisible = false;
@@ -4373,7 +4363,7 @@ struct RustDeskIndex {
       const shouldRestoreMainTab = reason !== '正在切换会话';
       this.clearActiveSessionHandoffState(preserveRdpCertificateDecision);
       this.clearPasswordTimeout();
-      this.inputController?.releasePressedButtons();
+      this.inputController?.discardInputState();
       // The native media owner still holds this Surface. Request the close and
       // wait for its join receipt before hiding the pane or unbinding, then
       // acknowledge the epoch the native side issued.
@@ -4570,8 +4560,7 @@ struct RustDeskIndex {
     // any remote session. Preserve it across A -> B tab switches because an
     // unchanged layout does not emit another onAreaChange callback.
     this.viewportModel.resetSessionGeometry();
-    this.inputController?.reset();
-    this.keyboardEnteredSessionId = '';
+    this.inputController?.discardInputState();
     this.frameStatus = 'Surface not ready';
     this.frameWidth = 0;
     this.frameHeight = 0;
@@ -4581,6 +4570,7 @@ struct RustDeskIndex {
     this.previewUserRotation = 0;
     this.softKeyboardVisible = false;
     this.systemImeActive = false;
+    this.systemImeSessionId = '';
     this.systemImeText = this.imeInputController.reset();
     this.softKeyboardDockTop = false;
     this.softKeyboardX = 0;
@@ -4606,7 +4596,7 @@ struct RustDeskIndex {
     this.currentDisplayIndex = 0;
     // The generation belongs to one session's boundary: it is cleared with the
     // session state and only ever refilled from a value the native side reported.
-    this.activeInputGeneration = '';
+    this.activeInputGeneration = undefined;
     // The owed-hold count belongs to that same boundary; empty means unknown.
     this.activeInputHoldsOwed = '';
     this.previewSurfaceVisible = false;
@@ -4651,7 +4641,7 @@ struct RustDeskIndex {
     this.hideSystemIme(false);
     this.hideSoftKeyboard();
     this.previewKeyboardCaptureFocused = false;
-    this.syncInputInterceptor();
+    this.syncInputCapture();
     this.getUIContext()?.animateTo({ duration: 300, curve: Curve.FastOutSlowIn }, () => {
       this.activeOverlayPanel = this.overlayState.getActivePanel();
     });
@@ -4661,7 +4651,7 @@ struct RustDeskIndex {
     if (!this.overlayState.close()) {
       return;
     }
-    this.syncInputInterceptor();
+    this.syncInputCapture();
     this.getUIContext()?.animateTo({ duration: 300, curve: Curve.FastOutSlowIn }, () => {
       this.activeOverlayPanel = 'home';
     });
@@ -4753,6 +4743,7 @@ struct RustDeskIndex {
     }
     this.hideSoftKeyboard();
     this.systemImeText = this.imeInputController.reset();
+    this.systemImeSessionId = this.activeSessionId;
     this.systemImeActive = true;
     setTimeout(() => this.requestSystemImeFocus(), 40);
   }
@@ -4789,6 +4780,7 @@ struct RustDeskIndex {
     this.clearSystemImeBlurTimer();
     const wasActive = this.systemImeActive;
     this.systemImeActive = false;
+    this.systemImeSessionId = '';
     this.systemImeText = this.imeInputController.reset();
     try {
       this.systemImeTextController.stopEditing();
@@ -4841,14 +4833,12 @@ struct RustDeskIndex {
       oldPreviewText?.value ?? '',
     );
     this.systemImeText = delta.localText;
-    if (!this.systemImeActive || !this.isInteractiveSessionActive()) {
+    if (!this.systemImeActive || this.systemImeSessionId !== this.activeSessionId
+      || !this.isInteractiveSessionActive()) {
       return;
     }
-    for (let index = 0; index < delta.backspaceCount; index += 1) {
-      this.sendSoftKeyboardKey('VK_BACK', true, false, false, false, false);
-    }
-    if (delta.insertedText.length > 0) {
-      this.sendSystemImeText(delta.insertedText);
+    if (!this.getInputController().sendImeDelta(delta.backspaceCount, delta.insertedText)) {
+      return;
     }
     if (previewText === undefined || previewText.value.length === 0) {
       this.clearSystemImeCaretTimer();
@@ -4869,24 +4859,8 @@ struct RustDeskIndex {
     this.systemImeCaretTimer = -1;
   }
 
-  private sendSystemImeText(value: string): void {
-    try {
-      const response = this.nativeSessionBridge.inputString(
-        this.activeSessionId,
-        value,
-        this.currentInputGeneration(),
-      );
-      this.logRelativeDebug('system_ime_text', `ok=${response.ok} length=${value.length}`);
-      if (!response.ok) {
-        // A refusal names the generation the session is at now, so stale input
-        // state for a boundary that has gone is retired rather than resent.
-        this.adoptInputGeneration(response);
-        this.errorText = response.message ?? '输入法文本发送失败';
-      }
-    } catch (error) {
-      this.errorText = `输入法文本发送失败: ${String(error)}`;
-      this.logRelativeDebug('system_ime_text', `failed=${String(error)}`);
-    }
+  private sendSystemImeText(value: string): boolean {
+    return this.getInputController().sendText(value);
   }
 
   private handleSystemImeSubmit(event: SubmitEvent): void {
@@ -4997,78 +4971,6 @@ struct RustDeskIndex {
     return '';
   }
 
-  private softKeyboardUsbHid(name: string): number | undefined {
-    if (name === 'VK_SPACE') {
-      return 0x2C;
-    }
-    if (name === 'VK_TAB') {
-      return 0x2B;
-    }
-    if (name === 'VK_RETURN') {
-      return 0x28;
-    }
-    if (name === 'VK_BACK') {
-      return 0x2A;
-    }
-    if (name === 'VK_ESCAPE') {
-      return 0x29;
-    }
-    if (name === 'VK_DELETE') {
-      return 0x4C;
-    }
-    if (name === ',' || name === '<') {
-      return 0x36;
-    }
-    if (name === '.' || name === '>') {
-      return 0x37;
-    }
-    if (name === '/' || name === '?') {
-      return 0x38;
-    }
-    if (name === ';' || name === ':') {
-      return 0x33;
-    }
-    if (name === '\'' || name === '"') {
-      return 0x34;
-    }
-    if (name === '[' || name === '{') {
-      return 0x2F;
-    }
-    if (name === ']' || name === '}') {
-      return 0x30;
-    }
-    if (name === '\\' || name === '|') {
-      return 0x31;
-    }
-    if (name === '-' || name === '_') {
-      return 0x2D;
-    }
-    if (name === '=' || name === '+') {
-      return 0x2E;
-    }
-    if (name === '`' || name === '~') {
-      return 0x35;
-    }
-    if (name.length !== 4 || name.indexOf('VK_') !== 0) {
-      return undefined;
-    }
-    const key = name.substring(3);
-    if (key.length !== 1) {
-      return undefined;
-    }
-    const code = key.charCodeAt(0);
-    if (code >= 65 && code <= 90) {
-      return 0x04 + code - 65;
-    }
-    if (code >= 49 && code <= 57) {
-      return 0x1E + code - 49;
-    }
-    if (code === 48) {
-      return 0x27;
-    }
-    return undefined;
-  }
-
   private sendSoftKeyboardKey(
     name: string,
     down: boolean,
@@ -5076,89 +4978,21 @@ struct RustDeskIndex {
     ctrl: boolean,
     shift: boolean,
     command: boolean,
-  ): void {
+  ): boolean {
     if (!this.isInteractiveSessionActive()) {
       this.clearSoftKeyboardKeyState();
-      return;
+      return false;
     }
     const modifier = this.isSoftKeyboardModifier(name);
-    if (modifier && !down && this.softKeyboardPressedKeys.indexOf(name) < 0) {
-      return;
+    if ((!modifier && !down) || (modifier && !down && this.softKeyboardPressedKeys.indexOf(name) < 0)) {
+      return false;
     }
-
-    // Functional keys (Backspace, Enter, Tab, Delete, Esc, Arrows, Fn) go through sessionInputKey (ControlKey)
-    if (this.isFunctionalKey(name)) {
-      if (!down) {
-        return;
-      }
-      const payload = new RustDeskKeyPayload(name, false);
-      payload.press = true;
-      payload.alt = alt;
-      payload.ctrl = ctrl;
-      payload.shift = shift;
-      payload.command = command;
-      this.sendKeyPayloadObject(payload);
-      return;
-    }
-
-    // Optimized direct text input for Android remote peers:
-    if (this.isPeerAndroid() && down && !modifier) {
+    if (this.isPeerAndroid() && down && !modifier && !ctrl && !alt && !command) {
       const character = this.softKeyboardCharacter(name, shift);
-      if (character.length > 0 && !ctrl && !alt && !command) {
-        try {
-          this.nativeSessionBridge.inputString(
-            this.activeSessionId,
-            character,
-            this.currentInputGeneration(),
-          );
-          return;
-        } catch (_) {
-        }
+      if (character.length > 0) {
+        // A refusal is final for this event, not a reason to retry as a key.
+        return this.sendSystemImeText(character);
       }
-      if (name === 'VK_SPACE') {
-        try {
-          this.nativeSessionBridge.inputString(
-            this.activeSessionId,
-            ' ',
-            this.currentInputGeneration(),
-          );
-          return;
-        } catch (_) {
-        }
-      }
-    }
-
-    const usbHid = this.softKeyboardUsbHid(name);
-    let rawRouteAttempted = false;
-    // Core raw keys cannot serve direct sessions. Their legacy bridge remains
-    // responsible for admitting or rejecting its supported key vocabulary.
-    if (!modifier && usbHid !== undefined && !this.isDirectWireSession()) {
-      const character = down ? this.softKeyboardCharacter(name, shift) : '';
-      let lockModes = 0;
-      if (shift) {
-        lockModes |= (1 << 0);
-      }
-      if (ctrl) {
-        lockModes |= (1 << 1);
-      }
-      if (alt) {
-        lockModes |= (1 << 2);
-      }
-      const payload = new RustDeskFlutterKeyPayload(character, usbHid, lockModes, down);
-      rawRouteAttempted = true;
-      if (this.sendFlutterKeyPayloadObject(payload)) {
-        return;
-      }
-    }
-    if (rawRouteAttempted) {
-      // The raw key route was chosen for this event and the native side refused it,
-      // so its generation is what refused it. Re-sending the same event through the
-      // legacy route would launder it into the newly adopted generation, so it is
-      // dropped; only an event whose raw route was never chosen falls through.
-      return;
-    }
-    if (!modifier && !down) {
-      return;
     }
     const payload = new RustDeskKeyPayload(name, modifier ? down : false);
     payload.press = !modifier;
@@ -5166,30 +5000,15 @@ struct RustDeskIndex {
     payload.ctrl = ctrl;
     payload.shift = shift;
     payload.command = command;
-    if (this.sendKeyPayloadObject(payload) && modifier) {
+    const admitted = this.sendKeyPayloadObject(payload);
+    if (admitted && modifier) {
       this.rememberSoftKeyboardKey(name, down, alt, ctrl, shift, command);
     }
+    return admitted;
   }
 
   private isSoftKeyboardModifier(name: string): boolean {
     return name === 'VK_CONTROL' || name === 'VK_MENU' || name === 'VK_SHIFT' || name === 'Meta';
-  }
-
-  private isFunctionalKey(name: string): boolean {
-    return name === 'VK_BACK'
-      || name === 'VK_DELETE'
-      || name === 'VK_RETURN'
-      || name === 'VK_TAB'
-      || name === 'VK_ESCAPE'
-      || name === 'VK_HOME'
-      || name === 'VK_END'
-      || name === 'VK_PRIOR'
-      || name === 'VK_NEXT'
-      || name === 'VK_LEFT'
-      || name === 'VK_RIGHT'
-      || name === 'VK_UP'
-      || name === 'VK_DOWN'
-      || name.indexOf('VK_F') === 0;
   }
 
   private rememberSoftKeyboardKey(
@@ -5221,41 +5040,10 @@ struct RustDeskIndex {
     }
   }
 
-  private releaseSoftKeyboardKey(name: string): void {
-    const payload = new RustDeskKeyPayload(name, false);
-    payload.alt = this.softKeyboardAltActive;
-    payload.ctrl = this.softKeyboardCtrlActive;
-    payload.shift = this.softKeyboardShiftActive;
-    payload.command = this.softKeyboardCommandActive;
-    this.sendKeyPayloadObject(payload);
-    this.rememberSoftKeyboardKey(
-      name,
-      false,
-      this.softKeyboardAltActive,
-      this.softKeyboardCtrlActive,
-      this.softKeyboardShiftActive,
-      this.softKeyboardCommandActive,
-    );
-  }
-
   private releaseSoftKeyboardKeys(): void {
-    if (!this.isInteractiveSessionActive()) {
-      this.clearSoftKeyboardKeyState();
-      return;
-    }
-    const pressedKeys = this.softKeyboardPressedKeys.slice();
-    for (let index = 0; index < pressedKeys.length; index += 1) {
-      const name = pressedKeys[index];
-      if (!this.isSoftKeyboardModifier(name)) {
-        this.releaseSoftKeyboardKey(name);
-      }
-    }
-    const modifiers: string[] = ['VK_CONTROL', 'VK_MENU', 'VK_SHIFT', 'Meta'];
-    for (let index = 0; index < modifiers.length; index += 1) {
-      const name = modifiers[index];
-      if (this.softKeyboardPressedKeys.indexOf(name) >= 0) {
-        this.releaseSoftKeyboardKey(name);
-      }
+    if (this.softKeyboardPressedKeys.length > 0) {
+      const sessionId = this.inputCaptureSessionId || this.activeSessionId;
+      this.releaseSessionInput(sessionId);
     }
     this.clearSoftKeyboardKeyState();
   }
@@ -5456,107 +5244,52 @@ struct RustDeskIndex {
     this.clipboardController?.stop();
   }
 
-  // Hardware keys are captured at the input service for every interactive session:
-  // the ArkUI key path loses them once focus leaves the session container, and the
-  // intercepted path already routes a direct wire's key to its legacy vocabulary.
-  private shouldEnableInputInterceptor(): boolean {
-    return this.pageVisible &&
-      this.remoteInteractionReady &&
-      this.isInteractiveSessionActive() &&
-      this.showPreviewModal &&
-      !this.showTransferWorkspace &&
-      !this.passwordDialogVisible &&
-      this.overlayState.getActivePanel() === 'home';
+  /** ArkUI owns acquisition. Temporary overlays/focus never mutate view-only policy. */
+  private shouldCaptureInput(): boolean {
+    return this.pageVisible && this.appForeground && this.remoteInteractionReady
+      && this.isInteractiveSessionActive() && this.showPreviewModal
+      && !this.showTransferWorkspace && !this.passwordDialogVisible
+      && !this.directCredentialsVisible && !this.rdpCertificateDialogVisible
+      && !this.sessionTransitionBusy() && this.overlayState.getActivePanel() === 'home';
   }
 
-  private syncInputInterceptor(): void {
-    if (!this.shouldEnableInputInterceptor()) {
-      this.stopInputInterceptor();
+  private syncInputCapture(): void {
+    if (!this.shouldCaptureInput()) {
+      this.stopInputCapture();
       return;
     }
-    if (this.inputInterceptorActive) {
-      return;
+    if (this.inputCaptureSessionId.length > 0 && this.inputCaptureSessionId !== this.activeSessionId) {
+      this.releaseSessionInput(this.inputCaptureSessionId);
     }
-    try {
-      const response = JSON.parse(native.inputInterceptorStart()) as InputInterceptorResponse;
-      this.inputInterceptorActive = response.active === true;
-      this.logRelativeDebug(
-        'input_interceptor',
-        `start ok=${response.ok} active=${this.inputInterceptorActive} admitting=${String(response.admitting === true)} result=${String(response.result ?? '')} message=${String(response.message ?? '')}`,
-      );
-    } catch (error) {
-      this.inputInterceptorActive = false;
-      this.logRelativeDebug('input_interceptor', `start failed=${String(error)}`);
-    }
+    this.inputCaptureSessionId = this.activeSessionId;
+    this.getInputController().setInputSuppressed(!this.inputEnabled);
   }
 
-  private stopInputInterceptor(): void {
-    if (!this.inputInterceptorActive) {
-      return;
-    }
-    this.inputController?.releaseHeldKeys();
-    try {
-      const response = JSON.parse(native.inputInterceptorStop()) as InputInterceptorResponse;
-      this.inputInterceptorActive = response.active === true;
-      this.logRelativeDebug(
-        'input_interceptor',
-        `stop ok=${response.ok} active=${this.inputInterceptorActive} result=${String(response.result ?? '')} message=${String(response.message ?? '')}`,
-      );
-    } catch (error) {
-      this.logRelativeDebug('input_interceptor', `stop failed=${String(error)}`);
-    }
-  }
-
-  private pollInputInterceptorEvents(): void {
-    if (!this.inputInterceptorActive) {
-      return;
-    }
-    try {
-      const response = JSON.parse(native.inputInterceptorPollEvents(32)) as InputInterceptorResponse;
-      this.inputInterceptorActive = response.active === true;
-      if (response.sealed === true) {
-        // Capture was closed on purpose and the queue was discarded: nothing from
-        // this poll may be forwarded. Release every key this client still holds so
-        // no key-up is lost, then stop the native owner.
-        this.inputController?.releaseHeldKeys();
-        this.stopInputInterceptor();
-        this.logRelativeDebug('input_interceptor',
-          `poll sealed: released held keys and stopped interception message=${String(response.message ?? '')}`);
-        return;
-      }
-      if (response.overflow === true) {
-        // The native queue overflowed and closed admission. Release every key
-        // this client still holds so no key-up is lost, then stop the native
-        // owner; a later start re-arms with a fresh queue.
-        this.inputController?.releaseHeldKeys();
-        this.stopInputInterceptor();
-        this.logRelativeDebug('input_interceptor', 'poll overflow: released held keys and stopped interception');
-        return;
-      }
-      const events = response.events ?? [];
-      for (let index = 0; index < events.length; index++) {
-        const event = events[index];
-        if (event.type === 'key') {
-          this.getInputController().handleInterceptedKeyEvent(event.keyCode, event.action);
-        }
-      }
-    } catch (error) {
-      this.logRelativeDebug('input_interceptor', `poll failed=${String(error)}`);
+  private stopInputCapture(): void {
+    const sessionId = this.inputCaptureSessionId;
+    this.inputCaptureSessionId = '';
+    if (sessionId.length > 0) {
+      this.releaseSessionInput(sessionId);
     }
   }
 
   private handlePreviewKeyboardFocus(): void {
     this.clearPreviewKeyboardBlurTimer();
     this.previewKeyboardCaptureFocused = true;
-    this.syncInputInterceptor();
+    this.syncInputCapture();
   }
 
   private handlePreviewKeyboardBlur(): void {
     this.clearPreviewKeyboardBlurTimer();
+    const sessionId = this.activeSessionId;
+    const connectionGeneration = this.connectionGeneration;
+    this.previewKeyboardCaptureFocused = false;
+    this.releaseSessionInput(sessionId);
     this.previewKeyboardBlurTimer = setTimeout(() => {
       this.previewKeyboardBlurTimer = -1;
-      this.previewKeyboardCaptureFocused = false;
-      this.syncInputInterceptor();
+      if (sessionId === this.activeSessionId && connectionGeneration === this.connectionGeneration) {
+        this.syncInputCapture();
+      }
     }, 1) as number;
   }
 
@@ -5787,6 +5520,7 @@ struct RustDeskIndex {
         this.hideSystemIme(false);
         this.hideSoftKeyboard();
         this.showTransferWorkspace = true;
+        this.syncInputCapture();
       }
       return;
     }
@@ -5814,6 +5548,7 @@ struct RustDeskIndex {
         this.hideSystemIme(false);
         this.hideSoftKeyboard();
         this.showTransferWorkspace = true;
+        this.syncInputCapture();
         this.syncTransferState();
         return;
       }
@@ -5844,7 +5579,7 @@ struct RustDeskIndex {
     this.transferConnectionStatus = this.transferManager.getStatusMessage();
     this.showTransferWorkspace = false;
     this.previewKeyboardCaptureFocused = false;
-    this.syncInputInterceptor();
+    this.syncInputCapture();
     this.syncTransferState();
     this.publishDataTransferChanged();
   }
@@ -6012,7 +5747,7 @@ struct RustDeskIndex {
         this.hideSoftKeyboard();
         this.showTransferWorkspace = true;
         this.previewKeyboardCaptureFocused = false;
-        this.syncInputInterceptor();
+        this.syncInputCapture();
       } else if (this.transferManager.hasFailed()) {
         this.failConnectionAttempt(this.transferManager.getStatusMessage());
       } else if (this.transferConnectionPending && this.connectionUiPhase === 'connecting') {
@@ -6707,10 +6442,24 @@ struct RustDeskIndex {
       : `本机显示已设为 ${this.selectedRefreshRate} Hz；当前协议不支持远端采集帧率`;
   }
 
-  private syncInputEnabled(enabled: boolean): void {
-    this.getInputController().setInputSuppressed(!enabled);
-    if (!enabled) {
-      this.remoteCursorVisible = false;
+  private syncInputEnabled(enabled: boolean): boolean {
+    const sessionId = this.activeSessionId;
+    try {
+      const response = this.nativeSessionBridge.setViewOnly(sessionId, !enabled);
+      this.adoptInputGeneration(response, sessionId);
+      if (!response.ok) {
+        this.errorText = response.message ?? '内核未接受输入开关';
+        return false;
+      }
+      this.clearLocalInputState();
+      this.getInputController().setInputSuppressed(!enabled);
+      if (!enabled) {
+        this.remoteCursorVisible = false;
+      }
+      return true;
+    } catch (_) {
+      this.errorText = '原生输入开关未返回有效回执';
+      return false;
     }
   }
 
@@ -7293,7 +7042,7 @@ struct RustDeskIndex {
     }
     this.showPreviewModal = true;
     this.syncRemoteSessionSharing();
-    this.syncInputInterceptor();
+    this.syncInputCapture();
     this.registerFoldHoverListeners();
     this.previewSurfaceVisible = false;
     this.previewSurfaceId = '';
@@ -7310,7 +7059,6 @@ struct RustDeskIndex {
       this.activeSessionId,
     );
     this.previewSurfaceVisible = true;
-    this.setSessionKeyboardEntered(true);
     await this.waitForPreviewSurfaceBinding(connectionGeneration);
     if (connectionGeneration !== undefined && connectionGeneration !== this.connectionGeneration) {
       return;
@@ -7417,9 +7165,11 @@ struct RustDeskIndex {
     // select a mode that silently sends nothing.
     const nextEnabled = mode !== 'off';
     if (this.inputEnabled !== nextEnabled) {
+      if (!this.syncInputEnabled(nextEnabled)) {
+        return;
+      }
       this.inputEnabled = nextEnabled;
       this.activeSessionDefaults.inputEnabled = nextEnabled;
-      this.syncInputEnabled(nextEnabled);
     }
     if (mode === 'off') {
       this.sessionMessage = '输入已关闭，远端仍可观看';
@@ -7750,28 +7500,37 @@ struct RustDeskIndex {
     hilog.info(DOMAIN, TAG, 'RelMouse debug [%{public}s] %{public}s', label, payload);
   }
 
-  private setSessionKeyboardEntered(enter: boolean): void {
-    if (!this.isRemoteControlSessionActive()) {
+  private clearLocalInputState(): void {
+    this.inputController?.discardInputState();
+    this.clearSoftKeyboardKeyState();
+    this.systemImeText = this.imeInputController.reset();
+  }
+
+  /** Retire only this id. Native's owed/pending counts are not a peer-delivery ACK. */
+  private releaseSessionInput(sessionId: string): void {
+    if (sessionId.length === 0) {
       return;
     }
-    const sessionId = this.activeSessionId;
-    if (enter) {
-      if (!sessionId || this.keyboardEnteredSessionId === sessionId) {
-        return;
-      }
-    } else if (!this.keyboardEnteredSessionId) {
-      return;
+    if (this.inputCaptureSessionId === sessionId) {
+      this.inputCaptureSessionId = '';
     }
-    const targetSessionId = enter ? sessionId : this.keyboardEnteredSessionId;
+    if (this.activeSessionId === sessionId) {
+      this.clearLocalInputState();
+    }
     try {
-      const response = this.parseResponse(native.sessionEnterOrLeave(targetSessionId, enter));
-      if (response.ok) {
-        this.keyboardEnteredSessionId = enter ? targetSessionId : '';
+      const response = this.parseResponse(native.sessionReleaseInput(sessionId));
+      this.adoptInputGeneration(response, sessionId);
+      this.logRelativeDebug('input_release',
+        `ok=${response.ok} pending=${String(response.release_pending)} owed=${String(response.releases_owed)} retired=${String(response.releases_retired)} unreleased=${String(response.releases_unreleased)}`);
+      if (this.activeSessionId === sessionId && !response.ok) {
+        this.errorText = response.message ?? '输入释放未获内核确认';
+      } else if (this.activeSessionId === sessionId && (response.releases_unreleased ?? 0) > 0) {
+        this.errorText = `仍有 ${String(response.releases_unreleased)} 个输入释放未确认`;
       }
-      this.logRelativeDebug('keyboard_enter',
-        `enter=${enter} ok=${response.ok} applied=${String(response.applied === true)} notSupported=${String(response.notSupported === true)} session=${targetSessionId} message=${String(response.message ?? '')}`);
-    } catch (error) {
-      this.logRelativeDebug('keyboard_enter', `enter=${enter} session=${targetSessionId} failed=${String(error)}`);
+    } catch (_) {
+      if (this.activeSessionId === sessionId) {
+        this.errorText = '原生输入释放未返回有效回执';
+      }
     }
   }
 
@@ -7786,37 +7545,39 @@ struct RustDeskIndex {
     return `${label}=actual(${this.remoteCursorLeft.toFixed(1)},${this.remoteCursorTop.toFixed(1)})`;
   }
 
-  private sendMousePayload(payload: RustDeskMousePayload): void {
-    if (!this.isInteractiveSessionActive()) {
-      return;
-    }
-    this.sendMousePayloadToSession(this.activeSessionId, payload, true);
+  private inputBindingIsCurrent(binding: RustDeskInputBinding): boolean {
+    const current = this.currentInputBinding();
+    return current !== undefined && current.sessionId === binding.sessionId
+      && current.inputGeneration === binding.inputGeneration;
   }
 
-  private sendMousePayloadToSession(
-    sessionId: string,
-    payload: RustDeskMousePayload,
-    reportFailure: boolean,
-  ): void {
-    if (sessionId.length === 0) {
-      return;
+  private handleInputReceipt(response: ActionResponse, binding: RustDeskInputBinding,
+    failure: string, reportFailure: boolean = true): boolean {
+    this.adoptInputGeneration(response, binding.sessionId);
+    if (response.ok !== true && reportFailure && this.activeSessionId === binding.sessionId) {
+      const tab = this.remoteSessionTabsController.get(binding.sessionId);
+      this.errorText = validInputGeneration(response.input_generation)
+        && this.activeSessionKind === 'remote_control' && tab?.peerVerified === false
+        ? '对端未验证，输入被引擎拒绝' : (response.message ?? failure);
     }
-    try {
-      const response = this.parseResponse(native.sessionSendMouse(
-        sessionId,
-        JSON.stringify(payload),
-        this.currentInputGeneration(),
-      ));
-      if (!response.ok && reportFailure && this.activeSessionId === sessionId) {
-        // A refusal names the generation the session is at now.
-        this.adoptInputGeneration(response);
-        this.errorText = response.message ?? 'Mouse input failed';
-      }
-    } catch (error) {
-      if (reportFailure && this.activeSessionId === sessionId) {
-        this.errorText = `Mouse input failed: ${String(error)}`;
-      }
+    // This is queue admission only, never a peer delivery acknowledgement.
+    return response.ok === true;
+  }
+
+  private sendMousePayloadToSession(binding: RustDeskInputBinding,
+    payload: RustDeskMousePayload, reportFailure: boolean): boolean {
+    if (!this.inputBindingIsCurrent(binding)) {
+      return false;
     }
+    const space = this.getCoordinateSpace();
+    const absolute = payload.type === undefined || payload.type === 'move'
+      || payload.type === 'down' || payload.type === 'up';
+    if (absolute && (payload.x !== undefined || payload.y !== undefined) && space === undefined) {
+      return false;
+    }
+    const response = sendNativeMouse(native, binding.sessionId, payload, binding.inputGeneration,
+      space?.remoteRect.left ?? 0, space?.remoteRect.top ?? 0);
+    return this.handleInputReceipt(response, binding, '鼠标输入未被接收', reportFailure);
   }
 
   private ensureRemoteCursorEnabled(force: boolean = false): void {
@@ -7945,64 +7706,50 @@ struct RustDeskIndex {
   }
 
   private sendKeyPayloadObject(payload: RustDeskKeyPayload): boolean {
-    if (!this.isInteractiveSessionActive()) {
+    return this.getInputController().sendKey(payload);
+  }
+
+  private sendLegacyKeyToEngine(payload: RustDeskKeyPayload, binding: RustDeskInputBinding): boolean {
+    if (!this.inputBindingIsCurrent(binding) || this.activeSessionKind === 'vnc') {
       return false;
     }
     try {
       const response = this.parseResponse(native.sessionInputKey(
-        this.activeSessionId,
-        JSON.stringify(payload),
-        this.currentInputGeneration(),
-      ));
-      // The key itself is never named here: a key name identifies a keystroke, and a
-      // sequence of them reconstructs what was typed, which can be a password.
-      this.logRelativeDebug('keyboard_send_legacy', `ok=${response.ok} down=${payload.down} press=${payload.press}`);
-      if (!response.ok) {
-        // A refusal names the generation the session is at now.
-        this.adoptInputGeneration(response);
-        this.errorText = response.message ?? 'Keyboard input failed';
-        return false;
-      }
-      return true;
-    } catch (error) {
-      this.errorText = `Keyboard input failed: ${String(error)}`;
+        binding.sessionId, JSON.stringify(payload), binding.inputGeneration));
+      this.logRelativeDebug('keyboard_send_legacy',
+        `queued=${response.ok === true} down=${payload.down} press=${payload.press}`);
+      return this.handleInputReceipt(response, binding, '键盘输入未被接收');
+    } catch (_) {
+      this.errorText = '原生键盘输入未返回有效回执';
       return false;
     }
   }
 
-  private sendFlutterKeyPayloadObject(payload: RustDeskFlutterKeyPayload): boolean {
-    if (!this.isRemoteControlSessionActive()) {
+  private sendKeysymToEngine(keysym: number, down: boolean, binding: RustDeskInputBinding): boolean {
+    if (!this.inputBindingIsCurrent(binding) || this.activeSessionKind !== 'vnc') {
       return false;
     }
-    if (payload.inputGeneration === undefined) {
-      // The mapper that built this payload is not bound to a session, so the value
-      // is captured here, at the moment the real event is sent. A payload that
-      // already names a generation keeps it: an older event is never rewritten onto
-      // the current generation.
-      const generation = this.currentInputGeneration();
-      if (generation === undefined) {
-        // Nothing has been adopted yet, so there is no real value to name. The event
-        // is refused here instead of being sent as 0 or without one; the next poll,
-        // or any input refusal, adopts the value the native side reports.
-        this.logRelativeDebug('keyboard_send_flutter', 'skipped: no adopted input generation yet');
-        return false;
-      }
-      payload.inputGeneration = generation;
+    try {
+      const response = this.parseResponse(native.sessionSendKeysym(
+        binding.sessionId, keysym, down, binding.inputGeneration));
+      this.logRelativeDebug('keyboard_send_keysym', `queued=${response.ok === true} down=${down}`);
+      return this.handleInputReceipt(response, binding, 'VNC 键盘输入未被接收');
+    } catch (_) {
+      this.errorText = '原生 VNC 键盘输入未返回有效回执';
+      return false;
+    }
+  }
+
+  private sendTextToEngine(text: string, binding: RustDeskInputBinding): boolean {
+    if (!this.inputBindingIsCurrent(binding) || this.activeSessionKind === 'vnc') {
+      return false;
     }
     try {
-      const response = this.parseResponse(native.sessionHandleFlutterKeyEvent(this.activeSessionId, JSON.stringify(payload)));
-      this.logRelativeDebug('keyboard_send_flutter', `ok=${response.ok} down=${payload.down_or_up}`);
-      if (!response.ok) {
-        // The refusal names the generation the session is at now; adopting it is how
-        // the next event is admitted. This event is not replayed.
-        this.adoptInputGeneration(response);
-        this.errorText = response.message ?? 'Flutter keyboard input failed';
-        return false;
-      }
-      return true;
-    } catch (error) {
-      this.errorText = `Flutter keyboard input failed: ${String(error)}`;
-      hilog.error(DOMAIN, TAG, 'sendFlutterKeyPayloadObject failed: %{public}s', String(error));
+      const response = this.nativeSessionBridge.inputString(
+        binding.sessionId, text, binding.inputGeneration);
+      return this.handleInputReceipt(response, binding, '输入法文本未被接收');
+    } catch (_) {
+      this.errorText = '原生文本输入未返回有效回执';
       return false;
     }
   }
@@ -8028,10 +7775,8 @@ struct RustDeskIndex {
       return false;
     }
     this.requestPreviewInputFocus();
-    if (this.inputInterceptorActive) {
-      // The native interceptor already owns this keystroke; forwarding it from
-      // ArkUI as well would send it twice.
-      return true;
+    if (!this.previewKeyboardCaptureFocused || this.systemImeActive) {
+      return false;
     }
     this.logRelativeDebug('keyboard_event', `type=${String(event.type)}`);
     return this.getInputController().handleKeyEvent(event);
@@ -8041,8 +7786,8 @@ struct RustDeskIndex {
     if (!this.isInteractiveSessionActive()) {
       return false;
     }
-    if (this.inputInterceptorActive) {
-      return true;
+    if (!this.previewKeyboardCaptureFocused || this.systemImeActive) {
+      return false;
     }
     this.logRelativeDebug('keyboard_root_event', `type=${String(event.type)}`);
     return this.getInputController().handleKeyEvent(event);
@@ -8439,7 +8184,7 @@ struct RustDeskIndex {
       }
       const authorized = this.previewSurfaceDestroyAuthorized;
       this.previewSurfaceDestroyAuthorized = false;
-      this.inputController?.releasePressedButtons();
+      this.releaseSessionInput(sessionId);
       if (!authorized) {
         // The native holder already revoked admission and requested this viewer's
         // close when its Surface was destroyed, and this bridge exports no destroy
@@ -8499,7 +8244,7 @@ struct RustDeskIndex {
       if (this.isInteractiveSessionActive()) {
         this.remoteInteractionReady = true;
         this.syncClipboardController();
-        this.syncInputInterceptor();
+        this.syncInputCapture();
       }
       if (refreshAfterBind) {
         this.requestVideoRefresh();
@@ -8553,45 +8298,53 @@ struct RustDeskIndex {
     }
   }
 
-  /**
-   * Adopts the engine input generation the viewer published in this poll.
-   *
-   * The viewer refuses input carrying a stale generation, so the value must come
-   * from the poll that just proved the session is alive on that generation; it is
-   * never derived from a local counter.
-   */
-  private adoptInputGeneration(response: ActionResponse): void {
-    // The owed-hold count travels with the same answers as the generation and is
-    // adopted whenever native names one: an absent value is unknown, never zero.
-    const holdsOwed = response.session?.inputHoldsOwed ?? response.inputHoldsOwed;
-    if (holdsOwed !== undefined) {
-      this.activeInputHoldsOwed = holdsOwed;
-    }
-    const generation = response.session?.inputGeneration ?? response.inputGeneration;
-    if (generation === undefined || generation.length === 0) {
+  /** Only the requested session's top-level numeric epoch is authoritative. */
+  private adoptInputGeneration(response: ActionResponse, sessionId: string): void {
+    if (sessionId.length === 0 || (response.session !== undefined && response.session.sessionId !== sessionId)) {
       return;
     }
-    this.activeInputGeneration = generation;
-    const tab = this.remoteSessionTabsController.get(this.activeSessionId);
+    const generation = response.input_generation;
+    if (!validInputGeneration(generation) || generation === undefined) {
+      return;
+    }
+    const tab = this.remoteSessionTabsController.get(sessionId);
+    const previous = tab?.inputGeneration
+      ?? (sessionId === this.activeSessionId ? this.activeInputGeneration : undefined);
+    if (previous !== undefined && generation < previous) {
+      return;
+    }
     if (tab !== undefined) {
       tab.inputGeneration = generation;
+      if (typeof response.peer_verified === 'boolean') {
+        tab.peerVerified = response.peer_verified;
+      }
+    }
+    if (sessionId !== this.activeSessionId) {
+      return;
+    }
+    if (generation !== this.activeInputGeneration) {
+      // Native owns retirement. Clear modifiers/pressed/gestures, never emit UP
+      // here and never re-send the refused event under this new generation.
+      this.clearLocalInputState();
+      this.activeInputGeneration = generation;
+    }
+    if (typeof response.keyboard_allowed === 'boolean') {
+      this.remoteKeyboardPermissionAllowed = response.keyboard_allowed;
+    }
+    const unreleased = response.releases_unreleased;
+    if (unreleased !== undefined && Number.isSafeInteger(unreleased) && unreleased >= 0) {
+      this.activeInputHoldsOwed = String(unreleased);
     }
   }
 
-  /**
-   * The generation to send with this session's input, or `undefined` while the
-   * session has not reported one yet.
-   *
-   * Every kind sends the value the native side itself published — a poll's
-   * `session.inputGeneration` or an input refusal's `inputGeneration` — because
-   * Main ruled that a cached older generation being refused after a permission
-   * flip is the correct boundary, not a lost event to be avoided by naming the
-   * call-time live generation. Nothing is ever derived locally: before the first
-   * native value the generation is simply not sent, and a refusal's value is
-   * adopted for the next (new) event; a refused event is never replayed.
-   */
-  private currentInputGeneration(): string | undefined {
-    return this.activeInputGeneration.length > 0 ? this.activeInputGeneration : undefined;
+  private currentInputBinding(): RustDeskInputBinding | undefined {
+    const generation = this.activeInputGeneration;
+    if (!this.inputEnabled || !this.shouldCaptureInput() || !validInputGeneration(generation)
+      || generation === undefined) {
+      return undefined;
+    }
+    this.inputCaptureSessionId = this.activeSessionId;
+    return { sessionId: this.activeSessionId, inputGeneration: generation };
   }
 
   private updateSessionState(response: ActionResponse): void {
@@ -8694,9 +8447,14 @@ struct RustDeskIndex {
     if (!this.activeSessionId) {
       return [];
     }
-    const response = this.parseResponse(native.sessionPollEvents(this.activeSessionId, limit));
+    const sessionId = this.activeSessionId;
+    const response = this.parseResponse(native.sessionPollEvents(sessionId, limit));
+    if (sessionId !== this.activeSessionId
+      || (response.session !== undefined && response.session.sessionId !== sessionId)) {
+      return [];
+    }
+    this.adoptInputGeneration(response, sessionId);
     this.updateSessionState(response);
-    this.adoptInputGeneration(response);
     const events = (response.events ?? []) as NativeEvent[];
     if (events.length > 0) {
       hilog.info(DOMAIN, TAG, 'pollSessionEventsOnce count=%{public}d phase=%{public}s', events.length, this.sessionPhase);
@@ -8724,8 +8482,12 @@ struct RustDeskIndex {
         if (tab.sessionId === this.activeSessionId) {
           const rawPoll = native.sessionPollEvents(tab.sessionId, 20);
           const response = this.parseResponse(rawPoll);
+          if (tab.sessionId !== this.activeSessionId
+            || (response.session !== undefined && response.session.sessionId !== tab.sessionId)) {
+            continue;
+          }
+          this.adoptInputGeneration(response, tab.sessionId);
           this.updateSessionState(response);
-          this.adoptInputGeneration(response);
           tab.coreSessionId = response.session?.coreSessionId ?? tab.coreSessionId;
           tab.phase = response.session?.phase ?? tab.phase;
           tab.connected = tab.phase === 'connected';
@@ -8774,7 +8536,7 @@ struct RustDeskIndex {
           this.pollBackgroundSessionEvents(tab);
         }
       }
-      this.pollInputInterceptorEvents();
+      this.syncInputCapture();
       if (this.isRemoteControlSessionActive()) {
         this.ensureRemoteCursorEnabled();
       }
@@ -8828,10 +8590,10 @@ struct RustDeskIndex {
 
   private pollBackgroundSessionEvents(tab: RemoteSessionTab): void {
     const response = this.parseResponse(native.sessionPollEvents(tab.sessionId, 20));
-    const backgroundGeneration = response.session?.inputGeneration ?? response.inputGeneration;
-    if (backgroundGeneration !== undefined && backgroundGeneration.length > 0) {
-      tab.inputGeneration = backgroundGeneration;
+    if (response.session !== undefined && response.session.sessionId !== tab.sessionId) {
+      return;
     }
+    this.adoptInputGeneration(response, tab.sessionId);
     if (response.session !== undefined) {
       tab.coreSessionId = response.session.coreSessionId ?? tab.coreSessionId;
       tab.phase = response.session.phase;
@@ -9611,6 +9373,7 @@ struct RustDeskIndex {
               }
             })
             .onBlur((): void => {
+              this.releaseSessionInput(this.systemImeSessionId);
               this.scheduleSystemImeDeactivate();
             })
             .onEditChange((isEditing: boolean): void => {
@@ -9669,14 +9432,16 @@ struct RustDeskIndex {
               ctrlActive: this.softKeyboardCtrlActive,
               shiftActive: this.softKeyboardShiftActive,
               commandActive: this.softKeyboardCommandActive,
-              onKey: (name: string, down: boolean): void => this.sendSoftKeyboardKey(
-                name,
-                down,
-                this.softKeyboardAltActive,
-                this.softKeyboardCtrlActive,
-                this.softKeyboardShiftActive,
-                this.softKeyboardCommandActive,
-              ),
+              onKey: (name: string, down: boolean): void => {
+                this.sendSoftKeyboardKey(
+                  name,
+                  down,
+                  this.softKeyboardAltActive,
+                  this.softKeyboardCtrlActive,
+                  this.softKeyboardShiftActive,
+                  this.softKeyboardCommandActive,
+                );
+              },
               onMoveDock: (): void => this.moveSoftKeyboardToOtherEdge(),
               onCollapse: (): void => this.toggleSoftKeyboard(),
               onKeyboardMoveStart: (): void => this.startSoftKeyboardDrag(),
@@ -10518,6 +10283,7 @@ struct RustDeskIndex {
       bottomAvoidInset: this.windowBottomAvoidInset,
       wideLayout: this.isWideMainLayout(),
       onStart: () => void controlledHostCoordinator.start(),
+      onStartWithInput: () => void controlledHostCoordinator.startWithInput(),
       onStop: () => void controlledHostCoordinator.stop('已由用户停止被看服务'),
       onAccept: (requestId: string, peerId: string) => controlledHostCoordinator.acceptIncoming(requestId, peerId),
       onReject: (requestId: string, peerId: string) => controlledHostCoordinator.rejectIncoming(requestId, peerId),

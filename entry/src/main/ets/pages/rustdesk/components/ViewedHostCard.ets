@@ -12,6 +12,7 @@ export interface ViewedHostCardProps {
   state: ControlledHostState;
   surfaceWidth: number;
   onStart: () => void;
+  onStartWithInput: () => void;
   onStop: () => void;
   onAccept: (requestId: string, peerId: string) => void;
   onReject: (requestId: string, peerId: string) => void;
@@ -26,6 +27,7 @@ export struct ViewedHostCard {
   @Local passwordDisplayText: string = '等待生成';
   @Local passwordRevealGeneration: number = 0;
   @Event onStart: () => void = () => {};
+  @Event onStartWithInput: () => void = () => {};
   @Event onStop: () => void = () => {};
   @Event onAccept: (requestId: string, peerId: string) => void = (_requestId: string, _peerId: string) => {};
   @Event onReject: (requestId: string, peerId: string) => void = (_requestId: string, _peerId: string) => {};
@@ -54,7 +56,8 @@ export struct ViewedHostCard {
 
   private running(): boolean {
     return this.state.phase === 'starting' || this.state.phase === 'ready' || this.state.phase === 'incoming' ||
-      this.state.phase === 'active' || this.state.phase === 'stopping';
+      this.state.phase === 'active' || this.state.phase === 'stopping' || this.state.inputEnabled ||
+      this.state.teardownUnconfirmed.length > 0;
   }
 
   private actionWidth(): number {
@@ -253,6 +256,13 @@ export struct ViewedHostCard {
   @Builder
   private ServiceSection() {
     Column({ space: 8 }) {
+      if (this.state.statusText.length > 0 && this.state.statusText !== this.state.lastError) {
+        Text(this.state.statusText)
+          .width('100%')
+          .fontSize(12)
+          .lineHeight(18)
+          .fontColor($r('app.color.neu_text_secondary'));
+      }
       if (this.state.incoming !== undefined) {
         if (this.state.incomingResolving) {
           LuminousButton({
@@ -265,14 +275,35 @@ export struct ViewedHostCard {
         } else {
           this.IncomingConsentActions(this.state.incoming.requestId, this.state.incoming.peerId);
         }
-      } else {
+      }
+      LuminousButton({
+        label: this.running() ? '停止服务端' : '启动仅观看服务',
+        controlWidth: this.fullActionWidth(),
+        controlSizeMode: LuminousControlSize.Compact,
+        tone: this.running() ? LuminousTone.Danger : LuminousTone.Accent,
+        onAction: () => this.running() ? this.onStop() : this.onStart(),
+      });
+      if (!this.running()) {
         LuminousButton({
-          label: this.running() ? '停止服务端' : '启动服务端',
+          label: '授权并启用远程控制',
           controlWidth: this.fullActionWidth(),
           controlSizeMode: LuminousControlSize.Compact,
-          tone: this.running() ? LuminousTone.Danger : LuminousTone.Accent,
-          onAction: () => this.running() ? this.onStop() : this.onStart(),
+          tone: LuminousTone.Accent,
+          onAction: () => this.onStartWithInput(),
         });
+      } else if (!this.state.inputEnabled && this.state.phase !== 'starting' && this.state.phase !== 'stopping') {
+        Text('仅观看；停止服务后可授权远程控制')
+          .width('100%')
+          .fontSize(12)
+          .lineHeight(18)
+          .fontColor($r('app.color.neu_text_secondary'));
+      }
+      if (this.state.inputAuthorizationError.length > 0) {
+        Text(this.state.inputAuthorizationError)
+          .width('100%')
+          .fontSize(12)
+          .lineHeight(18)
+          .fontColor($r('app.color.error'));
       }
       if (this.state.lastError.length > 0) {
         Text(this.state.lastError)
@@ -291,7 +322,8 @@ export struct ViewedHostCard {
   private IncomingConsentActions(requestId: string, peerId: string) {
           Row({ space: 12 }) {
             LuminousButton({
-              label: '同意观看',
+              label: this.state.inputEnabled && this.state.inputAuthorization === 'authorized'
+                ? '同意远程控制' : '同意观看',
               controlWidth: this.actionWidth(),
               controlSizeMode: LuminousControlSize.Regular,
               tone: LuminousTone.Accent,

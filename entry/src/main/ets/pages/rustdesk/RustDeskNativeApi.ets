@@ -1,7 +1,4 @@
 import {
-  inputInterceptorPollEvents as bridgeInputInterceptorPollEvents,
-  inputInterceptorStart as bridgeInputInterceptorStart,
-  inputInterceptorStop as bridgeInputInterceptorStop,
   nativeVersion as bridgeNativeVersion,
   runtimeGetDecoderCapabilities as bridgeRuntimeGetDecoderCapabilities,
   runtimeGetServerConfig as bridgeRuntimeGetServerConfig,
@@ -19,7 +16,6 @@ import {
   sessionCancelJob as bridgeSessionCancelJob,
   sessionChangeResolution as bridgeSessionChangeResolution,
   sessionClose as bridgeSessionClose,
-  sessionEnterOrLeave as bridgeSessionEnterOrLeave,
   sessionGetClipboardFileState as bridgeSessionGetClipboardFileState,
   sessionGetConnToken as bridgeSessionGetConnToken,
   sessionHasConnToken as bridgeSessionHasConnToken,
@@ -28,9 +24,10 @@ import {
   sessionGetImageQuality as bridgeSessionGetImageQuality,
   sessionGetRemoteAudioState as bridgeSessionGetRemoteAudioState,
   sessionGetToggleOption as bridgeSessionGetToggleOption,
-  sessionHandleFlutterKeyEvent as bridgeSessionHandleFlutterKeyEvent,
   sessionInputKey as bridgeSessionInputKey,
   sessionInputString as bridgeSessionInputString,
+  sessionReleaseInput as bridgeSessionReleaseInput,
+  sessionSendKeysym as bridgeSessionSendKeysym,
   sessionLogin as bridgeSessionLogin,
   sessionOnWaitingForImageDialogShow as bridgeSessionOnWaitingForImageDialogShow,
   sessionPollEvents as bridgeSessionPollEvents,
@@ -64,20 +61,9 @@ import {
   xcomponentDetach as bridgeXcomponentDetach,
   xcomponentSetFrameRateRangeNative as bridgeXcomponentSetFrameRateRangeNative,
 } from 'rustdesk-ohrs';
+import { RustDeskMouseSink } from './RustDeskMouseTransport';
 
-export class RustDeskNativeApi {
-  inputInterceptorPollEvents(limit: number): string {
-    return bridgeInputInterceptorPollEvents(limit);
-  }
-
-  inputInterceptorStart(): string {
-    return bridgeInputInterceptorStart();
-  }
-
-  inputInterceptorStop(): string {
-    return bridgeInputInterceptorStop();
-  }
-
+export class RustDeskNativeApi implements RustDeskMouseSink {
   nativeVersion(): string {
     return bridgeNativeVersion();
   }
@@ -148,10 +134,6 @@ export class RustDeskNativeApi {
     return bridgeSessionClose(sessionId);
   }
 
-  sessionEnterOrLeave(sessionId: string, enter: boolean): string {
-    return bridgeSessionEnterOrLeave(sessionId, enter);
-  }
-
   sessionGetClipboardFileState(sessionId: string): string {
     return bridgeSessionGetClipboardFileState(sessionId);
   }
@@ -184,16 +166,20 @@ export class RustDeskNativeApi {
     return bridgeSessionGetToggleOption(sessionId, option);
   }
 
-  sessionHandleFlutterKeyEvent(sessionId: string, keyJson: string): string {
-    return bridgeSessionHandleFlutterKeyEvent(sessionId, keyJson);
-  }
-
-  sessionInputKey(sessionId: string, keyJson: string, inputGeneration?: string): string {
+  sessionInputKey(sessionId: string, keyJson: string, inputGeneration: number): string {
     return bridgeSessionInputKey(sessionId, keyJson, inputGeneration);
   }
 
-  sessionInputString(sessionId: string, value: string, inputGeneration?: string): string {
+  sessionInputString(sessionId: string, value: string, inputGeneration: number): string {
     return bridgeSessionInputString(sessionId, value, inputGeneration);
+  }
+
+  sessionSendKeysym(sessionId: string, keysym: number, down: boolean, inputGeneration: number): string {
+    return bridgeSessionSendKeysym(sessionId, keysym, down, inputGeneration);
+  }
+
+  sessionReleaseInput(sessionId: string): string {
+    return bridgeSessionReleaseInput(sessionId);
   }
 
   sessionLogin(sessionId: string, loginJson: string): string {
@@ -237,7 +223,7 @@ export class RustDeskNativeApi {
     return bridgeSessionSendFiles(sessionId, actId, path, to, fileNum, includeHidden, isRemote, isDir);
   }
 
-  sessionSendMouse(sessionId: string, mouseJson: string, inputGeneration?: string): string {
+  sessionSendMouse(sessionId: string, mouseJson: string, inputGeneration: number): string {
     return bridgeSessionSendMouse(sessionId, mouseJson, inputGeneration);
   }
 

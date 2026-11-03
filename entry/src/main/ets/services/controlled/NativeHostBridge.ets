@@ -1,6 +1,9 @@
 import {
   controlledIncomingPoll,
   controlledIncomingResolve,
+  controlledInputAuthorizationCancel,
+  controlledInputAuthorizationRequest,
+  controlledInputAuthorizationStatus,
   controlledPasswordGet,
   controlledPasswordRefresh,
   controlledPasswordSetPermanent,
@@ -53,6 +56,21 @@ export class NativeHostBridge {
 
   status(): string {
     return controlledServerGetStatus();
+  }
+
+  /** Only an explicit foreground user action may call this; no retries. */
+  requestInputAuthorization(): string {
+    return controlledInputAuthorizationRequest();
+  }
+
+  /** A fact-only query; `ok` is not a grant and this opens no system dialog. */
+  inputAuthorizationStatus(): string {
+    return controlledInputAuthorizationStatus();
+  }
+
+  /** Cancels only this not-yet-host-owned request; never a run or a newer request. */
+  cancelInputAuthorization(requestId: string): string {
+    return controlledInputAuthorizationCancel(requestId);
   }
 
   pollIncoming(limit: number): string {

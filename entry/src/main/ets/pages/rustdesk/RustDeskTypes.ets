@@ -17,12 +17,7 @@ export interface SessionSnapshot {
   lastError?: string;
   /** Opaque native lifecycle epoch; bind/ACK must echo the value the native side issued. */
   lifecycleEpoch?: string;
-  /**
-   * The generation this session's viewer published, a decimal string.
-   *
-   * A RustDesk session's input authority lives in Core and its callers may omit
-   * the generation; a VNC/RDP session is only admitted with this exact one.
-   */
+  /** Display-only legacy snapshot value. Input uses the envelope's numeric input_generation. */
   inputGeneration?: string;
   /** Which wire this session really is: `rustdesk`, `vnc` or `rdp`. */
   kind?: string;
@@ -83,13 +78,17 @@ export interface ActionResponse {
   held?: boolean;
   /** Surface destroy report: it belonged to another epoch or Surface, nothing changed. */
   stale?: boolean;
-  /**
-   * The generation the session is at now, named by a refused input call.
-   *
-   * It is the epoch a caller needs to retire input state kept for a boundary
-   * that has gone; it is not a receipt that the event was delivered.
-   */
-  inputGeneration?: string;
+  /** Native input epoch, required on every send; queue admission is not delivery. */
+  input_generation?: number;
+  peer_verified?: boolean;
+  keyboard_allowed?: boolean;
+  authenticated?: boolean;
+  view_only?: boolean;
+  admission_revoked?: boolean;
+  releases_owed?: number;
+  releases_retired?: number;
+  releases_unreleased?: number;
+  release_pending?: boolean;
   /**
    * Poll: the session was closed outside this bridge (a privacy revocation closes
    * a VNC/RDP wire underneath the UI). A `close` event accompanies it.
@@ -116,8 +115,6 @@ export interface ActionResponse {
   queued?: boolean;
   /** Refresh: a real request reached the direct session task. */
   requested?: boolean;
-  /** `sessionEnterOrLeave`: this build applies nothing, so this is informational. */
-  notSupported?: boolean;
   /** `sessionSetCommon`: the Core does not act on that key, so it was refused by name. */
   unsupported?: boolean;
   /**

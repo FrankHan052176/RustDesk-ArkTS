@@ -1,6 +1,19 @@
 export type ControlledHostPhase = 'disabled' | 'starting' | 'ready' | 'incoming' | 'active' | 'stopping' |
   'failed';
 export type ControlledPasswordMode = 'use-temporary-password' | 'use-permanent-password' | 'use-both-passwords';
+export type ControlledInputAuthorizationStatus = 'unauthorized' | 'authorizing' | 'authorized' | 'unsupported' |
+  'failed';
+
+/** `ok` reports a query/request result, never permission to inject. */
+export interface ControlledInputAuthorizationPayload {
+  ok: boolean;
+  action: string;
+  resultCode: number;
+  /** Opaque authorization-owner token; never a run epoch or input generation. */
+  requestId: string;
+  status: ControlledInputAuthorizationStatus;
+  message: string;
+}
 
 export const PASSWORD_MODE_TEMPORARY: ControlledPasswordMode = 'use-temporary-password';
 export const PASSWORD_MODE_PERMANENT: ControlledPasswordMode = 'use-permanent-password';
@@ -71,6 +84,12 @@ export class ControlledHostState {
   @Trace approveModeScoped: boolean = false;
   /** Whether the Core option forwards this device's audio. */
   @Trace audioEnabled: boolean = true;
+  /** The native run's actual input capability, never a requested setting. */
+  @Trace inputEnabled: boolean = false;
+  /** Last observed OS fact; every start queries it again. Not a saved preference. */
+  @Trace inputAuthorization: ControlledInputAuthorizationStatus = 'unauthorized';
+  /** A token can be retired even when OS dialog/authorization cancellation is unconfirmed. */
+  @Trace inputAuthorizationError: string = '';
   @Trace runningInBackground: boolean = false;
 }
 
@@ -135,6 +154,8 @@ export interface ControlledPasswordPayload extends ControlledNativeActionPayload
 
 export interface ControlledServerStatusPayload extends ControlledNativeActionPayload {
   serverRunning?: boolean;
+  inputEnabled?: boolean;
+  inputAuthorization?: ControlledInputAuthorizationStatus;
   /** The device id; absent from the credential-free stop answers. */
   myId?: string;
   /** The temporary password; absent from the credential-free stop answers. */

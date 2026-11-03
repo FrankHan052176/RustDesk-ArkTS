@@ -6,7 +6,7 @@ import {
 } from '../../../main/ets/pages/rustdesk/RustDeskInputController';
 import {
   RustDeskCoordinateSpace,
-  RustDeskFlutterKeyPayload,
+  RustDeskInputBinding,
   RustDeskKeyPayload,
   RustDeskMousePayload,
   RustDeskRect,
@@ -14,11 +14,9 @@ import {
 } from '../../../main/ets/pages/rustdesk/RustDeskInputMapper';
 import { RustDeskRightClickGesture } from '../../../main/ets/pages/rustdesk/RustDeskDirectoryTypes';
 
-/** The key codes these cases drive, as the mapper names them. */
 const KEYCODE_A = 2017;
 const KEYCODE_SHIFT = 2047;
 
-/** A hardware key event, built field by field because ArkUI owns the real one. */
 class TestKeyEvent implements KeyEvent {
   type: KeyType = KeyType.Down;
   keyCode: number = 0;
@@ -38,7 +36,6 @@ function keyEvent(keyCode: number, down: boolean): TestKeyEvent {
   return event;
 }
 
-/** The target every synthetic event carries; only its presence is read. */
 class TestEventTarget implements EventTarget {
   area: Area = {
     width: 0,
@@ -48,7 +45,6 @@ class TestEventTarget implements EventTarget {
   };
 }
 
-/** One touch point, built field by field because ArkUI owns the real one. */
 class TestTouchObject implements TouchObject {
   type: TouchType = TouchType.Down;
   id: number = 0;
@@ -102,12 +98,6 @@ class TestMouseEvent implements MouseEvent {
   sourceTool: SourceTool = SourceTool.MOUSE;
 }
 
-/**
- * One touch delivery from `sourceTool`, with a single point.
- *
- * An Up or Cancel carries the lifted point in `changedTouches` only, which is how
- * ArkUI reports it: `touches` holds the points still down.
- */
 function touchEvent(sourceTool: SourceTool, type: TouchType, x: number, y: number): TouchEvent {
   const event = new TestTouchEvent();
   event.sourceTool = sourceTool;
@@ -117,14 +107,12 @@ function touchEvent(sourceTool: SourceTool, type: TouchType, x: number, y: numbe
   touch.x = x;
   touch.y = y;
   event.changedTouches = [touch];
-  event.touches = [];
   if (type !== TouchType.Up && type !== TouchType.Cancel) {
     event.touches = [touch];
   }
   return event;
 }
 
-/** An injected pointer: it arrives as a touch event, not through `onMouse`. */
 function pointerTouch(type: TouchType, x: number, y: number): TouchEvent {
   return touchEvent(SourceTool.MOUSE, type, x, y);
 }
@@ -141,27 +129,57 @@ function mouseEvent(action: MouseAction, x: number, y: number): MouseEvent {
   return event;
 }
 
-/** A space whose presented picture fills the pane: 800x600 for a 1600x1200 peer. */
 function spaceFor(viewWidth: number, viewHeight: number, remoteWidth: number, remoteHeight: number): RustDeskCoordinateSpace {
   return resolveCoordinateSpace(viewWidth, viewHeight, new RustDeskRect(0, 0, remoteWidth, remoteHeight), 0);
 }
 
-/** What the controller emitted, and what the peer accepted. */
+class KeysymRecord {
+  keysym: number;
+  down: boolean;
+  sessionId: string;
+  generation: number;
+
+  constructor(keysym: number, down: boolean, binding: RustDeskInputBinding) {
+    this.keysym = keysym;
+    this.down = down;
+    this.sessionId = binding.sessionId;
+    this.generation = binding.inputGeneration;
+  }
+}
+
+/** Synthetic native receipts, not peer-delivery or runtime interop evidence. */
 class InputRecord {
   keys: RustDeskKeyPayload[] = [];
-  flutterKeys: RustDeskFlutterKeyPayload[] = [];
+  keyBindings: RustDeskInputBinding[] = [];
+  keyAttempts: number = 0;
+  keysyms: KeysymRecord[] = [];
+  texts: string[] = [];
   mouse: RustDeskMousePayload[] = [];
+  releases: string[] = [];
+  errors: string[] = [];
   space: RustDeskCoordinateSpace | undefined = undefined;
-  /** A false answer stands for a native refusal, so nothing was admitted. */
+  binding: RustDeskInputBinding | undefined = { sessionId: 'session-a', inputGeneration: 7 };
   acceptKeySend: boolean = true;
-  /** Whether the session takes the Core's raw key route instead of the legacy one. */
-  rawRoute: boolean = false;
+  acceptMouseSend: boolean = true;
+  vnc: boolean = false;
+  rejectKeysymAt: number = -1;
+  /** A fixture-supplied native refusal/release generation, never a UI counter. */
+  refusalGeneration: number | undefined = undefined;
+  releaseGeneration: number | undefined = undefined;
+}
+
+function adoptFixtureGeneration(record: InputRecord, generation: number | undefined): void {
+  const previous = record.binding;
+  if (generation !== undefined && previous !== undefined) {
+    record.binding = { sessionId: previous.sessionId, inputGeneration: generation };
+  }
 }
 
 function callbacksFor(record: InputRecord): RustDeskInputControllerCallbacks {
   return {
     isSessionActive: (): boolean => true,
-    usesCoreRawKeyRoute: (): boolean => record.rawRoute,
+    getInputBinding: (): RustDeskInputBinding | undefined => record.binding,
+    usesVncKeysym: (): boolean => record.vnc,
     isMouseMode: (): boolean => true,
     isPeerMacOS: (): boolean => false,
     isPeerAndroid: (): boolean => false,
@@ -170,20 +188,42 @@ function callbacksFor(record: InputRecord): RustDeskInputControllerCallbacks {
     gesturesEnabled: (): boolean => false,
     rightClickGesture: (): RustDeskRightClickGesture => 'two_finger_tap',
     getCoordinateSpace: (): RustDeskCoordinateSpace | undefined => record.space,
-    sendMouse: (payload: RustDeskMousePayload): void => {
+    sendMouse: (payload: RustDeskMousePayload, _binding: RustDeskInputBinding): boolean => {
       record.mouse.push(payload);
+      if (!record.acceptMouseSend) {
+        adoptFixtureGeneration(record, record.refusalGeneration);
+      }
+      return record.acceptMouseSend;
     },
-    sendFlutterKey: (payload: RustDeskFlutterKeyPayload): boolean => {
-      record.flutterKeys.push(payload);
-      return true;
-    },
-    sendKey: (payload: RustDeskKeyPayload): boolean => {
+    sendKey: (payload: RustDeskKeyPayload, binding: RustDeskInputBinding): boolean => {
+      record.keyAttempts++;
+      record.keyBindings.push(binding);
       if (!record.acceptKeySend) {
+        adoptFixtureGeneration(record, record.refusalGeneration);
         return false;
       }
       record.keys.push(payload);
       return true;
     },
+    sendKeysym: (keysym: number, down: boolean, binding: RustDeskInputBinding): boolean => {
+      record.keysyms.push(new KeysymRecord(keysym, down, binding));
+      const admitted = record.keysyms.length !== record.rejectKeysymAt;
+      if (!admitted) {
+        adoptFixtureGeneration(record, record.refusalGeneration);
+      }
+      return admitted;
+    },
+    sendText: (text: string, _binding: RustDeskInputBinding): boolean => {
+      record.texts.push(text);
+      return true;
+    },
+    releaseInput: (sessionId: string): void => {
+      record.releases.push(sessionId);
+      if (record.binding?.sessionId === sessionId) {
+        adoptFixtureGeneration(record, record.releaseGeneration);
+      }
+    },
+    reportInputError: (message: string): void => { record.errors.push(message); },
     log: (_label: string, _payload: string): void => {},
     remoteCursorDebugText: (): string => '',
     overlayCursorDebugText: (_label: string): string => '',
@@ -200,113 +240,199 @@ function callbacksFor(record: InputRecord): RustDeskInputControllerCallbacks {
 
 export default function rustDeskInputControllerTest(): void {
   describe('RustDeskInputControllerTest', () => {
-    it('releases a direct hardware key hold when input is turned off', 0, () => {
+    it('retires a RustDesk hardware hold on focus loss instead of synthesizing UP', 0, () => {
       const record = new InputRecord();
+      record.releaseGeneration = 8;
       const controller = new RustDeskInputController(callbacksFor(record));
-
       expect(controller.handleKeyEvent(keyEvent(KEYCODE_A, true))).assertTrue();
-      expect(record.keys.length).assertEqual(1);
       expect(record.keys[0].name).assertEqual('a');
-      expect(record.keys[0].down).assertTrue();
+      expect(record.keyBindings[0].inputGeneration).assertEqual(7);
 
       controller.setInputSuppressed(true);
-      expect(record.keys.length).assertEqual(2);
-      expect(record.keys[1].name).assertEqual('a');
-      expect(record.keys[1].down).assertFalse();
-
-      // The key-up that follows is refused by the gate, so the hold cannot be
-      // released twice and cannot be released later.
+      expect(record.releases.length).assertEqual(1);
+      expect(record.releases[0]).assertEqual('session-a');
+      expect(record.keys.length).assertEqual(1);
       expect(controller.handleKeyEvent(keyEvent(KEYCODE_A, false))).assertFalse();
-      expect(record.keys.length).assertEqual(2);
+      controller.setInputSuppressed(false);
+      // The old physical UP belongs to the retired hold, not the new epoch.
+      expect(controller.handleKeyEvent(keyEvent(KEYCODE_A, false))).assertFalse();
+      expect(record.keys.length).assertEqual(1);
     });
 
-    it('releases a held modifier and forgets its state', 0, () => {
+    it('forgets held modifiers locally after native retirement', 0, () => {
       const record = new InputRecord();
+      record.releaseGeneration = 8;
       const controller = new RustDeskInputController(callbacksFor(record));
-
       expect(controller.handleKeyEvent(keyEvent(KEYCODE_SHIFT, true))).assertTrue();
-      expect(record.keys.length).assertEqual(1);
-      expect(record.keys[0].name).assertEqual('VK_SHIFT');
-      expect(record.keys[0].down).assertTrue();
-
       controller.setInputSuppressed(true);
-      expect(record.keys.length).assertEqual(2);
-      expect(record.keys[1].name).assertEqual('VK_SHIFT');
-      expect(record.keys[1].down).assertFalse();
-
-      // A key pressed after input comes back carries no modifier the release
-      // already took back.
       controller.setInputSuppressed(false);
       expect(controller.handleKeyEvent(keyEvent(KEYCODE_A, true))).assertTrue();
-      expect(record.keys.length).assertEqual(3);
-      expect(record.keys[2].name).assertEqual('a');
-      expect(record.keys[2].shift).assertFalse();
-    });
-
-    it('does not release a key the peer never accepted', 0, () => {
-      const record = new InputRecord();
-      const controller = new RustDeskInputController(callbacksFor(record));
-      record.acceptKeySend = false;
-
-      expect(controller.handleKeyEvent(keyEvent(KEYCODE_A, true))).assertFalse();
-      expect(record.keys.length).assertEqual(0);
-      record.acceptKeySend = true;
-
-      controller.setInputSuppressed(true);
-      expect(record.keys.length).assertEqual(0);
-    });
-
-    it('owes one release however many downs were sent', 0, () => {
-      const record = new InputRecord();
-      const controller = new RustDeskInputController(callbacksFor(record));
-
-      expect(controller.handleKeyEvent(keyEvent(KEYCODE_A, true))).assertTrue();
-      expect(controller.handleKeyEvent(keyEvent(KEYCODE_A, true))).assertTrue();
       expect(record.keys.length).assertEqual(2);
-
-      controller.setInputSuppressed(true);
-      expect(record.keys.length).assertEqual(3);
-      expect(record.keys[2].name).assertEqual('a');
-      expect(record.keys[2].down).assertFalse();
+      expect(record.keys[1].shift).assertFalse();
+      expect(record.keyBindings[1].inputGeneration).assertEqual(8);
     });
 
-    it('owes nothing for a key whose own up was sent', 0, () => {
+    it('retires repeated hardware downs through one native release', 0, () => {
       const record = new InputRecord();
       const controller = new RustDeskInputController(callbacksFor(record));
-
       expect(controller.handleKeyEvent(keyEvent(KEYCODE_A, true))).assertTrue();
-      expect(controller.handleKeyEvent(keyEvent(KEYCODE_A, false))).assertTrue();
+      expect(controller.handleKeyEvent(keyEvent(KEYCODE_A, true))).assertTrue();
+      controller.setInputSuppressed(true);
+      controller.setInputSuppressed(true);
       expect(record.keys.length).assertEqual(2);
+      expect(record.releases.length).assertEqual(1);
+    });
+
+    it('does not synthesize another UP after the keys own UP was admitted', 0, () => {
+      const record = new InputRecord();
+      const controller = new RustDeskInputController(callbacksFor(record));
+      expect(controller.handleKeyEvent(keyEvent(KEYCODE_SHIFT, true))).assertTrue();
+      expect(controller.handleKeyEvent(keyEvent(KEYCODE_SHIFT, false))).assertTrue();
       expect(record.keys[1].down).assertFalse();
-
+      expect(record.keys[1].shift).assertFalse();
       controller.setInputSuppressed(true);
       expect(record.keys.length).assertEqual(2);
     });
 
-    it('leaves the Core raw key route owned by the interceptor', 0, () => {
+    it('does not send without a numeric native generation', 0, () => {
       const record = new InputRecord();
-      record.rawRoute = true;
+      record.binding = undefined;
+      record.space = spaceFor(800, 600, 1600, 1200);
       const controller = new RustDeskInputController(callbacksFor(record));
+      expect(controller.handleKeyEvent(keyEvent(KEYCODE_A, true))).assertFalse();
+      expect(controller.sendText('a')).assertFalse();
+      controller.handleMouseEvent(mouseEvent(MouseAction.Move, 100, 100));
+      expect(record.keyAttempts).assertEqual(0);
+      expect(record.mouse.length).assertEqual(0);
+      expect(record.texts.length).assertEqual(0);
+    });
 
+    it('adopts a refusal only for the next event, with no legacy retry', 0, () => {
+      const record = new InputRecord();
+      record.acceptKeySend = false;
+      record.refusalGeneration = 9;
+      const controller = new RustDeskInputController(callbacksFor(record));
+      expect(controller.handleKeyEvent(keyEvent(KEYCODE_A, true))).assertFalse();
+      expect(record.keyAttempts).assertEqual(1);
+      expect(record.keyBindings[0].inputGeneration).assertEqual(7);
+      record.acceptKeySend = true;
       expect(controller.handleKeyEvent(keyEvent(KEYCODE_A, true))).assertTrue();
-      expect(record.flutterKeys.length).assertEqual(1);
-      expect(record.keys.length).assertEqual(0);
+      expect(record.keyAttempts).assertEqual(2);
+      expect(record.keyBindings[1].inputGeneration).assertEqual(9);
+    });
 
-      controller.setInputSuppressed(true);
+    it('does not send insertion after an IME backspace was refused', 0, () => {
+      const record = new InputRecord();
+      record.acceptKeySend = false;
+      record.refusalGeneration = 9;
+      const controller = new RustDeskInputController(callbacksFor(record));
+      expect(controller.sendImeDelta(3, 'new')).assertFalse();
+      expect(record.keyAttempts).assertEqual(1);
+      expect(record.texts.length).assertEqual(0);
+    });
+
+    it('releases the original session even after active callbacks point to another tab', 0, () => {
+      const record = new InputRecord();
+      const controller = new RustDeskInputController(callbacksFor(record));
+      expect(controller.handleKeyEvent(keyEvent(KEYCODE_A, true))).assertTrue();
+      record.binding = { sessionId: 'session-b', inputGeneration: 2 };
+      controller.reset();
+      expect(record.releases.length).assertEqual(1);
+      expect(record.releases[0]).assertEqual('session-a');
+      expect(record.keys.length).assertEqual(1);
+    });
+
+    it('reuses the exact physical VNC keysym on UP', 0, () => {
+      const record = new InputRecord();
+      record.vnc = true;
+      const controller = new RustDeskInputController(callbacksFor(record));
+      expect(controller.handleKeyEvent(keyEvent(2119, true))).assertTrue();
+      const up = keyEvent(2119, false);
+      up.keyText = 'different';
+      expect(controller.handleKeyEvent(up)).assertTrue();
+      expect(record.keysyms.length).assertEqual(2);
+      expect(record.keysyms[0].keysym).assertEqual(0xFF8D);
+      expect(record.keysyms[1].keysym).assertEqual(0xFF8D);
+      expect(record.keysyms[0].down).assertTrue();
+      expect(record.keysyms[1].down).assertFalse();
       expect(record.keys.length).assertEqual(0);
-      expect(record.flutterKeys.length).assertEqual(1);
+    });
+
+    it('sends VNC Latin-1, CJK and supplementary characters as code-point pairs', 0, () => {
+      const record = new InputRecord();
+      record.vnc = true;
+      const controller = new RustDeskInputController(callbacksFor(record));
+      expect(controller.sendText('é中😀')).assertTrue();
+      expect(record.keysyms.length).assertEqual(6);
+      expect(record.keysyms[0].keysym).assertEqual(0xE9);
+      expect(record.keysyms[2].keysym).assertEqual(0x01004E2D);
+      expect(record.keysyms[4].keysym).assertEqual(0x0101F600);
+      for (let index = 0; index < record.keysyms.length; index += 2) {
+        expect(record.keysyms[index].down).assertTrue();
+        expect(record.keysyms[index + 1].down).assertFalse();
+        expect(record.keysyms[index].keysym).assertEqual(record.keysyms[index + 1].keysym);
+        expect(record.keysyms[index + 1].generation).assertEqual(7);
+      }
+      expect(record.texts.length).assertEqual(0);
+    });
+
+    it('retires once when a VNC text DOWN queued but its UP was refused', 0, () => {
+      const record = new InputRecord();
+      record.vnc = true;
+      record.rejectKeysymAt = 2;
+      record.refusalGeneration = 9;
+      record.releaseGeneration = 10;
+      const controller = new RustDeskInputController(callbacksFor(record));
+      expect(controller.sendText('ab')).assertFalse();
+      expect(record.keysyms.length).assertEqual(2);
+      expect(record.keysyms[0].generation).assertEqual(7);
+      expect(record.keysyms[1].generation).assertEqual(7);
+      expect(record.releases.length).assertEqual(1);
+      expect(record.releases[0]).assertEqual('session-a');
+      expect(record.binding?.inputGeneration).assertEqual(10);
+      // Only a separately requested event may use the release receipt's epoch.
+      expect(controller.sendText('c')).assertTrue();
+      expect(record.keysyms.length).assertEqual(4);
+      expect(record.keysyms[2].keysym).assertEqual(0x63);
+      expect(record.keysyms[2].generation).assertEqual(10);
+    });
+
+    it('sends VNC chords in order without releasing an already held modifier', 0, () => {
+      const record = new InputRecord();
+      record.vnc = true;
+      const controller = new RustDeskInputController(callbacksFor(record));
+      expect(controller.handleKeyEvent(keyEvent(2072, true))).assertTrue();
+      const tap = new RustDeskKeyPayload('VK_A', false);
+      tap.press = true;
+      tap.ctrl = true;
+      expect(controller.sendKey(tap)).assertTrue();
+      expect(record.keysyms.length).assertEqual(3);
+      expect(record.keysyms[0].keysym).assertEqual(0xFFE3);
+      expect(record.keysyms[1].keysym).assertEqual(0x61);
+      expect(record.keysyms[2].keysym).assertEqual(0x61);
+      expect(controller.handleKeyEvent(keyEvent(2072, false))).assertTrue();
+      expect(record.keysyms[3].keysym).assertEqual(0xFFE3);
+      expect(record.keysyms[3].down).assertFalse();
+    });
+
+    it('does not continue a pointer click after its position was refused', 0, () => {
+      const record = new InputRecord();
+      record.acceptMouseSend = false;
+      record.refusalGeneration = 9;
+      record.space = spaceFor(800, 600, 1600, 1200);
+      const controller = new RustDeskInputController(callbacksFor(record));
+      controller.handleTouchEvent(pointerTouch(TouchType.Down, 100, 100));
+      controller.handleTouchEvent(pointerTouch(TouchType.Up, 100, 100));
+      expect(record.mouse.length).assertEqual(1);
+      expect(record.mouse[0].type).assertUndefined();
     });
 
     it('keeps an injected pointer sequence through its own release', 0, () => {
       const record = new InputRecord();
       record.space = spaceFor(800, 600, 1600, 1200);
       const controller = new RustDeskInputController(callbacksFor(record));
-
       controller.handleTouchEvent(pointerTouch(TouchType.Down, 100, 100));
       controller.handleTouchEvent(pointerTouch(TouchType.Up, 100, 100));
-
-      // The click lands on the point the pointer named, not on the touchpad's
-      // virtual cursor, whose position is the display centre.
       expect(record.mouse.length).assertEqual(3);
       expect(record.mouse[0].x).assertEqual('200');
       expect(record.mouse[0].y).assertEqual('200');
@@ -320,16 +446,11 @@ export default function rustDeskInputControllerTest(): void {
       const record = new InputRecord();
       record.space = spaceFor(800, 600, 1600, 1200);
       const controller = new RustDeskInputController(callbacksFor(record));
-
       controller.handleTouchEvent(pointerTouch(TouchType.Down, 100, 100));
       controller.handleTouchEvent(pointerTouch(TouchType.Up, 100, 100));
       expect(record.mouse.length).assertEqual(3);
-
       controller.handleTouchEvent(pointerTouch(TouchType.Down, 300, 200));
       controller.handleTouchEvent(pointerTouch(TouchType.Up, 300, 200));
-
-      // The first sequence left nothing behind, so the second is its own sequence
-      // and lands on its own point instead of being read as a second finger.
       expect(record.mouse.length).assertEqual(6);
       expect(record.mouse[3].x).assertEqual('600');
       expect(record.mouse[3].y).assertEqual('400');
@@ -341,13 +462,9 @@ export default function rustDeskInputControllerTest(): void {
       const record = new InputRecord();
       record.space = spaceFor(800, 600, 1600, 1200);
       const controller = new RustDeskInputController(callbacksFor(record));
-
       controller.handleTouchEvent(pointerTouch(TouchType.Down, 100, 100));
       controller.handleTouchEvent(pointerTouch(TouchType.Move, 300, 100));
       controller.handleTouchEvent(pointerTouch(TouchType.Up, 300, 100));
-
-      // The press is at the point the drag started from, the movement follows the
-      // point, and the release ends it.
       expect(record.mouse.length).assertEqual(4);
       expect(record.mouse[0].x).assertEqual('200');
       expect(record.mouse[0].y).assertEqual('200');
@@ -363,16 +480,12 @@ export default function rustDeskInputControllerTest(): void {
       const record = new InputRecord();
       record.space = spaceFor(800, 600, 1600, 1200);
       const controller = new RustDeskInputController(callbacksFor(record));
-
       controller.handleTouchEvent(pointerTouch(TouchType.Down, 100, 100));
       controller.handleTouchEvent(pointerTouch(TouchType.Move, 300, 100));
       controller.handleTouchEvent(pointerTouch(TouchType.Cancel, 300, 100));
-
       expect(record.mouse.length).assertEqual(4);
       expect(record.mouse[3].type).assertEqual('up');
       expect(record.mouse[3].buttons).assertEqual('left');
-
-      // The cancelled sequence is fully cleared, so the next one is a plain tap.
       controller.handleTouchEvent(pointerTouch(TouchType.Down, 100, 100));
       controller.handleTouchEvent(pointerTouch(TouchType.Up, 100, 100));
       expect(record.mouse.length).assertEqual(7);
@@ -386,15 +499,11 @@ export default function rustDeskInputControllerTest(): void {
       const record = new InputRecord();
       record.space = spaceFor(800, 600, 1600, 1200);
       const controller = new RustDeskInputController(callbacksFor(record));
-
       controller.handleMouseEvent(mouseEvent(MouseAction.Move, 400, 300));
       controller.handleMouseEvent(mouseEvent(MouseAction.Press, 400, 300));
-
       expect(record.mouse.length).assertEqual(3);
       expect(record.mouse[2].type).assertEqual('down');
       expect(record.mouse[2].buttons).assertEqual('left');
-
-      // The same gesture delivered as a touch is not handled a second time.
       controller.handleTouchEvent(pointerTouch(TouchType.Down, 400, 300));
       controller.handleTouchEvent(pointerTouch(TouchType.Up, 400, 300));
       expect(record.mouse.length).assertEqual(3);
@@ -404,15 +513,10 @@ export default function rustDeskInputControllerTest(): void {
       const record = new InputRecord();
       record.space = spaceFor(800, 600, 1600, 1200);
       const controller = new RustDeskInputController(callbacksFor(record));
-
       controller.handleTouchEvent(pointerTouch(TouchType.Down, 100, 100));
       expect(record.mouse.length).assertEqual(0);
-
       controller.handleMouseEvent(mouseEvent(MouseAction.Move, 400, 300));
       expect(record.mouse.length).assertEqual(1);
-
-      // The abandoned sequence emits no click of its own, and its release is not
-      // taken as a gesture either.
       controller.handleTouchEvent(pointerTouch(TouchType.Up, 100, 100));
       expect(record.mouse.length).assertEqual(1);
     });
@@ -421,12 +525,8 @@ export default function rustDeskInputControllerTest(): void {
       const record = new InputRecord();
       record.space = spaceFor(800, 600, 1600, 1200);
       const controller = new RustDeskInputController(callbacksFor(record));
-
       controller.handleTouchEvent(fingerTouch(TouchType.Down, 100, 100));
       controller.handleTouchEvent(fingerTouch(TouchType.Move, 300, 100));
-
-      // A finger in mouse mode is a touchpad: the cursor is nudged by the mapped
-      // delta from the display centre, never placed at the finger's own point.
       expect(record.mouse.length).assertEqual(1);
       expect(record.mouse[0].x).assertEqual('1200');
       expect(record.mouse[0].y).assertEqual('600');
