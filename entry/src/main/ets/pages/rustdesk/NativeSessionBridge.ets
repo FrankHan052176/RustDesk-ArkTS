@@ -1,6 +1,11 @@
 import { rustDeskNativeApi as native } from './RustDeskNativeApi';
 import { RemoteAudioState, SessionStartOptions } from './RustDeskSessionTypes';
-import { ActionResponse } from './RustDeskTypes';
+import { ActionResponse, NativeEvent } from './RustDeskTypes';
+
+interface PresentationReceipt {
+  generation: string;
+  lifecycleEpoch: string;
+}
 
 interface RemoteAudioStateResponse extends ActionResponse {
   audio?: RemoteAudioState;
@@ -113,12 +118,47 @@ export interface NativeSessionBridge {
 }
 
 export class RustDeskNativeSessionBridge implements NativeSessionBridge {
+  private readonly presentationReceipts: Map<string, PresentationReceipt> = new Map();
+
+  private rememberPresentation(sessionId: string, response: ActionResponse): ActionResponse {
+    if (response.ok && response.presentation_generation !== undefined
+      && response.session?.lifecycleEpoch !== undefined) {
+      this.presentationReceipts.set(sessionId, {
+        generation: response.presentation_generation,
+        lifecycleEpoch: response.session.lifecycleEpoch,
+      });
+    }
+    return response;
+  }
+
+  onWaitingForImageDialogShow(sessionId: string): ActionResponse {
+    return this.rememberPresentation(sessionId,
+      this.parseNativeResponse(() => native.sessionOnWaitingForImageDialogShow(sessionId)));
+  }
+
+  /** Reject an event polled before a synchronous rearm/size/pause in that same batch. */
+  isCurrentPresentationEvent(sessionId: string, event: NativeEvent): boolean {
+    const receipt = this.presentationReceipts.get(sessionId);
+    const generation = event.presentation_generation;
+    if (generation === undefined || event.lifecycleEpoch === undefined) {
+      return false;
+    }
+    if (receipt === undefined) {
+      return true;
+    }
+    // Native generations are canonical decimal u64 strings, not JS numbers.
+    return receipt.lifecycleEpoch === event.lifecycleEpoch
+      && (generation.length > receipt.generation.length
+        || (generation.length === receipt.generation.length && generation >= receipt.generation));
+  }
+
   switchDisplay(sessionId: string, display: number): ActionResponse {
     return this.parseNativeResponse(() => native.sessionSwitchDisplay(sessionId, JSON.stringify([display])));
   }
 
   setSize(sessionId: string, display: number, width: number, height: number): ActionResponse {
-    return this.parseNativeResponse(() => native.sessionSetSize(sessionId, display, width, height));
+    return this.rememberPresentation(sessionId,
+      this.parseNativeResponse(() => native.sessionSetSize(sessionId, display, width, height)));
   }
 
   refresh(sessionId: string, display: number): ActionResponse {
@@ -126,7 +166,8 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
   }
 
   setVideoPaused(sessionId: string, paused: boolean): ActionResponse {
-    return this.parseNativeResponse(() => native.sessionSetVideoPaused(sessionId, paused));
+    return this.rememberPresentation(sessionId,
+      this.parseNativeResponse(() => native.sessionSetVideoPaused(sessionId, paused)));
   }
 
   changeResolution(sessionId: string, display: number, width: number, height: number): ActionResponse {
@@ -255,7 +296,11 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
   }
 
   acknowledgeClose(sessionId: string, lifecycleEpoch: string): ActionResponse {
-    return this.parseNativeResponse(() => native.sessionAcknowledgeClose(sessionId, lifecycleEpoch));
+    const response = this.parseNativeResponse(() => native.sessionAcknowledgeClose(sessionId, lifecycleEpoch));
+    if (response.ok) {
+      this.presentationReceipts.delete(sessionId);
+    }
+    return response;
   }
 
   pollEvents(sessionId: string, limit: number): ActionResponse {

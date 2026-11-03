@@ -7915,6 +7915,11 @@ struct RustDeskIndex {
       if (shown !== undefined) {
         // A direct RDP session reports its new desktop through peer_info.
         this.confirmPendingResolution(currentDisplay, shown.width, shown.height);
+        const sized = this.nativeSessionBridge.setSize(
+          this.activeSessionId, currentDisplay, shown.width, shown.height);
+        if (!sized.ok) {
+          this.updateSessionState(sized);
+        }
       }
       this.refreshSessionOrientation();
       this.ensureRemoteCursorEnabled();
@@ -7975,6 +7980,10 @@ struct RustDeskIndex {
       }
     }
     this.confirmPendingResolution(display, width, height);
+    const sized = this.nativeSessionBridge.setSize(this.activeSessionId, display, width, height);
+    if (!sized.ok) {
+      this.updateSessionState(sized);
+    }
     this.applyDisplayConfiguration();
     this.reprojectVirtualCursorOverlay();
   }
@@ -8361,7 +8370,9 @@ struct RustDeskIndex {
         }
       }
     }
-    this.sessionMessage = response.message ?? response.action;
+    if (response.action !== 'session_poll_events' || this.sessionMessage !== WAITING_FOR_IMAGE_TEXT) {
+      this.sessionMessage = response.message ?? response.action;
+    }
     if (!response.ok) {
       this.errorText = response.message ?? 'Native action failed';
       hilog.error(
@@ -8814,6 +8825,20 @@ struct RustDeskIndex {
       }
       return;
     }
+    if (event.name === 'native_render_ready') {
+      if (event.lifecycleEpoch === this.activeSessionLifecycleEpoch
+        && Number(event.display ?? -1) === this.currentDisplayIndex
+        && this.nativeSessionBridge.isCurrentPresentationEvent(this.activeSessionId, event)
+        && this.connectionSummary === '已连接，等待远端首帧') {
+        // A new native submission ends waiting; it does not grant input or
+        // establish physical scanout, authentication, or a new connection.
+        this.connectionSummary = '已连接';
+        if (this.sessionMessage === WAITING_FOR_IMAGE_TEXT) {
+          this.sessionMessage = '';
+        }
+      }
+      return;
+    }
     if (event.name === 'connection_ready') {
       if (this.activeSessionKind === 'rdp') {
         this.forgetRdpCertificateCredentials(this.activeSessionId);
@@ -9030,7 +9055,7 @@ struct RustDeskIndex {
     if (text === WAITING_FOR_IMAGE_TEXT) {
       if (this.activeSessionId) {
         try {
-          this.updateSessionState(this.parseResponse(native.sessionOnWaitingForImageDialogShow(this.activeSessionId)));
+          this.updateSessionState(this.nativeSessionBridge.onWaitingForImageDialogShow(this.activeSessionId));
         } catch (error) {
           hilog.error(DOMAIN, TAG, 'sessionOnWaitingForImageDialogShow failed: %{public}s', String(error));
         }

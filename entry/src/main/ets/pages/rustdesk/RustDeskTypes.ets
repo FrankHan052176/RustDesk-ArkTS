@@ -57,6 +57,8 @@ export interface NativeSurfaceRelease {
 export interface ActionResponse {
   ok: boolean;
   action: string;
+  /** Local renderer generation; only native_render_ready confirms a new submission. */
+  presentation_generation?: string;
   message?: string;
   session?: SessionSnapshot;
   events?: NativeEvent[];
@@ -132,6 +134,9 @@ export interface ActionResponse {
 
 export interface NativeEvent {
   name: string;
+  /** native_render_ready: native submission, not physical scanout. */
+  presentation_generation?: string;
+  lifecycleEpoch?: string;
   /** certificate_untrusted: display-only leaf metadata, emitted before certificate rejection. */
   target?: string;
   sha256?: string;

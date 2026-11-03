@@ -56,15 +56,24 @@ export type RustDeskRuntimeObserver = (state: RustDeskRuntimeState) => void;
 class RuntimeCall {}
 
 class PendingStart {
+  readonly lifecycle: RuntimeCall;
+  readonly command: RuntimeCall;
+  readonly owner: string;
+  readonly previousScan: string;
   cancelled: boolean = false;
   promise: Promise<RustDeskLanReply | undefined> | undefined = undefined;
 
   constructor(
-    readonly lifecycle: RuntimeCall,
-    readonly command: RuntimeCall,
-    readonly owner: string,
-    readonly previousScan: string,
-  ) {}
+    lifecycle: RuntimeCall,
+    command: RuntimeCall,
+    owner: string,
+    previousScan: string,
+  ) {
+    this.lifecycle = lifecycle;
+    this.command = command;
+    this.owner = owner;
+    this.previousScan = previousScan;
+  }
 }
 
 function decimal(value: string, allowZero: boolean = false): boolean {
@@ -229,7 +238,8 @@ class RustDeskRuntimeController {
       this.pending = false;
       this.error = String(error);
       this.emit();
-      throw error;
+      const failure: Error = error instanceof Error ? error : new Error(String(error));
+      throw failure;
     }
   }
 
@@ -243,7 +253,8 @@ class RustDeskRuntimeController {
       if (lifecycle !== this.lifecycle || owner !== this.owner) {
         return undefined;
       }
-      throw error;
+      const failure: Error = error instanceof Error ? error : new Error(String(error));
+      throw failure;
     }
   }
 
@@ -300,7 +311,8 @@ class RustDeskRuntimeController {
       }
       this.error = String(error);
       this.lan = undefined;
-      throw error;
+      const failure: Error = error instanceof Error ? error : new Error(String(error));
+      throw failure;
     } finally {
       if (this.starting === start) {
         this.starting = undefined;
@@ -384,7 +396,8 @@ class RustDeskRuntimeController {
       this.error = String(error);
       this.lan = undefined;
       this.emit();
-      throw error;
+      const failure: Error = error instanceof Error ? error : new Error(String(error));
+      throw failure;
     }
   }
 
