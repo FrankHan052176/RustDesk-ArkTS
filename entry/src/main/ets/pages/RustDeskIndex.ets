@@ -11,7 +11,7 @@ import { rustDeskNativeApi as native } from './rustdesk/RustDeskNativeApi';
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { BusinessError, Callback, deviceInfo } from '@kit.BasicServicesKit';
-import { display, window } from '@kit.ArkUI';
+import { display, FrameNode, window } from '@kit.ArkUI';
 import { inputMethod } from '@kit.IMEKit';
 import { image } from '@kit.ImageKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -556,7 +556,7 @@ struct RustDeskIndex {
   @Local currentDisplayIndex: number = 0;
   @Local qualityTelemetry: QualityTelemetry = emptyQualityTelemetry();
 
-  /** The XComponent id that carries the video Surface, for node lookups. */
+  /** Diagnostic label for the preview container; native owns the holder identity. */
   private previewSurfaceNodeId(): string {
     return `rustdesk-preview-surface-${this.previewSurfaceGeneration.toString()}`;
   }
@@ -592,20 +592,19 @@ struct RustDeskIndex {
     }
   }
 
-  /** Adopts the attached FrameNode through the native SurfaceHolder API. */
-  private adoptPreviewSurfaceComponent(nodeId: string, controller: RustDeskSurfaceController): void {
-    const frameNode = this.getUIContext().getAttachedFrameNodeById(nodeId);
-    if (!frameNode) {
-      this.previewSurfaceBindFailure = '无法取得视频 XComponent 的 FrameNode';
-      hilog.warn(DOMAIN, TAG, 'panel node attach failed: no FrameNode for %{public}s', nodeId);
-      return;
-    }
+  /** Adopts the typed FrameNode before NodeContainer mounts it. */
+  private adoptPreviewSurfaceComponent(
+    nodeId: string,
+    frameNode: FrameNode,
+    controller: RustDeskSurfaceController,
+  ): boolean {
+    let adopted = false;
     try {
       const raw = native.xcomponentAttach(nodeId, frameNode, controller.handleNativeSurfaceEvent);
       hilog.info(DOMAIN, TAG, 'panel_holder_attach=%{public}s', raw);
       const response: ESObject = JSON.parse(raw);
       const componentId = String(response.componentId ?? '');
-      const adopted = response.ok === true && componentId.length > 0;
+      adopted = response.ok === true && componentId.length > 0;
       // The native holder exists from the moment attach allocated it. When that
       // attach failed and its own cleanup is not confirmed (released is not true),
       // the componentId stays on this instance: a later detach is the only thing
@@ -639,6 +638,7 @@ struct RustDeskIndex {
       hilog.warn(DOMAIN, TAG, 'panel native attach failed: %{public}s', String(error));
     }
     this.declarePanelFrameRate();
+    return adopted;
   }
 
   /**
@@ -8150,10 +8150,11 @@ struct RustDeskIndex {
   ): RustDeskSurfaceController {
     const controller = new RustDeskSurfaceController();
     const nodeId = `rustdesk-preview-surface-${generation.toString()}`;
-    controller.onAttached = (): void => {
-      if (this.isCurrentPreviewSurface(generation, sessionId)) {
-        this.adoptPreviewSurfaceComponent(nodeId, controller);
+    controller.onNodeReady = (frameNode: FrameNode): boolean => {
+      if (!this.isCurrentPreviewSurface(generation, sessionId)) {
+        return false;
       }
+      return this.adoptPreviewSurfaceComponent(nodeId, frameNode, controller);
     };
     controller.onDetached = (): void => this.detachPreviewSurfaceComponent(controller.adoptedComponentId);
     controller.onCreated = (surfaceId: string): void =>
@@ -9326,12 +9327,8 @@ struct RustDeskIndex {
       Stack({ alignContent: Alignment.Center }) {
         if (this.previewSurfaceVisible) {
           Stack() {
-            XComponent({
-              type: XComponentType.SURFACE
-            })
+            NodeContainer(this.previewController)
               .id(this.previewSurfaceNodeId())
-              .onAttach(this.previewController.handleNodeAttach)
-              .onDetach(this.previewController.handleNodeDetach)
               .width('100%')
               .height('100%')
               .backgroundColor($r('app.color.black'))

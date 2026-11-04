@@ -1,13 +1,15 @@
+import { FrameNode, NodeController, typeNode, UIContext } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
-/** Generation-scoped SurfaceHolder event adapter, deliberately not an XComponentController. */
-export class RustDeskSurfaceController {
+/** Generation-scoped typed XComponent and SurfaceHolder event adapter. */
+export class RustDeskSurfaceController extends NodeController {
   onCreated?: (surfaceId: string) => void;
   onChanged?: (surfaceId: string, rect: SurfaceRect) => void;
   onDestroyed?: (surfaceId: string) => void;
-  onAttached?: () => void;
+  onNodeReady?: (frameNode: FrameNode) => boolean;
   onDetached?: () => void;
   private surfaceId: string = '';
+  private frameNode?: FrameNode;
   /**
    * The opaque native holder this instance adopted on attach, empty until one was
    * allocated. It belongs to the instance, not to the page, so a late callback
@@ -15,9 +17,25 @@ export class RustDeskSurfaceController {
    */
   adoptedComponentId: string = '';
 
-  // These callbacks retain their generation even after the page replaces its adapter.
-  readonly handleNodeAttach: () => void = (): void => this.onAttached?.();
-  readonly handleNodeDetach: () => void = (): void => this.onDetached?.();
+  makeNode(uiContext: UIContext): FrameNode | null {
+    if (this.frameNode === undefined) {
+      // No constructor id/controller: this selects the native-lifecycle TYPE_NODE.
+      const parameters: NativeXComponentParameters = { type: XComponentType.SURFACE };
+      const node = typeNode.createNode(uiContext, 'XComponent', parameters);
+      node.commonAttribute.width('100%').height('100%');
+      this.frameNode = node;
+    }
+    // Adopt and disable automatic lifecycle before NodeContainer mounts this node.
+    return this.onNodeReady?.(this.frameNode) === true ? this.frameNode : null;
+  }
+
+  onDetach(): void {
+    // Unmount is not a release receipt. Native retains the FrameNode while held;
+    // never dispose it here or bypass the existing close/join/ACK + detach owner.
+    this.onDetached?.();
+  }
+
+  // This callback retains its generation even after the page replaces its adapter.
   readonly handleNativeSurfaceEvent: (raw: string) => void = (raw: string): void => {
     try {
       const event: ESObject = JSON.parse(raw);
