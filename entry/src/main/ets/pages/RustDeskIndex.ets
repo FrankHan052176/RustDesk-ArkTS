@@ -291,6 +291,13 @@ type PeerLaunchKind = EasyTierConnectionKind;
 type ConnectionUiPhase = 'idle' | 'waiting_for_easytier' | 'connecting'
   | 'awaiting_password' | 'authenticating' | 'connected' | 'failed';
 
+interface PendingSessionClose {
+  sessionId: string;
+  reason: string | undefined;
+  preserveConnectionFailure: boolean;
+  preserveRdpCertificateDecision: boolean;
+}
+
 @Entry
 @ComponentV2
 struct RustDeskIndex {
@@ -496,8 +503,8 @@ struct RustDeskIndex {
   private sessionConnectInFlight: boolean = false;
   private sessionSwitchInFlight: boolean = false;
   private pendingSessionSwitchId: string = '';
-  private readonly pendingClosedSessionIds: Array<string> = [];
-  private pendingTransitionClose: boolean = false;
+  private readonly pendingClosedSessions: Array<PendingSessionClose> = [];
+  private pendingTransitionClose: PendingSessionClose | undefined = undefined;
   private pollTimer: number = -1;
   private passwordTimeoutId: number = -1;
   private eventPollInFlight: boolean = false;
@@ -589,6 +596,7 @@ struct RustDeskIndex {
   private adoptPreviewSurfaceComponent(nodeId: string, controller: RustDeskSurfaceController): void {
     const frameNode = this.getUIContext().getAttachedFrameNodeById(nodeId);
     if (!frameNode) {
+      this.previewSurfaceBindFailure = '无法取得视频 XComponent 的 FrameNode';
       hilog.warn(DOMAIN, TAG, 'panel node attach failed: no FrameNode for %{public}s', nodeId);
       return;
     }
@@ -608,6 +616,9 @@ struct RustDeskIndex {
       }
       if (adopted) {
         this.previewComponentId = componentId;
+        this.previewSurfaceBindFailure = '';
+      } else {
+        this.previewSurfaceBindFailure = String(response.error ?? '原生 XComponent holder 接管未成功');
       }
       if (!adopted && controller.adoptedComponentId.length > 0) {
         hilog.warn(DOMAIN, TAG, 'panel_holder_attach retained component=%{public}s for detach',
@@ -624,6 +635,7 @@ struct RustDeskIndex {
         Number(response.result ?? -1),
       );
     } catch (error) {
+      this.previewSurfaceBindFailure = `原生 XComponent holder 接管失败：${String(error)}`;
       hilog.warn(DOMAIN, TAG, 'panel native attach failed: %{public}s', String(error));
     }
     this.declarePanelFrameRate();
@@ -3322,7 +3334,6 @@ struct RustDeskIndex {
    * session that is not a video session does not come through here at all.
    */
   private async bindPreviewSurfaceBeforeStart(connectionGeneration: number): Promise<boolean> {
-    this.previewSurfaceBindFailure = '';
     try {
       await this.preparePreviewSurface(connectionGeneration);
     } catch (error) {
@@ -4118,6 +4129,7 @@ struct RustDeskIndex {
     this.connectionUiTarget = nextTab.target;
     this.connectionUiPhase = nextTab.connected ? 'connected' : 'connecting';
     this.connectionUiMessage = nextTab.connected ? '已切换到此设备' : '会话仍在连接';
+    this.errorText = '';
     this.activeSessionDefaults = this.copySessionDefaults(nextTab.sessionDefaults);
     this.clipboardSyncEnabled = this.activeSessionDefaults.clipboardEnabled;
     this.performanceTuningApplied = false;
@@ -4228,27 +4240,41 @@ struct RustDeskIndex {
     return this.sessionConnectInFlight || this.sessionSwitchInFlight || this.sessionCloseInFlight;
   }
 
-  private queueClosedSession(sessionId: string): void {
-    if (sessionId.length > 0 && !this.pendingClosedSessionIds.includes(sessionId)) {
-      this.pendingClosedSessionIds.push(sessionId);
+  private queueClosedSession(sessionId: string, reason?: string,
+    preserveConnectionFailure: boolean = false, preserveRdpCertificateDecision: boolean = false): void {
+    const pending = this.pendingClosedSessions.find((request: PendingSessionClose): boolean =>
+      request.sessionId === sessionId);
+    if (pending !== undefined) {
+      pending.reason = reason;
+      pending.preserveConnectionFailure = preserveConnectionFailure;
+      pending.preserveRdpCertificateDecision = preserveRdpCertificateDecision;
+      return;
     }
+    this.pendingClosedSessions.push({
+      sessionId, reason, preserveConnectionFailure, preserveRdpCertificateDecision,
+    });
   }
 
   private materializePendingTransitionClose(): void {
-    if (!this.pendingTransitionClose) {
+    const pending = this.pendingTransitionClose;
+    if (pending === undefined) {
       return;
     }
-    this.pendingTransitionClose = false;
-    this.queueClosedSession(this.activeSessionId);
+    this.pendingTransitionClose = undefined;
+    // A connect/switch is single-inflight. Its own finally binds an empty-id
+    // intent before the drain can start a different operation or generation.
+    this.queueClosedSession(this.activeSessionId, pending.reason,
+      pending.preserveConnectionFailure, pending.preserveRdpCertificateDecision);
   }
 
   private drainPendingSessionTransitions(): void {
     if (this.sessionTransitionBusy()) {
       return;
     }
-    const closedSessionId = this.pendingClosedSessionIds.shift();
-    if (closedSessionId !== undefined) {
-      void this.closeRemoteSessionTab(closedSessionId).finally((): void => {
+    const pendingClose = this.pendingClosedSessions.shift();
+    if (pendingClose !== undefined) {
+      void this.closeRemoteSessionTab(pendingClose.sessionId, pendingClose.reason,
+        pendingClose.preserveConnectionFailure, pendingClose.preserveRdpCertificateDecision).finally((): void => {
         this.drainPendingSessionTransitions();
       });
       return;
@@ -4270,17 +4296,20 @@ struct RustDeskIndex {
     }
   }
 
-  private async closeRemoteSessionTab(sessionId: string): Promise<void> {
-    this.forgetRdpCertificateCredentials(sessionId);
-    if (this.rdpCertificateSessionId === sessionId) {
-      this.discardRdpCertificateDecision();
+  private async closeRemoteSessionTab(sessionId: string, reason: string = '已手动断开连接',
+    preserveConnectionFailure: boolean = false, preserveRdpCertificateDecision: boolean = false): Promise<void> {
+    if (!preserveRdpCertificateDecision) {
+      this.forgetRdpCertificateCredentials(sessionId);
+      if (this.rdpCertificateSessionId === sessionId) {
+        this.discardRdpCertificateDecision();
+      }
     }
     if (this.sessionTransitionBusy()) {
-      this.queueClosedSession(sessionId);
+      this.queueClosedSession(sessionId, reason, preserveConnectionFailure, preserveRdpCertificateDecision);
       return;
     }
     if (sessionId === this.activeSessionId) {
-      await this.closeSession('已手动断开连接');
+      await this.closeSession(reason, preserveConnectionFailure, preserveRdpCertificateDecision);
       return;
     }
     this.sessionCloseInFlight = true;
@@ -4297,7 +4326,9 @@ struct RustDeskIndex {
         return;
       }
       this.remoteSessionTabsController.remove(sessionId);
-      this.rdpCertificateRejectedSessions.delete(sessionId);
+      if (!preserveRdpCertificateDecision) {
+        this.rdpCertificateRejectedSessions.delete(sessionId);
+      }
       this.syncRemoteSessionTabs();
     } finally {
       this.sessionCloseInFlight = false;
@@ -4315,9 +4346,11 @@ struct RustDeskIndex {
     }
     if (this.sessionConnectInFlight || this.sessionSwitchInFlight) {
       if (this.activeSessionId.length > 0) {
-        this.queueClosedSession(this.activeSessionId);
+        this.queueClosedSession(this.activeSessionId, reason, preserveConnectionFailure, preserveRdpCertificateDecision);
       } else {
-        this.pendingTransitionClose = true;
+        this.pendingTransitionClose = {
+          sessionId: '', reason, preserveConnectionFailure, preserveRdpCertificateDecision,
+        };
       }
       return;
     }
@@ -7035,6 +7068,7 @@ struct RustDeskIndex {
       (connectionGeneration !== undefined && connectionGeneration !== this.connectionGeneration)) {
       return;
     }
+    this.previewSurfaceBindFailure = '';
     await this.applySessionFullscreen(true);
     await this.waitForPreviewWindowReady();
     if (connectionGeneration !== undefined && connectionGeneration !== this.connectionGeneration) {
@@ -8116,7 +8150,11 @@ struct RustDeskIndex {
   ): RustDeskSurfaceController {
     const controller = new RustDeskSurfaceController();
     const nodeId = `rustdesk-preview-surface-${generation.toString()}`;
-    controller.onAttached = (): void => this.adoptPreviewSurfaceComponent(nodeId, controller);
+    controller.onAttached = (): void => {
+      if (this.isCurrentPreviewSurface(generation, sessionId)) {
+        this.adoptPreviewSurfaceComponent(nodeId, controller);
+      }
+    };
     controller.onDetached = (): void => this.detachPreviewSurfaceComponent(controller.adoptedComponentId);
     controller.onCreated = (surfaceId: string): void =>
       this.handlePreviewSurfaceCreated(surfaceId, generation, sessionId);
