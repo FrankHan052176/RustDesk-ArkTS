@@ -754,6 +754,10 @@ struct RustDeskIndex {
   @Local insecureConnectionDialogVisible: boolean = false;
   @Local insecureConnectionMessage: string = '';
   private insecureConnectionSessionId: string = '';
+  /** The open insecure-connection dialog asks to admit input from an unproven peer. */
+  @Local insecureConnectionAcceptsInput: boolean = false;
+  /** Sessions already asked once about driving an unproven peer; ids are never reused. */
+  private unverifiedInputPrompted: Set<string> = new Set<string>();
   private passwordSessionKind: PasswordSessionKind = 'primary';
   @Local directCredentialsVisible: boolean = false;
   @Local directCredentialsProtocol: DirectWireProtocol = 'vnc';
@@ -3481,7 +3485,7 @@ struct RustDeskIndex {
     } else {
       this.clearConnectionTimeout();
       this.connectionUiPhase = 'awaiting_password';
-      this.connectionUiMessage = message.length > 0 ? message : '请输入远端设备密码后继续连接。';
+      this.connectionUiMessage = message.length > 0 ? message : '请输入远端设备密码，或等待对方设备点击“接受”。';
       this.sessionPhase = 'awaiting_password';
       this.sessionMessage = '等待输入密码';
       this.connectionSummary = '等待密码验证';
@@ -7590,9 +7594,12 @@ struct RustDeskIndex {
     this.adoptInputGeneration(response, binding.sessionId);
     if (response.ok !== true && reportFailure && this.activeSessionId === binding.sessionId) {
       const tab = this.remoteSessionTabsController.get(binding.sessionId);
-      this.errorText = validInputGeneration(response.input_generation)
-        && this.activeSessionKind === 'remote_control' && tab?.peerVerified === false
-        ? '对端未验证，输入被引擎拒绝' : (response.message ?? failure);
+      const unverifiedPeer = validInputGeneration(response.input_generation)
+        && this.activeSessionKind === 'remote_control' && tab?.peerVerified === false;
+      this.errorText = unverifiedPeer ? '对端未验证，输入被引擎拒绝' : (response.message ?? failure);
+      if (unverifiedPeer) {
+        this.promptUnverifiedPeerInput(binding.sessionId);
+      }
     }
     // This is queue admission only, never a peer delivery acknowledgement.
     return response.ok === true;
@@ -8920,7 +8927,13 @@ struct RustDeskIndex {
         this.refreshRemoteAudioState();
       }
       this.clearConnectionTimeout();
+      // The password step leaves fullscreen so its keyboard can show; a peer that
+      // accepted meanwhile (or took the typed password) puts the session back.
+      const passwordStepWasOpen = this.passwordDialogVisible && this.passwordSessionKind === 'primary';
       this.dismissPasswordDialogFor('primary');
+      if (passwordStepWasOpen && this.showPreviewModal) {
+        void this.applySessionFullscreen(true);
+      }
       this.errorText = '';
       this.connectionUiPhase = 'connected';
       this.connectionUiMessage = '连接成功，正在准备远端画面。';
@@ -8966,6 +8979,7 @@ struct RustDeskIndex {
       if (event.name === 'peer_info') {
         this.rememberConnectedDevice(event);
         this.refreshDirectorySnapshot();
+        this.promptUnverifiedPeerInput(this.activeSessionId);
       }
       this.scheduleRdpFollowResize();
       return;
@@ -9118,6 +9132,7 @@ struct RustDeskIndex {
     this.insecureConnectionMessage = text === 'conn-e2ee-unavailable-tip'
       ? '无法验证端到端加密。远程设备可能仍在准备中，请稍后重试。如果此问题持续出现，服务器可能不受信任。仍要继续吗？'
       : text;
+    this.insecureConnectionAcceptsInput = false;
     this.insecureConnectionDialogVisible = true;
     this.insecureConnectionSessionId = this.activeSessionId;
     this.connectionUiPhase = 'authenticating';
@@ -9140,6 +9155,10 @@ struct RustDeskIndex {
       this.insecureConnectionMessage = '';
       this.insecureConnectionSessionId = '';
       this.handleRemoteDisconnect('连接会话已结束，请重新连接');
+      return;
+    }
+    if (this.insecureConnectionAcceptsInput) {
+      this.acceptUnverifiedPeerInput(sessionId);
       return;
     }
     try {
@@ -9177,6 +9196,53 @@ struct RustDeskIndex {
     }
   }
 
+  /**
+   * Asks once per session whether to drive a RustDesk peer the handshake did not
+   * prove (a plain IP dial has no key to check). The engine admits no input from
+   * it, touch and keys alike, until this session's own operator accepts, so the
+   * picture is shown and the question is raised instead of input silently failing.
+   */
+  private promptUnverifiedPeerInput(sessionId: string): void {
+    if (sessionId.length === 0 || sessionId !== this.activeSessionId
+      || this.activeSessionKind !== 'remote_control'
+      || this.insecureConnectionDialogVisible || this.unverifiedInputPrompted.has(sessionId)) {
+      return;
+    }
+    const tab = this.remoteSessionTabsController.get(sessionId);
+    if (tab === undefined || tab.peerVerified !== false) {
+      return;
+    }
+    this.unverifiedInputPrompted.add(sessionId);
+    this.insecureConnectionMessage = '无法验证这台远程设备的身份（例如直接用 IP 连接时没有可核对的密钥）。'
+      + '画面可以查看，但在你确认之前，触控、鼠标和键盘输入都不会发送给对方。仍要允许控制它吗？';
+    this.insecureConnectionAcceptsInput = true;
+    this.insecureConnectionSessionId = sessionId;
+    this.insecureConnectionDialogVisible = true;
+  }
+
+  private acceptUnverifiedPeerInput(sessionId: string): void {
+    try {
+      const outcome = this.nativeSessionBridge.setUnverifiedInputAccepted(sessionId, true);
+      // The policy change advances the engine's input generation; later input is
+      // stamped with the one this answer names.
+      this.adoptInputGeneration(outcome, sessionId);
+      if (!outcome.ok) {
+        throw new Error(outcome.message ?? '引擎未接受该确认');
+      }
+      this.insecureConnectionDialogVisible = false;
+      this.insecureConnectionMessage = '';
+      this.insecureConnectionSessionId = '';
+      this.insecureConnectionAcceptsInput = false;
+      this.errorText = '';
+      this.sessionMessage = '已允许控制未验证身份的远程设备';
+      this.syncInputCapture();
+    } catch (error) {
+      // The dialog stays up so the operator can retry or disconnect; nothing is
+      // reported as accepted that the engine did not take.
+      this.insecureConnectionMessage = `无法允许输入：${String(error)}`;
+    }
+  }
+
   private disconnectInsecureConnection(): void {
     if (!this.insecureConnectionDialogVisible) {
       return;
@@ -9193,6 +9259,7 @@ struct RustDeskIndex {
     this.insecureConnectionDialogVisible = false;
     this.insecureConnectionMessage = '';
     this.insecureConnectionSessionId = '';
+    this.insecureConnectionAcceptsInput = false;
     if (sessionId.length === 0) {
       return;
     }
@@ -10892,6 +10959,10 @@ struct RustDeskIndex {
       InsecureConnectionDialog({
         visible: this.insecureConnectionDialogVisible,
         message: this.insecureConnectionMessage,
+        title: this.insecureConnectionAcceptsInput
+          ? $r('app.string.unverified_peer_title') : $r('app.string.insecure_connection_title'),
+        subtitle: this.insecureConnectionAcceptsInput
+          ? $r('app.string.unverified_peer_subtitle') : $r('app.string.insecure_connection_subtitle'),
         onContinue: () => this.continueInsecureConnection(),
         onDisconnect: () => this.disconnectInsecureConnection(),
       })

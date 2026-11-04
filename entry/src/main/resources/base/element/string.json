@@ -1212,6 +1212,14 @@
       "value": "无法验证端到端加密。远程设备可能仍在准备中；如果此问题持续出现，服务器可能不受信任。仍要继续吗？"
     },
     {
+      "name": "unverified_peer_title",
+      "value": "无法验证对方设备的身份"
+    },
+    {
+      "name": "unverified_peer_subtitle",
+      "value": "确认这是你自己的设备后再允许输入"
+    },
+    {
       "name": "direct_credentials_title_vnc",
       "value": "输入 VNC 密码"
     },

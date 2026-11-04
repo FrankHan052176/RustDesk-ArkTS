@@ -94,6 +94,11 @@ export interface NativeSessionBridge {
   addSession(sessionId: string, target: string, options: SessionStartOptions): ActionResponse;
   startSession(sessionId: string): ActionResponse;
   setViewOnly(sessionId: string, enabled: boolean): ActionResponse;
+  /**
+   * Publishes this session's own acceptance of a RustDesk peer the handshake did
+   * not prove. The engine admits no input from such a peer until this succeeds.
+   */
+  setUnverifiedInputAccepted(sessionId: string, accepted: boolean): ActionResponse;
   login(sessionId: string, password: string, remember?: boolean): ActionResponse;
   setCommon(sessionId: string, key: string, value: string): ActionResponse;
   /**
@@ -270,6 +275,10 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
 
   setViewOnly(sessionId: string, enabled: boolean): ActionResponse {
     return this.parseNativeResponse(() => native.sessionSetViewOnly(sessionId, enabled));
+  }
+
+  setUnverifiedInputAccepted(sessionId: string, accepted: boolean): ActionResponse {
+    return this.parseNativeResponse(() => native.sessionSetUnverifiedInputAccepted(sessionId, accepted));
   }
 
   login(sessionId: string, password: string, remember: boolean = false): ActionResponse {

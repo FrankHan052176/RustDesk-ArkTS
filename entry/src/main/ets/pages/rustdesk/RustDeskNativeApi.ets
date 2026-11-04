@@ -48,6 +48,7 @@ import {
   sessionSetImageQuality as bridgeSessionSetImageQuality,
   sessionSetShowRemoteCursor as bridgeSessionSetShowRemoteCursor,
   sessionSetSize as bridgeSessionSetSize,
+  sessionSetUnverifiedInputAccepted as bridgeSessionSetUnverifiedInputAccepted,
   sessionSetVideoPaused as bridgeSessionSetVideoPaused,
   sessionSetViewOnly as bridgeSessionSetViewOnly,
   sessionStart as bridgeSessionStart,
@@ -262,6 +263,10 @@ export class RustDeskNativeApi implements RustDeskMouseSink {
 
   sessionSetSize(sessionId: string, display: number, width: number, height: number): string {
     return bridgeSessionSetSize(sessionId, display, width, height);
+  }
+
+  sessionSetUnverifiedInputAccepted(sessionId: string, accepted: boolean): string {
+    return bridgeSessionSetUnverifiedInputAccepted(sessionId, accepted);
   }
 
   sessionSetVideoPaused(sessionId: string, paused: boolean): string {
