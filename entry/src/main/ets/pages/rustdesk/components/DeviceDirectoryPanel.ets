@@ -5,6 +5,7 @@ import {
   LuminousSurface,
 } from 'luminous_neo';
 import {
+  CloudAddressBook,
   DirectorySnapshot,
   PeerProtocol,
   PeerRecord,
@@ -12,8 +13,14 @@ import {
 } from '../RustDeskDirectoryTypes';
 import { RustDeskLayoutTokens } from '../RustDeskLayoutTokens';
 import { peerProtocolOf } from '../RustDeskPeerDirectoryModel';
+import { RustDeskAccountController, rustDeskAccountController } from '../NativeAccountBridge';
 import { PeerCard } from './PeerCard';
 import { SavedDeviceEditor } from './SavedDeviceEditor';
+import {
+  CloudPeerDeleteDialog,
+  CloudPeerEditorDialog,
+  CloudTagsDialog,
+} from './CloudAddressBookDialogs';
 
 export interface DeviceDirectoryPanelProps {
   snapshot: DirectorySnapshot;
@@ -24,6 +31,7 @@ export interface DeviceDirectoryPanelProps {
   favoriteScroller: Scroller;
   lanScroller: Scroller;
   addressBookScroller: Scroller;
+  accountController?: RustDeskAccountController;
   onRefresh: () => void;
   onScanLan: () => void;
   onStopLan: () => void;
@@ -35,6 +43,7 @@ export interface DeviceDirectoryPanelProps {
   onConnectVnc: (peerId: string) => void;
   onConnectRdp: (peerId: string) => void;
   onSaveDevice: (original: PeerRecord, peer: PeerRecord) => ResourceStr;
+  onOpenAccountSettings?: () => void;
 }
 
 @ComponentV2
@@ -47,6 +56,7 @@ export struct DeviceDirectoryPanel {
   @Param favoriteScroller: Scroller = new Scroller();
   @Param lanScroller: Scroller = new Scroller();
   @Param addressBookScroller: Scroller = new Scroller();
+  @Param accountController: RustDeskAccountController = rustDeskAccountController;
   @Local activeSource: PeerViewSource = 'recent';
   @Local query: string = '';
   @Local viewportWidth: number = 390;
@@ -57,6 +67,15 @@ export struct DeviceDirectoryPanel {
   @Local deviceEditorPeer: PeerRecord = new PeerRecord();
   private deviceEditorOriginal: PeerRecord = new PeerRecord();
   private swiperController: SwiperController = new SwiperController();
+
+  @Local cloudEditorVisible: boolean = false;
+  @Local cloudEditorIsNew: boolean = false;
+  @Local cloudEditorPeerId: string = '';
+  @Local cloudEditorAlias: string = '';
+  @Local cloudEditorTags: string = '';
+  @Local cloudDeleteVisible: boolean = false;
+  @Local cloudDeletePeerId: string = '';
+  @Local cloudTagsVisible: boolean = false;
   @Event onRefresh: () => void = () => {};
   @Event onScanLan: () => void = () => {};
   @Event onStopLan: () => void = () => {};
@@ -74,8 +93,20 @@ export struct DeviceDirectoryPanel {
   @Event onConnectRdp: (peerId: string) => void = (_peerId: string) => {};
   @Event onSaveDevice: (original: PeerRecord, peer: PeerRecord) => ResourceStr =
     (_original: PeerRecord, _peer: PeerRecord): ResourceStr => $r('app.string.device_editor_save_unavailable');
+  @Event onOpenAccountSettings: () => void = () => {};
 
   private editDevice(peer: PeerRecord): void {
+    if (this.activeSource === 'addressBook') {
+      if (!this.accountController.activeBook?.writable) {
+        return;
+      }
+      this.cloudEditorPeerId = peer.id;
+      this.cloudEditorAlias = peer.alias;
+      this.cloudEditorTags = peer.tags.join(', ');
+      this.cloudEditorIsNew = false;
+      this.cloudEditorVisible = true;
+      return;
+    }
     this.deviceEditorOriginal = peer;
     this.deviceEditorPeer = peer;
     this.deviceEditorVisible = true;
@@ -87,6 +118,38 @@ export struct DeviceDirectoryPanel {
       this.deviceEditorVisible = false;
     }
     return error;
+  }
+
+  private async handleCloudPeerSave(id: string, alias: string, tags: string[]): Promise<void> {
+    const ok = await this.accountController.mutate({
+      action: 'upsertPeer',
+      peer: { id, alias, tags },
+    });
+    if (ok) {
+      this.cloudEditorVisible = false;
+    }
+  }
+
+  private async handleCloudPeerDelete(): Promise<void> {
+    const ok = await this.accountController.mutate({
+      action: 'deletePeer',
+      id: this.cloudDeletePeerId,
+    });
+    if (ok) {
+      this.cloudDeleteVisible = false;
+    }
+  }
+
+  private async handleCloudAddTag(name: string): Promise<void> {
+    await this.accountController.mutate({ action: 'upsertTag', name });
+  }
+
+  private async handleCloudRenameTag(oldName: string, newName: string): Promise<void> {
+    await this.accountController.mutate({ action: 'upsertTag', name: oldName, newName });
+  }
+
+  private async handleCloudDeleteTag(name: string): Promise<void> {
+    await this.accountController.mutate({ action: 'deleteTag', name });
   }
 
   aboutToAppear(): void {
@@ -132,8 +195,12 @@ export struct DeviceDirectoryPanel {
     return 14;
   }
 
+  private pageTopClearance(): number {
+    return this.wideLayout ? Math.max(this.titleSpacerHeight + 36, 56) : Math.max(this.titleSpacerHeight, 40);
+  }
+
   private pageContentTopPadding(): number {
-    return this.wideLayout ? RustDeskLayoutTokens.PAGE_CONTENT_TOP_PADDING : 8;
+    return 0;
   }
 
   private bottomPadding(): number {
@@ -198,7 +265,7 @@ export struct DeviceDirectoryPanel {
       return this.snapshot.lan;
     }
     if (source === 'addressBook') {
-      return this.snapshot.addressBook;
+      return this.accountController.toPeerRecords();
     }
     return this.snapshot.recent;
   }
@@ -208,7 +275,7 @@ export struct DeviceDirectoryPanel {
       new LuminousSelectionItem('recent', '最近', '最近连接的设备'),
       new LuminousSelectionItem('favorite', '收藏', '收藏的设备'),
       new LuminousSelectionItem('lan', '局域网', '局域网发现的设备'),
-      new LuminousSelectionItem('address-book', '通讯录', $r('app.string.device_address_book_unavailable')),
+      new LuminousSelectionItem('address-book', '通讯录', '云端同步设备'),
     ];
   }
 
@@ -274,6 +341,9 @@ export struct DeviceDirectoryPanel {
     if (source === 'lan') {
       return $r('app.string.device_empty_lan');
     }
+    if (source === 'addressBook') {
+      return '云端通讯录中暂无设备';
+    }
     return $r('app.string.device_empty_recent');
   }
 
@@ -287,6 +357,9 @@ export struct DeviceDirectoryPanel {
     if (source === 'lan') {
       return $r('app.string.resk_lan_empty_title');
     }
+    if (source === 'addressBook') {
+      return '暂无通讯录设备';
+    }
     return '还没有最近设备';
   }
 
@@ -294,11 +367,23 @@ export struct DeviceDirectoryPanel {
     if (this.query.trim().length > 0) {
       return '清除搜索';
     }
+    if (source === 'lan') {
+      return $r('app.string.device_scan_lan');
+    }
+    if (source === 'addressBook') {
+      return this.accountController.state.loggedIn ? '刷新通讯录' : '前往登录';
+    }
     return '刷新设备';
   }
 
   private showEmptyAction(source: PeerViewSource): boolean {
-    return this.query.trim().length > 0 || source !== 'lan';
+    if (this.query.trim().length > 0) {
+      return true;
+    }
+    if (source === 'lan') {
+      return this.snapshot.lanCanScan && !this.snapshot.lanScanning;
+    }
+    return true;
   }
 
   private emptySymbol(source: PeerViewSource): Resource {
@@ -310,6 +395,9 @@ export struct DeviceDirectoryPanel {
     }
     if (source === 'lan') {
       return $r('sys.symbol.wifi');
+    }
+    if (source === 'addressBook') {
+      return $r('sys.symbol.book');
     }
     return $r('sys.symbol.clock');
   }
@@ -341,80 +429,65 @@ export struct DeviceDirectoryPanel {
     return $r('app.string.device_pull_scan_lan');
   }
 
-  private lanStatus(): ResourceStr {
-    if (this.snapshot.lanState === 'unavailable') {
-      return $r('app.string.resk_lan_unavailable');
-    }
-    if (this.snapshot.lanState === 'loading') {
-      return $r('app.string.resk_lan_loading');
-    }
-    if (this.snapshot.lanState === 'starting') {
-      return $r('app.string.resk_lan_starting');
-    }
-    if (this.snapshot.lanState === 'stopping' || this.snapshot.lanState === 'removing') {
-      return $r('app.string.resk_lan_cleaning');
-    }
-    if (this.snapshot.lanScanning) {
-      return $r('app.string.device_scanning_lan');
-    }
-    if (this.snapshot.lanTerminal === 'inactivity') {
-      return $r('app.string.resk_lan_inactivity');
-    }
-    if (this.snapshot.lanTerminal === 'deadline') {
-      return $r('app.string.resk_lan_deadline');
-    }
-    if (this.snapshot.lanTerminal === 'cancelled') {
-      return $r('app.string.resk_lan_cancelled');
-    }
-    if (this.snapshot.lanTerminal === 'failed') {
-      return $r('app.string.resk_lan_failed');
-    }
-    return $r('app.string.resk_lan_cached');
+  private hasLanFeedback(): boolean {
+    return this.snapshot.lanScanning ||
+      this.snapshot.lanDisabledReason !== '' ||
+      this.snapshot.lanError.length > 0 ||
+      this.snapshot.lanTerminal === 'failed';
   }
 
   @Builder
   private LanActions() {
-    Column({ space: $r('app.float.space_8') }) {
-      Row({ space: $r('app.float.space_8') }) {
-        Button($r('app.string.device_scan_lan'))
-          .enabled(this.snapshot.lanCanScan && !this.snapshot.lanScanning)
-          .onClick((): void => this.startLanRefresh());
+    if (this.hasLanFeedback()) {
+      Column({ space: $r('app.float.space_8') }) {
         if (this.snapshot.lanScanning) {
-          Button($r('app.string.resk_lan_stop'))
-            .enabled(this.snapshot.lanCanScan)
-            .onClick((): void => this.onStopLan());
+          Row({ space: $r('app.float.space_8') }) {
+            Button($r('app.string.resk_lan_stop'))
+              .enabled(this.snapshot.lanState === 'scanning')
+              .onClick((): void => this.onStopLan());
+          }
+          .width('100%');
+        }
+        if (this.snapshot.lanDisabledReason !== '') {
+          Text(this.snapshot.lanDisabledReason)
+            .width('100%')
+            .fontSize($r('app.float.font_label'))
+            .fontColor($r('app.color.warning'));
+        }
+        if (this.snapshot.lanError.length > 0) {
+          Text(this.snapshot.lanError)
+            .width('100%')
+            .fontSize($r('app.float.font_caption'))
+            .fontColor($r('app.color.error'));
+        } else if (this.snapshot.lanTerminal === 'failed') {
+          Text($r('app.string.resk_lan_failed'))
+            .width('100%')
+            .fontSize($r('app.float.font_caption'))
+            .fontColor($r('app.color.error'));
         }
       }
-      .width('100%');
-      Text(this.lanStatus())
-        .width('100%')
-        .fontSize($r('app.float.font_label'))
-        .fontColor($r('app.color.neu_text_secondary'));
-      Text($r('app.string.resk_lan_untrusted'))
-        .width('100%')
-        .fontSize($r('app.float.font_caption'))
-        .fontColor($r('app.color.neu_text_secondary'));
-      if (this.snapshot.lanDisabledReason !== '') {
-        Text(this.snapshot.lanDisabledReason)
-          .width('100%')
-          .fontSize($r('app.float.font_label'))
-          .fontColor($r('app.color.warning'));
-      }
-      if (this.snapshot.lanError.length > 0) {
-        Text(this.snapshot.lanError)
-          .width('100%')
-          .fontSize($r('app.float.font_caption'))
-          .fontColor($r('app.color.error'));
-      }
+      .width(this.controlWidth())
+      .padding({ top: $r('app.float.space_8'), bottom: $r('app.float.space_8') })
+      .alignItems(HorizontalAlign.Start);
     }
-    .width(this.controlWidth())
-    .padding({ top: $r('app.float.space_8'), bottom: $r('app.float.space_8') })
-    .alignItems(HorizontalAlign.Start);
   }
 
   private activateEmptyAction(source: PeerViewSource): void {
     if (this.query.trim().length > 0) {
       this.query = '';
+      return;
+    }
+    if (source === 'lan') {
+      this.startLanRefresh();
+      return;
+    }
+    if (source === 'addressBook') {
+      if (!this.accountController.state.loggedIn) {
+        // loadAddressBooks() returns early without a session, so offer the existing login entry instead of a no-op.
+        this.onOpenAccountSettings();
+        return;
+      }
+      void this.accountController.loadAddressBooks();
       return;
     }
     this.onRefresh();
@@ -435,6 +508,7 @@ export struct DeviceDirectoryPanel {
       });
     }
     .width(this.controlWidth())
+    .margin({ bottom: 8 })
     .alignItems(HorizontalAlign.Center);
   }
 
@@ -465,25 +539,160 @@ export struct DeviceDirectoryPanel {
   }
 
   @Builder
-  private AddressBookUnavailable() {
-    Column({ space: $r('app.float.space_8') }) {
-      Text($r('app.string.device_address_book_unavailable'))
+  private AddressBookActions() {
+    Column({ space: 8 }) {
+      if (!this.accountController.state.loggedIn) {
+        Row({ space: 10 }) {
+          SymbolGlyph($r('sys.symbol.person_crop_circle_fill'))
+            .fontSize(24)
+            .fontColor([$r('app.color.neu_accent')]);
+          Column({ space: 2 }) {
+            Text('未登录账户')
+              .fontSize(13)
+              .fontWeight(FontWeight.Bold)
+              .fontColor($r('app.color.neu_text_primary'));
+            Text('登录后即可同步与管理云端通讯录设备')
+              .fontSize(11)
+              .fontColor($r('app.color.neu_text_secondary'));
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start);
+
+          Button('前往登录', { type: ButtonType.Normal })
+            .fontSize(12)
+            .height(32)
+            .borderRadius(8)
+            .backgroundColor($r('app.color.brand_primary'))
+            .fontColor(Color.White)
+            .onClick((): void => this.onOpenAccountSettings());
+        }
         .width('100%')
-        .fontSize($r('app.float.font_body'))
-        .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.neu_text_primary'));
-      Text($r('app.string.device_empty_address_book'))
+        .padding(12)
+        .backgroundColor($r('app.color.surface_secondary'))
+        .borderRadius(12);
+      } else if (this.accountController.booksLoading) {
+        Row({ space: 8 }) {
+          LoadingProgress().width(18).height(18);
+          Text('正在同步云端通讯录…')
+            .fontSize(12)
+            .fontColor($r('app.color.neu_text_secondary'));
+        }
         .width('100%')
-        .fontSize($r('app.float.font_label'))
-        .lineHeight(20)
-        .fontColor($r('app.color.neu_text_secondary'));
+        .padding(8)
+        .justifyContent(FlexAlign.Center);
+      } else if (this.accountController.booksError.length > 0) {
+        Row({ space: 10 }) {
+          Text(this.accountController.booksError)
+            .layoutWeight(1)
+            .fontSize(12)
+            .fontColor($r('app.color.error'));
+          Button('重试', { type: ButtonType.Normal })
+            .fontSize(11)
+            .height(28)
+            .borderRadius(6)
+            .onClick((): void => {
+              void this.accountController.loadAddressBooks();
+            });
+        }
+        .width('100%')
+        .padding(10)
+        .backgroundColor($r('app.color.error_soft'))
+        .borderRadius(8);
+      } else if (this.accountController.addressBooks.length > 0) {
+        Row({ space: 8 }) {
+          if (this.accountController.addressBooks.length > 1) {
+            ForEach(this.accountController.addressBooks, (book: CloudAddressBook) => {
+              Button(book.name, { type: ButtonType.Normal })
+                .fontSize(12)
+                .height(30)
+                .borderRadius(6)
+                .backgroundColor(book.id === this.accountController.activeBookId
+                  ? $r('app.color.brand_primary') : $r('app.color.surface_secondary'))
+                .fontColor(book.id === this.accountController.activeBookId
+                  ? Color.White : $r('app.color.neu_text_primary'))
+                .onClick((): void => {
+                  void this.accountController.loadActiveBook(book.id);
+                });
+            }, (book: CloudAddressBook) => book.id);
+          } else {
+            Text(this.accountController.activeBook?.name ?? '云端通讯录')
+              .fontSize(14)
+              .fontWeight(FontWeight.Bold)
+              .fontColor($r('app.color.neu_text_primary'));
+          }
+
+          Text(this.accountController.activeBook?.writable ? '可编辑' : '只读')
+            .fontSize(10)
+            .fontColor($r('app.color.neu_text_secondary'))
+            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+            .backgroundColor($r('app.color.surface_secondary'))
+            .borderRadius(4);
+
+          Blank();
+
+          if (this.accountController.activeBook?.writable) {
+            Button('添加设备', { type: ButtonType.Normal })
+              .fontSize(11)
+              .height(28)
+              .borderRadius(6)
+              .backgroundColor($r('app.color.brand_primary'))
+              .fontColor(Color.White)
+              .onClick((): void => {
+                this.cloudEditorPeerId = '';
+                this.cloudEditorAlias = '';
+                this.cloudEditorTags = '';
+                this.cloudEditorIsNew = true;
+                this.cloudEditorVisible = true;
+              });
+
+            Button('标签', { type: ButtonType.Normal })
+              .fontSize(11)
+              .height(28)
+              .borderRadius(6)
+              .backgroundColor($r('app.color.surface_secondary'))
+              .fontColor($r('app.color.neu_text_primary'))
+              .onClick((): void => {
+                this.cloudTagsVisible = true;
+              });
+          }
+
+          Button('刷新', { type: ButtonType.Normal })
+            .fontSize(11)
+            .height(28)
+            .borderRadius(6)
+            .backgroundColor($r('app.color.surface_secondary'))
+            .fontColor($r('app.color.neu_text_primary'))
+            .onClick((): void => {
+              void this.accountController.loadActiveBook(this.accountController.activeBookId);
+            });
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center);
+      }
+
+      if (this.accountController.mutationFeedback.length > 0) {
+        Row({ space: 8 }) {
+          Text(this.accountController.mutationFeedback)
+            .layoutWeight(1)
+            .fontSize(11)
+            .fontColor($r('app.color.warning'));
+          Button('刷新核对', { type: ButtonType.Normal })
+            .fontSize(11)
+            .height(26)
+            .borderRadius(6)
+            .onClick((): void => {
+              void this.accountController.loadActiveBook(this.accountController.activeBookId);
+            });
+        }
+        .width('100%')
+        .padding(8)
+        .backgroundColor($r('app.color.warning_soft'))
+        .borderRadius(8);
+      }
     }
     .width(this.controlWidth())
-    .padding($r('app.float.space_16'))
-    .alignItems(HorizontalAlign.Start)
-    .backgroundColor($r('app.color.neu_base'))
-    .border({ width: 1, color: $r('app.color.outline') })
-    .borderRadius($r('app.float.radius_24'));
+    .padding({ top: $r('app.float.space_8'), bottom: $r('app.float.space_8') })
+    .alignItems(HorizontalAlign.Start);
   }
 
   @Builder
@@ -572,9 +781,7 @@ export struct DeviceDirectoryPanel {
 
   @Builder
   private PeerList(source: PeerViewSource) {
-    if (source === 'addressBook') {
-      this.AddressBookUnavailable();
-    } else if (this.visiblePeers(source).length === 0) {
+    if (this.visiblePeers(source).length === 0) {
       Row() {
         Column() {
           this.EmptyState(source);
@@ -591,13 +798,23 @@ export struct DeviceDirectoryPanel {
             peer: peer,
             viewSource: source,
             compact: this.compactPeerCard(),
-            removeEnabled: source !== 'lan' || this.snapshot.lanCanScan,
+            removeEnabled: source === 'addressBook'
+              ? Boolean(this.accountController.activeBook?.writable)
+              : (source !== 'lan' || this.snapshot.lanCanScan),
             onSetFavorite: (target: string, protocol: PeerProtocol, favorite: boolean, idOnly: boolean) =>
               this.onSetFavorite(target, protocol, favorite, idOnly),
             onEditNote: (target: string, protocol: PeerProtocol, note: string, idOnly: boolean) =>
               this.onEditNote(target, protocol, note, idOnly),
-            onRemoveRecent: (target: string, protocol: PeerProtocol, idOnly: boolean) =>
-              this.onRemoveRecent(target, protocol, idOnly),
+            onRemoveRecent: (target: string, protocol: PeerProtocol, idOnly: boolean) => {
+              if (source === 'addressBook') {
+                if (this.accountController.activeBook?.writable) {
+                  this.cloudDeletePeerId = target;
+                  this.cloudDeleteVisible = true;
+                }
+              } else {
+                this.onRemoveRecent(target, protocol, idOnly);
+              }
+            },
             onRemoveLan: (target: string, protocol: PeerProtocol) => this.onRemoveLan(target, protocol),
             onConnectRemote: (peerId: string, idOnly: boolean) => this.onConnectRemote(peerId, idOnly),
             onConnectVnc: (peerId: string) => this.onConnectVnc(peerId),
@@ -615,13 +832,23 @@ export struct DeviceDirectoryPanel {
             peer: peer,
             viewSource: source,
             compact: this.compactPeerCard(),
-            removeEnabled: source !== 'lan' || this.snapshot.lanCanScan,
+            removeEnabled: source === 'addressBook'
+              ? Boolean(this.accountController.activeBook?.writable)
+              : (source !== 'lan' || this.snapshot.lanCanScan),
             onSetFavorite: (target: string, protocol: PeerProtocol, favorite: boolean, idOnly: boolean) =>
               this.onSetFavorite(target, protocol, favorite, idOnly),
             onEditNote: (target: string, protocol: PeerProtocol, note: string, idOnly: boolean) =>
               this.onEditNote(target, protocol, note, idOnly),
-            onRemoveRecent: (target: string, protocol: PeerProtocol, idOnly: boolean) =>
-              this.onRemoveRecent(target, protocol, idOnly),
+            onRemoveRecent: (target: string, protocol: PeerProtocol, idOnly: boolean) => {
+              if (source === 'addressBook') {
+                if (this.accountController.activeBook?.writable) {
+                  this.cloudDeletePeerId = target;
+                  this.cloudDeleteVisible = true;
+                }
+              } else {
+                this.onRemoveRecent(target, protocol, idOnly);
+              }
+            },
             onRemoveLan: (target: string, protocol: PeerProtocol) => this.onRemoveLan(target, protocol),
             onConnectRemote: (peerId: string, idOnly: boolean) => this.onConnectRemote(peerId, idOnly),
             onConnectVnc: (peerId: string) => this.onConnectVnc(peerId),
@@ -649,6 +876,9 @@ export struct DeviceDirectoryPanel {
 
             if (source === 'lan') {
               this.LanActions();
+            }
+            if (source === 'addressBook') {
+              this.AddressBookActions();
             }
             this.PeerList(source);
           }
@@ -717,7 +947,11 @@ export struct DeviceDirectoryPanel {
       .width('100%')
       .height('100%')
       .onRefreshing((): void => {
-        this.onRefresh();
+        if (source === 'addressBook') {
+          void this.accountController.loadAddressBooks();
+        } else {
+          this.onRefresh();
+        }
         this.lanRefreshing = false;
       });
     }
@@ -728,27 +962,21 @@ export struct DeviceDirectoryPanel {
     Column() {
       Blank()
         .width('100%')
-        .height(this.titleSpacerHeight)
+        .height(this.pageTopClearance())
         .flexShrink(0);
 
       Row() {
-        Column() {
+        Column({ space: 8 }) {
           this.DirectorySearch();
-          Text($r('app.string.device_liveness_hint'))
-            .width('100%')
-            .fontSize($r('app.float.font_caption'))
-            .fontColor($r('app.color.neu_text_secondary'))
-            .margin({ bottom: 8 });
           if (this.snapshot.message.length > 0) {
             Text(this.snapshot.message)
               .width('100%')
               .fontSize($r('app.float.font_caption'))
-              .fontColor($r('app.color.neu_text_secondary'))
-              .maxLines(3);
+              .fontColor($r('app.color.error'));
           }
         }
         .width(this.controlWidth())
-        .alignItems(HorizontalAlign.Center);
+        .alignItems(HorizontalAlign.Start);
       }
       .width('100%')
       .padding({
@@ -797,6 +1025,52 @@ export struct DeviceDirectoryPanel {
         onCancel: (): void => { this.deviceEditorVisible = false; },
       })
     }
+
+    CloudPeerEditorDialog({
+      visible: this.cloudEditorVisible,
+      isNew: this.cloudEditorIsNew,
+      initialPeerId: this.cloudEditorPeerId,
+      initialAlias: this.cloudEditorAlias,
+      initialTags: this.cloudEditorTags,
+      inFlight: this.accountController.mutationInFlight,
+      errorText: this.accountController.mutationFeedback,
+      onSave: (id: string, alias: string, tags: string[]): void => {
+        void this.handleCloudPeerSave(id, alias, tags);
+      },
+      onCancel: (): void => {
+        this.cloudEditorVisible = false;
+      },
+    })
+
+    CloudPeerDeleteDialog({
+      visible: this.cloudDeleteVisible,
+      peerId: this.cloudDeletePeerId,
+      inFlight: this.accountController.mutationInFlight,
+      onConfirm: (): void => {
+        void this.handleCloudPeerDelete();
+      },
+      onCancel: (): void => {
+        this.cloudDeleteVisible = false;
+      },
+    })
+
+    CloudTagsDialog({
+      visible: this.cloudTagsVisible,
+      tags: this.accountController.activeBookTags,
+      inFlight: this.accountController.mutationInFlight,
+      onAddTag: (name: string): void => {
+        void this.handleCloudAddTag(name);
+      },
+      onRenameTag: (oldName: string, newName: string): void => {
+        void this.handleCloudRenameTag(oldName, newName);
+      },
+      onDeleteTag: (name: string): void => {
+        void this.handleCloudDeleteTag(name);
+      },
+      onClose: (): void => {
+        this.cloudTagsVisible = false;
+      },
+    })
     }
     .width('100%')
     .height('100%');

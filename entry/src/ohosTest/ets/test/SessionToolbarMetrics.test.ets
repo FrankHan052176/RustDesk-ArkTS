@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@ohos/hypium';
 import { formatSessionToolbarMetrics } from '../../../main/ets/pages/rustdesk/SessionToolbarMetrics';
+import { ActionResponse, sessionUiPhase } from '../../../main/ets/pages/rustdesk/RustDeskTypes';
 
 export default function sessionToolbarMetricsTest(): void {
   describe('SessionToolbarMetricsTest', () => {
@@ -21,6 +22,57 @@ export default function sessionToolbarMetricsTest(): void {
       expect(metrics.fps).assertEqual('--');
       expect(metrics.delay).assertEqual('--');
       expect(metrics.codec).assertEqual('--');
+    });
+
+    it('maps current authentication to UI connected without rewriting engine or input facts', 0, () => {
+      const response: ActionResponse = {
+        ok: true,
+        action: 'session_poll_events',
+        session: { sessionId: 'viewer-1', phase: 'streaming' },
+        phase: 'streaming',
+        authenticated: true,
+        closing: false,
+        closed: false,
+        input_generation: 3,
+        peer_verified: false,
+        keyboard_allowed: false,
+      };
+      expect(sessionUiPhase(response)).assertEqual('connected');
+      expect(response.session?.phase).assertEqual('streaming');
+      expect(response.phase).assertEqual('streaming');
+      expect(response.input_generation).assertEqual(3);
+      expect(response.peer_verified).assertFalse();
+      expect(response.keyboard_allowed).assertFalse();
+
+      response.authenticated = false;
+      expect(sessionUiPhase(response)).assertEqual('streaming');
+      const unknown: ActionResponse = { ok: true, action: 'session_poll_events', phase: 'authenticating' };
+      expect(sessionUiPhase(unknown)).assertEqual('authenticating');
+    });
+
+    it('keeps close and failure facts ahead of authentication in the shared UI mapping', 0, () => {
+      const response: ActionResponse = {
+        ok: true,
+        action: 'session_poll_events',
+        session: { sessionId: 'viewer-1', phase: 'streaming' },
+        phase: 'streaming',
+        authenticated: true,
+        closing: true,
+      };
+      expect(sessionUiPhase(response)).assertEqual('closing');
+      response.closed = true;
+      expect(sessionUiPhase(response)).assertEqual('closed');
+      response.closed = false;
+      response.closing = false;
+      response.phase = 'failed';
+      expect(sessionUiPhase(response)).assertEqual('failed');
+      const failed: ActionResponse = {
+        ok: false,
+        action: 'session_poll_events',
+        session: { sessionId: 'viewer-1', phase: 'failed' },
+        authenticated: true,
+      };
+      expect(sessionUiPhase(failed)).assertEqual('failed');
     });
   });
 }

@@ -32,7 +32,8 @@
         "preferMultiWindowOrientation": "landscape_auto",
         "continuable": true,
         "backgroundModes": [
-          "dataTransfer"
+          "dataTransfer",
+          "audioRecording"
         ],
         "exported": true,
         "skills": [
@@ -56,6 +57,23 @@
                 "scheme": "resk",
                 "host": "handoff",
                 "path": "remote"
+              },
+              {
+                "scheme": "resk",
+                "host": "share",
+                "path": "screen"
+              }
+            ]
+          },
+          {
+            "actions": [
+              "ohos.want.action.sendData"
+            ],
+            "uris": [
+              {
+                "scheme": "resk",
+                "host": "share",
+                "path": "screen"
               }
             ]
           }
@@ -73,6 +91,13 @@
       }
     ],
     "requestPermissions": [
+      { "name": "ohos.permission.GET_NETWORK_INFO" },
+      { "name": "ohos.permission.SET_NETWORK_INFO" },
+      {
+        "name": "ohos.permission.DISTRIBUTED_DATASYNC",
+        "reason": "$string:nearby_share_permission_reason",
+        "usedScene": { "abilities": ["EntryAbility"], "when": "inuse" }
+      },
       {
         "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
       },

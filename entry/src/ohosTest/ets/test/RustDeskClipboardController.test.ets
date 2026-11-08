@@ -124,6 +124,15 @@ function pasteData(text: string): pasteboard.PasteData {
   return pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text);
 }
 
+/** What the test host published, for a test that has already asserted a write. */
+function publishedData(host: TestClipboardHost): pasteboard.PasteData {
+  const data = host.current;
+  if (data === undefined) {
+    throw new Error('the test host published nothing');
+  }
+  return data;
+}
+
 /** Lets every pending clipboard continuation run. */
 async function settle(): Promise<void> {
   await new Promise<void>((resolve: () => void): void => {
@@ -137,6 +146,19 @@ async function settle(): Promise<void> {
 /** What the controller handed to the peer. */
 class SentText {
   readonly contents: string[] = [];
+}
+
+/**
+ * Waits until the controller has handed `expected` texts to the peer.
+ *
+ * A read that has to convert markup hands the conversion to the platform, which is not
+ * a fixed number of turns away, so this waits for the effect instead of counting hops.
+ */
+async function settleTexts(sent: SentText, expected: number): Promise<void> {
+  const deadline = Date.now() + 2000;
+  while (sent.contents.length < expected && Date.now() < deadline) {
+    await settle();
+  }
 }
 
 function clipboardCallbacks(sent: SentText): RustDeskClipboardControllerCallbacks {
@@ -310,6 +332,82 @@ export default function rustDeskClipboardControllerTest(): void {
       await settle();
       expect(sent.contents.length).assertEqual(2);
       expect(sent.contents[1]).assertEqual('same');
+    });
+
+    it('sends the plain text of a rich copy whose HTML comes first', 0, async () => {
+      const host = new TestClipboardHost();
+      const sent = new SentText();
+      const controller = new RustDeskClipboardController(host, clipboardCallbacks(sent));
+      // A rich copy publishes both, and the markup may be the earlier record.
+      const rich = pasteboard.createData(pasteboard.MIMETYPE_TEXT_HTML,
+        '<span style="color:red">alpha</span>');
+      rich.addRecord(pasteboard.MIMETYPE_TEXT_PLAIN, 'alpha');
+      host.copyLocal(rich);
+      controller.start('s1');
+      await settle();
+      expect(sent.contents.length).assertEqual(1);
+      expect(sent.contents[0]).assertEqual('alpha');
+    });
+
+    it('reads the plain text a rich copy attaches to its HTML record', 0, async () => {
+      const host = new TestClipboardHost();
+      const sent = new SentText();
+      const controller = new RustDeskClipboardController(host, clipboardCallbacks(sent));
+      // An extra entry is not the record's default type, so the text is reachable only
+      // through getData(text/plain).
+      const rich = pasteboard.createData(pasteboard.MIMETYPE_TEXT_HTML, '<b>beta</b>');
+      rich.getRecord(0).addEntry(pasteboard.MIMETYPE_TEXT_PLAIN, 'beta');
+      host.copyLocal(rich);
+      controller.start('s1');
+      await settle();
+      expect(sent.contents.length).assertEqual(1);
+      expect(sent.contents[0]).assertEqual('beta');
+    });
+
+    it('keeps markup that is part of the plain text', 0, async () => {
+      const host = new TestClipboardHost();
+      const sent = new SentText();
+      const controller = new RustDeskClipboardController(host, clipboardCallbacks(sent));
+      // The text really is this markup, so nothing may strip it.
+      host.copyLocal(pasteData('<span>gamma</span>'));
+      controller.start('s1');
+      await settle();
+      expect(sent.contents.length).assertEqual(1);
+      expect(sent.contents[0]).assertEqual('<span>gamma</span>');
+    });
+
+    it('converts a copy that publishes only HTML instead of sending its markup', 0, async () => {
+      const host = new TestClipboardHost();
+      const sent = new SentText();
+      const controller = new RustDeskClipboardController(host, clipboardCallbacks(sent));
+      host.copyLocal(pasteboard.createData(pasteboard.MIMETYPE_TEXT_HTML,
+        '<span style="color:red">delta</span>'));
+      controller.start('s1');
+      await settleTexts(sent, 1);
+      expect(sent.contents.length).assertEqual(1);
+      expect(sent.contents[0]).assertEqual('delta');
+    });
+
+    it('publishes a peer payload text as the plain type and does not echo it back', 0, async () => {
+      const host = new TestClipboardHost();
+      const sent = new SentText();
+      const controller = new RustDeskClipboardController(host, clipboardCallbacks(sent));
+      controller.start('s1');
+      await settle();
+
+      controller.applyRemoteClipboard('s1', { html: '<p style="margin:0">epsilon</p>', text: 'epsilon' });
+      expect(host.writes).assertEqual(1);
+      const published = publishedData(host);
+      // The peer's own text is what an ordinary plain paste of this payload reads.
+      expect(published.getPrimaryMimeType()).assertEqual(pasteboard.MIMETYPE_TEXT_PLAIN);
+      expect(published.getPrimaryText()).assertEqual('epsilon');
+      // The markup stays on that record for a reader that asks for it.
+      expect(published.getRecord(0).getValidTypes([pasteboard.MIMETYPE_TEXT_HTML]).length).assertEqual(1);
+
+      // Reading that payload back must not hand it to the peer as a new copy.
+      host.triggerUpdate();
+      await settle();
+      expect(sent.contents.length).assertEqual(0);
     });
 
     it('does not send back the files a peer just committed', 0, () => {

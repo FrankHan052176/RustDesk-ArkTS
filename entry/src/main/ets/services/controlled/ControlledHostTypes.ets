@@ -24,6 +24,9 @@ export class ControlledIncomingPeer {
   peerId: string = '';
   peerName: string = '';
   authorized: boolean = false;
+  /** Undefined until native completed the handshake, never inferred from approval. */
+  encrypted?: boolean;
+  peerVerified?: boolean;
 }
 
 export class ControlledTrustedDevice {

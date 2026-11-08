@@ -697,9 +697,16 @@ export class RustDeskClipboardController {
           imageRecord.addEntry(pasteboard.MIMETYPE_TEXT_PLAIN, payload.text);
         }
       } else if (payload.html !== undefined && payload.html.length > 0) {
-        data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_HTML, payload.html);
         if (payload.text !== undefined && payload.text.length > 0) {
-          data.getRecord(0).addEntry(pasteboard.MIMETYPE_TEXT_PLAIN, payload.text);
+          // The peer's own text, not its markup, is this record's default type: a type
+          // added with `addEntry` is not a record's default type and is readable only
+          // through `getData(type)`, so an HTML default would leave an ordinary plain
+          // paste with nothing but the markup to work from. The HTML stays on this same
+          // record as an extra type, so a rich-text reader still finds it.
+          data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, payload.text);
+          data.getRecord(0).addEntry(pasteboard.MIMETYPE_TEXT_HTML, payload.html);
+        } else {
+          data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_HTML, payload.html);
         }
       } else if (payload.text !== undefined) {
         data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, payload.text);
@@ -920,7 +927,7 @@ export class RustDeskClipboardController {
           return;
         }
       }
-      this.sendLocalText(data, generation, sessionId, applyRevision);
+      await this.sendLocalText(data, generation, sessionId, applyRevision);
     } catch (error) {
       this.callbacks.log('clipboard_local', `failed=${String(error)}`);
     } finally {
@@ -969,33 +976,85 @@ export class RustDeskClipboardController {
     return undefined;
   }
 
-  private sendLocalText(
+  /**
+   * The text a local read hands to the peer.
+   *
+   * A rich copy publishes its markup and its text side by side, and the pasteboard
+   * does not promise which of the two comes first: the HTML may be an earlier record,
+   * or the default type of a record whose text is an extra entry. An extra entry is
+   * not the record's default type and is readable only through `getData(type)`, so a
+   * text that is only taken off the records' own types is missed. The peer's plain
+   * channel carries text and never markup, so every record and every record's extra
+   * entries are searched for a genuine `text/plain`, and only a clipboard that
+   * publishes none at all has its markup run through the platform's HTML converter.
+   */
+  private async readLocalText(data: pasteboard.PasteData): Promise<string | undefined> {
+    const recordCount = data.getRecordCount();
+    let htmlRecord: pasteboard.PasteDataRecord | undefined = undefined;
+    for (let index = 0; index < recordCount; index += 1) {
+      const record = data.getRecord(index);
+      if (record.mimeType === pasteboard.MIMETYPE_TEXT_PLAIN) {
+        return record.plainText;
+      }
+      if (htmlRecord === undefined && record.mimeType === pasteboard.MIMETYPE_TEXT_HTML) {
+        htmlRecord = record;
+      }
+    }
+    for (let index = 0; index < recordCount; index += 1) {
+      const record = data.getRecord(index);
+      let entryText: string | undefined = undefined;
+      try {
+        if (record.getValidTypes([pasteboard.MIMETYPE_TEXT_PLAIN]).length > 0) {
+          const entry = await record.getData(pasteboard.MIMETYPE_TEXT_PLAIN);
+          if (typeof entry === 'string') {
+            entryText = entry;
+          }
+        }
+      } catch (_) {
+        // A record that cannot answer for the type publishes no such text, and a
+        // pasteboard that has no extra-entry support answers that way for every
+        // record: neither leaves any text to hand over.
+      }
+      if (entryText !== undefined) {
+        return entryText;
+      }
+    }
+    if (htmlRecord === undefined) {
+      return undefined;
+    }
+    // Nothing here publishes a genuine text/plain, so this markup is the only text the
+    // clipboard holds, and the HTML-to-text conversion is the only way to get text out
+    // of it: the markup itself is never handed to the peer as plain text. Images inside
+    // the markup come back as spaces, which is what the converter documents for them. A
+    // conversion the platform refuses throws, and this read then fails the same way any
+    // other pasteboard failure does rather than falling back to the markup.
+    const styled: StyledString = await StyledString.fromHtml(htmlRecord.htmlText);
+    const converted = styled.getString();
+    return converted.length > 0 ? converted : undefined;
+  }
+
+  private async sendLocalText(
     data: pasteboard.PasteData,
     generation: number,
     sessionId: string,
     applyRevision: number,
-  ): void {
+  ): Promise<void> {
     if (!this.isLocalReadCurrent(generation, sessionId, applyRevision)) {
       return;
     }
-    for (let index = 0; index < data.getRecordCount(); index += 1) {
-      const record = data.getRecord(index);
-      if (record.mimeType !== pasteboard.MIMETYPE_TEXT_PLAIN
-        && record.mimeType !== pasteboard.MIMETYPE_TEXT_HTML) {
-        continue;
-      }
-      const content = record.mimeType === pasteboard.MIMETYPE_TEXT_PLAIN
-        ? record.plainText
-        : record.toPlainText();
-      const signature = `text:${content}`;
-      if (isClipboardTextEcho(content, this.lastRemoteText, this.lastLocalSignature)) {
-        return;
-      }
-      if (this.callbacks.sendText(sessionId, content)) {
-        this.lastLocalSignature = signature;
-        this.callbacks.log('clipboard_local', `sent text length=${content.length}`);
-      }
+    const content = await this.readLocalText(data);
+    // Looking a record's extra entries up is an await of its own, long enough for a
+    // peer apply to supersede this snapshot, so the candidate is admitted again here:
+    // the lookup decides what to send, never whether it may still be sent.
+    if (content === undefined || !this.isLocalReadCurrent(generation, sessionId, applyRevision)) {
       return;
+    }
+    if (isClipboardTextEcho(content, this.lastRemoteText, this.lastLocalSignature)) {
+      return;
+    }
+    if (this.callbacks.sendText(sessionId, content)) {
+      this.lastLocalSignature = `text:${content}`;
+      this.callbacks.log('clipboard_local', `sent text length=${content.length}`);
     }
   }
 

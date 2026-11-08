@@ -100,27 +100,29 @@ export interface TransferItem {
  * the panel renders as `--`. `'0'` is a real measurement and never the same as
  * `''`: a decoder that submitted nothing is a reading, not an absence.
  *
- * Only what the pipeline really reports is here. The Core's status tick gives
- * the frame rates and the queue depth; a direct VNC/RDP wire gives its own
- * submission rate and received-update rate once it reports a genuine sample;
- * the peer's quality events give the network round trip, the receive bandwidth,
- * the target bitrate and the codec. A direct wire measures no queue depth, so
- * `queuedUnits` stays unmeasured there instead of reading as zero. There is no
- * source for a submission-path latency, a decode duration or an admission rate,
- * so no field claims one.
+ * Core ticks supply window rates. Viewer snapshots supply cumulative received
+ * access units and successful submissions, differenced over native elapsedMs
+ * by FrameRateTelemetry. Snapshot codec, queue depth and peer-reported RTT are
+ * facts independent of that FPS window. Existing quality events can still
+ * supply network/encoder fields for their producers. No value here claims
+ * physical scanout, decoder implementation identity or decode duration.
  */
 export interface QualityTelemetry {
   /** Successful submissions per second, not physical scanout. */
   submittedFps: string;
   /** The capture rate this client asked the peer for. */
   requestedFps: string;
-  /** Compressed units arriving per second, or a direct wire's decoded updates per second. */
+  /** Compressed access units arriving per second, not network packets. */
   receivedFps: string;
-  /** Units waiting for the decoder right now; a direct wire measures none. */
+  /** Units waiting for the decoder right now, independent of the FPS window. */
   queuedUnits: string;
   /** The codec the engine or the peer's quality event named. */
   codec: string;
-  /** Network round-trip time in milliseconds, as the peer measured it. */
+  /**
+   * Network round-trip time in milliseconds: the peer's own TestDelay reading
+   * when it sent one, otherwise this socket's measured round trip. `''` means
+   * neither exists.
+   */
   networkRttMs: string;
   /** Receive bandwidth in kB/s, as the peer's quality event reported it. */
   receiveBandwidthKBs: string;
@@ -146,12 +148,9 @@ export function emptyQualityTelemetry(): QualityTelemetry {
  * Clears the frame-chain rows a new pipeline invalidates.
  *
  * A generation, round or display change is a new pipeline: the rates measured
- * on the old one describe a decoder that no longer exists, so they are dropped
- * rather than shown as the new one's. A direct wire names no generation or
- * round, so a read there that stops measuring -- not streaming, or a failed
- * snapshot -- drops them the same way. What the peer's quality events measured --
- * the round trip, the bandwidth, the target bitrate, the codec it named -- is
- * this session's own and stays.
+ * on the old one no longer describe the current pipeline. Non-streaming or an
+ * unusable cumulative window drops them the same way. Session facts stay until
+ * the next snapshot or quality event supplies their current values.
  */
 export function clearQualityFrameMetrics(current: QualityTelemetry): QualityTelemetry {
   return {
@@ -166,19 +165,31 @@ export function clearQualityFrameMetrics(current: QualityTelemetry): QualityTele
   };
 }
 
-/** A measured counter as the panel shows it: unknown stays empty, a real 0 stays 0. */
+/** Shared panel/toolbar precision: unknown stays empty, a real 0 stays 0. */
 function measuredText(value: number | null): string {
-  return value === null ? '' : String(value);
+  return value === null ? '' : String(Number(value.toFixed(1)));
+}
+
+/**
+ * The round trip this session can actually state.
+ *
+ * A peer that measures its own delay is preferred, because that number
+ * describes the whole path as the peer sees it. A rectangle-protocol session
+ * has no delay probe on its wire, so the socket's own measurement is what
+ * remains; it is still a measurement, never a guess from frame timing.
+ */
+function viewerRoundTrip(snapshot: FrameRateSnapshot): string {
+  const peer = measuredText(snapshot.networkRttMs);
+  return peer.length > 0 ? peer : measuredText(snapshot.tcpRttMs);
 }
 
 /**
  * Applies one frame snapshot to the panel's values.
  *
- * The snapshot is the only source of the frame rows -- a Core status tick or a
- * direct wire's own sample -- and it replaces them together: the engine
- * computed its rates over its own interval, so nothing here differences a
- * counter or scales anything to a window. A snapshot that carries no counters
- * clears those rows instead of publishing zeros.
+ * Rates have already been measured by Core or differenced by the Viewer
+ * sampler. A baseline or non-streaming snapshot clears FPS instead of showing
+ * zeros, but still publishes its codec, queue depth and optional RTT at once.
+ * Core ticks do not carry RTT, so their existing quality-event value survives.
  */
 export function applyFrameRateSnapshot(
   current: QualityTelemetry,
@@ -186,13 +197,14 @@ export function applyFrameRateSnapshot(
   requestedFps: string,
 ): QualityTelemetry {
   const measured = snapshot.measured();
+  const viewer = snapshot.source === 'engine_viewer_snapshot';
   return {
     submittedFps: measured ? measuredText(snapshot.submittedFps) : '',
     requestedFps,
     receivedFps: measured ? measuredText(snapshot.receivedFps) : '',
-    queuedUnits: measured ? measuredText(snapshot.queuedUnits) : '',
-    codec: measured && snapshot.codec.length > 0 ? snapshot.codec : current.codec,
-    networkRttMs: current.networkRttMs,
+    queuedUnits: measuredText(snapshot.queuedUnits),
+    codec: viewer || snapshot.codec.length > 0 ? snapshot.codec : current.codec,
+    networkRttMs: viewer ? viewerRoundTrip(snapshot) : current.networkRttMs,
     receiveBandwidthKBs: current.receiveBandwidthKBs,
     targetBitrateKbps: current.targetBitrateKbps,
   };

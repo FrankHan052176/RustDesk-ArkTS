@@ -7,6 +7,8 @@ import {
 import { FALLBACK_REFRESH_RATE } from '../RustDeskRefreshRate';
 import { RustDeskRightClickGesture, SessionDefaults } from '../RustDeskDirectoryTypes';
 import { copySessionDefaults } from '../DirectSessionSettings';
+import { RemoteSessionOrientationPolicy } from '../RemoteSessionOrientationPolicy';
+import { deviceInfo } from '@kit.BasicServicesKit';
 
 export type SessionDefaultsSection = 'all' | 'input' | 'quality' | 'other';
 
@@ -31,6 +33,7 @@ export struct SessionDefaultsCard {
   @Local displayedGesturesEnabled: boolean = true;
   @Local displayedToolbarExpanded: boolean = false;
   @Local displayedSessionSharingEnabled: boolean = false;
+  @Local displayedKeepScreenOrientation: boolean = false;
   @Event onDefaultsChange: (defaults: SessionDefaults) => void = (_defaults: SessionDefaults) => {};
 
   aboutToAppear(): void {
@@ -48,6 +51,12 @@ export struct SessionDefaultsCard {
     this.displayedGesturesEnabled = this.defaults.gesturesEnabled;
     this.displayedToolbarExpanded = this.defaults.toolbarExpanded;
     this.displayedSessionSharingEnabled = this.defaults.sessionSharingEnabled;
+    this.displayedKeepScreenOrientation = this.defaults.keepScreenOrientation;
+  }
+
+  /** Real device class, not a viewport width: a phone in landscape is still a phone. */
+  private showsKeepScreenOrientation(): boolean {
+    return RemoteSessionOrientationPolicy.offersKeepScreenOrientation(deviceInfo.deviceType);
   }
 
   private isWide(): boolean {
@@ -124,6 +133,13 @@ export struct SessionDefaultsCard {
     this.displayedSessionSharingEnabled = enabled;
     const next = this.copyDefaults();
     next.sessionSharingEnabled = enabled;
+    this.emit(next);
+  }
+
+  private updateKeepScreenOrientation(enabled: boolean): void {
+    this.displayedKeepScreenOrientation = enabled;
+    const next = this.copyDefaults();
+    next.keepScreenOrientation = enabled;
     this.emit(next);
   }
 
@@ -299,6 +315,21 @@ export struct SessionDefaultsCard {
     })
     .width(this.toggleRowWidth())
     .height(64)
+    .clip(false);
+  }
+
+  @Builder
+  private KeepScreenOrientationToggleRow() {
+    LuminousSwitch({
+      label: '连接时保持当前屏幕方向',
+      description: '',
+      isOn: this.displayedKeepScreenOrientation,
+      rowWidth: this.toggleRowWidth(),
+      motionEnabled: true,
+      onChange: (enabled: boolean): void => this.updateKeepScreenOrientation(enabled),
+    })
+    .width(this.toggleRowWidth())
+    .height(52)
     .clip(false);
   }
 
@@ -597,6 +628,13 @@ export struct SessionDefaultsCard {
                 .layoutWeight(1);
               }
               .width('100%');
+
+              if (this.showsKeepScreenOrientation()) {
+                Row() {
+                  this.KeepScreenOrientationToggleRow()
+                }
+                .width('100%');
+              }
             }
             .width('100%');
           } else {
@@ -606,6 +644,9 @@ export struct SessionDefaultsCard {
               this.GesturesToggleRow()
               this.ToolbarToggleRow()
               this.SessionSharingToggleRow()
+              if (this.showsKeepScreenOrientation()) {
+                this.KeepScreenOrientationToggleRow()
+              }
             }
             .width('100%');
           }

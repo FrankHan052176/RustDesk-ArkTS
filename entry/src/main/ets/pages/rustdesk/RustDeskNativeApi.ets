@@ -1,5 +1,15 @@
 import {
   nativeVersion as bridgeNativeVersion,
+  accountBindServer as bridgeAccountBindServer,
+  accountSnapshot as bridgeAccountSnapshot,
+  accountProviders as bridgeAccountProviders,
+  accountOidcStart as bridgeAccountOidcStart,
+  accountOidcResult as bridgeAccountOidcResult,
+  accountOidcCancel as bridgeAccountOidcCancel,
+  accountLogout as bridgeAccountLogout,
+  cloudAddressBookList as bridgeCloudAddressBookList,
+  cloudAddressBookLoad as bridgeCloudAddressBookLoad,
+  cloudAddressBookMutate as bridgeCloudAddressBookMutate,
   runtimeGetDecoderCapabilities as bridgeRuntimeGetDecoderCapabilities,
   runtimeGetServerConfig as bridgeRuntimeGetServerConfig,
   runtimeListFavorites as bridgeRuntimeListFavorites,
@@ -12,6 +22,20 @@ import {
   runtimeTestServerConfig as bridgeRuntimeTestServerConfig,
   sessionAcknowledgeClose as bridgeSessionAcknowledgeClose,
   sessionAdd as bridgeSessionAdd,
+  sessionAddShared as bridgeSessionAddShared,
+  shareStart as bridgeShareStart,
+  shareConnectTransport as bridgeShareConnectTransport,
+  shareStop as bridgeShareStop,
+  shareGetStatus as bridgeShareGetStatus,
+  shareGetInvite as bridgeShareGetInvite,
+  shareGetTransportStatus as bridgeShareGetTransportStatus,
+  sessionGetTransportStatus as bridgeSessionGetTransportStatus,
+  sharePollSendData as bridgeSharePollSendData,
+  sharePushReceiveData as bridgeSharePushReceiveData,
+  shareReportSendResult as bridgeShareReportSendResult,
+  sessionPollSendData as bridgeSessionPollSendData,
+  sessionPushReceiveData as bridgeSessionPushReceiveData,
+  sessionReportSendResult as bridgeSessionReportSendResult,
   sessionBindSurface as bridgeSessionBindSurface,
   sessionCancelJob as bridgeSessionCancelJob,
   sessionChangeResolution as bridgeSessionChangeResolution,
@@ -69,6 +93,46 @@ export class RustDeskNativeApi implements RustDeskMouseSink {
     return bridgeNativeVersion();
   }
 
+  accountBindServer(approvedProfileJson: string): Promise<string> {
+    return bridgeAccountBindServer(approvedProfileJson);
+  }
+
+  accountSnapshot(): Promise<string> {
+    return bridgeAccountSnapshot();
+  }
+
+  accountProviders(): Promise<string> {
+    return bridgeAccountProviders();
+  }
+
+  accountOidcStart(receipt: string, providerId: string, rememberMe: boolean): Promise<string> {
+    return bridgeAccountOidcStart(receipt, providerId, rememberMe);
+  }
+
+  accountOidcResult(attemptReceipt: string): Promise<string> {
+    return bridgeAccountOidcResult(attemptReceipt);
+  }
+
+  accountOidcCancel(attemptReceipt: string): Promise<string> {
+    return bridgeAccountOidcCancel(attemptReceipt);
+  }
+
+  accountLogout(receipt: string): Promise<string> {
+    return bridgeAccountLogout(receipt);
+  }
+
+  cloudAddressBookList(receipt: string): Promise<string> {
+    return bridgeCloudAddressBookList(receipt);
+  }
+
+  cloudAddressBookLoad(receipt: string, bookId: string): Promise<string> {
+    return bridgeCloudAddressBookLoad(receipt, bookId);
+  }
+
+  cloudAddressBookMutate(receipt: string, bookId: string, mutationJson: string): Promise<string> {
+    return bridgeCloudAddressBookMutate(receipt, bookId, mutationJson);
+  }
+
   runtimeGetDecoderCapabilities(): Promise<string> {
     return bridgeRuntimeGetDecoderCapabilities();
   }
@@ -115,6 +179,62 @@ export class RustDeskNativeApi implements RustDeskMouseSink {
 
   sessionAdd(sessionId: string, peerTarget: string, optionsJson: string): string {
     return bridgeSessionAdd(sessionId, peerTarget, optionsJson);
+  }
+
+  sessionAddShared(sessionId: string, inviteCode: string, optionsJson: string): string {
+    return bridgeSessionAddShared(sessionId, inviteCode, optionsJson);
+  }
+
+  shareStart(optionsJson: string): Promise<string> {
+    return bridgeShareStart(optionsJson);
+  }
+
+  shareStop(shareEpoch: string): Promise<string> {
+    return bridgeShareStop(shareEpoch);
+  }
+
+  shareGetStatus(): string {
+    return bridgeShareGetStatus();
+  }
+
+  shareConnectTransport(epoch: string): string {
+    return bridgeShareConnectTransport(epoch);
+  }
+
+  shareGetTransportStatus(epoch: string): string {
+    return bridgeShareGetTransportStatus(epoch);
+  }
+
+  sessionGetTransportStatus(sessionId: string, epoch: string): string {
+    return bridgeSessionGetTransportStatus(sessionId, epoch);
+  }
+
+  sharePollSendData(epoch: string): Uint8Array {
+    return bridgeSharePollSendData(epoch);
+  }
+
+  sharePushReceiveData(epoch: string, data: Uint8Array): string {
+    return bridgeSharePushReceiveData(epoch, data);
+  }
+
+  shareReportSendResult(epoch: string, ok: boolean, label: string, code: number = 0): string {
+    return bridgeShareReportSendResult(epoch, ok, label, code);
+  }
+
+  sessionPollSendData(sessionId: string, epoch: string): Uint8Array {
+    return bridgeSessionPollSendData(sessionId, epoch);
+  }
+
+  sessionPushReceiveData(sessionId: string, epoch: string, data: Uint8Array): string {
+    return bridgeSessionPushReceiveData(sessionId, epoch, data);
+  }
+
+  sessionReportSendResult(sessionId: string, epoch: string, ok: boolean, label: string, code: number = 0): string {
+    return bridgeSessionReportSendResult(sessionId, epoch, ok, label, code);
+  }
+
+  shareGetInvite(shareEpoch: string): string {
+    return bridgeShareGetInvite(shareEpoch);
   }
 
   /** The third argument is the opaque componentId xcomponentAttach returned, never a Surface id. */

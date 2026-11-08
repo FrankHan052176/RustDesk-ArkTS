@@ -7,6 +7,7 @@ import {
   PeerOnlineStatusResult,
   PeerRecord,
   PeerSource,
+  ServerKeyUpdate,
   ServerConfig,
   ServerEndpointTestState,
   ServerMode,
@@ -19,12 +20,15 @@ import {
   rustDeskRuntimeController,
 } from '../../services/RustDeskRuntimeController';
 
-/** The four wire fields the engine's profile grammar accepts; UI-only fields never travel. */
+/** The wire fields the engine's profile grammar accepts; UI-only fields never travel. */
 interface NativeServerProfileFields {
   mode: ServerMode;
   idServer: string;
   relayServer: string;
-  key: string;
+  apiServer: string;
+  keyUpdate: ServerKeyUpdate;
+  draftOnly?: boolean;
+  editToken?: string;
 }
 
 export class RustDeskMainBridge {
@@ -55,6 +59,8 @@ export class RustDeskMainBridge {
     try {
       const response: ESObject = JSON.parse(await native.runtimeGetServerConfig());
       reply.ok = response.ok === true;
+      reply.draft = this.readServerDraft(response.draft);
+      reply.draftError = String(response.draftError ?? '');
       const message = String(response.message ?? '').trim();
       reply.message = message;
       if (!reply.ok) {
@@ -63,7 +69,7 @@ export class RustDeskMainBridge {
       }
       if (response.approved !== true) {
         reply.config = new ServerConfig();
-        reply.message = '尚无已明确保存的服务器配置';
+        reply.message = '尚无已自动保存的服务器配置';
         return reply;
       }
       const profile = ApprovedServerProfile.fromNative(response.approvedProfile);
@@ -75,7 +81,11 @@ export class RustDeskMainBridge {
       reply.approved = true;
       reply.approvedProfile = profile;
       reply.revision = profile.revision;
-      reply.config = this.copySavedServerConfig(response.config, '已读取引擎明确保存的配置；这里不检测服务器可达性');
+      reply.config = this.copySavedServerConfig(response.config, '');
+      if (response.keyError) {
+        reply.config.resultState = 'error';
+        reply.config.message = String(response.keyError);
+      }
       return reply;
     } catch (error) {
       reply.error = String(error);
@@ -94,7 +104,7 @@ export class RustDeskMainBridge {
     const result = this.copyConfig(config);
     try {
       const response: ESObject = JSON.parse(
-        await native.runtimeTestServerConfig(JSON.stringify(this.wireProfile(config))),
+        await native.runtimeTestServerConfig(JSON.stringify(this.wireProfile(config, true))),
       );
       const ok = response.ok === true;
       result.remoteReachable = ok;
@@ -113,9 +123,13 @@ export class RustDeskMainBridge {
   }
 
   /**
-   * The explicit-save act: the engine persists the profile and returns the
+   * The manual-edit commit: the engine persists the profile and returns the
    * approved route it committed. Nothing short of `ok && approved && committed`
    * may be adopted by the caller.
+   *
+   * `committed` is the engine's own durable write, so it is reported even when the
+   * receipt itself carries no adoptable route (`ok:false && committed:true`): the
+   * profile is on disk, but this reply may not be turned into an approval.
    */
   async saveServerConfig(config: ServerConfig): Promise<ServerProfileReply> {
     const reply = new ServerProfileReply();
@@ -125,9 +139,10 @@ export class RustDeskMainBridge {
         await native.runtimeSetServerConfig(JSON.stringify(this.wireProfile(config))),
       );
       reply.message = String(response.message ?? '').trim();
-      const committed = response.ok === true && response.approved === true &&
-        response.committed === true;
-      if (!committed) {
+      reply.cleanupWarning = String(response.cleanupWarning ?? '');
+      reply.committed = response.committed === true;
+      const adoptable = response.ok === true && response.approved === true && reply.committed;
+      if (!adoptable) {
         reply.error = String(response.error ?? '').trim() || reply.message || '引擎未确认这次保存';
         return reply;
       }
@@ -138,7 +153,6 @@ export class RustDeskMainBridge {
       }
       reply.ok = true;
       reply.approved = true;
-      reply.committed = true;
       reply.approvedProfile = profile;
       reply.revision = profile.revision;
       reply.config = this.copySavedServerConfig(response.config, reply.message);
@@ -147,6 +161,40 @@ export class RustDeskMainBridge {
       reply.error = String(error);
       return reply;
     }
+  }
+
+  /** Persist raw/invalid text first. Native keeps Key text in Asset and returns
+   * only its draft revision; this never approves or probes a server route. */
+  async saveServerDraft(config: ServerConfig): Promise<ServerProfileReply> {
+    const reply = new ServerProfileReply();
+    try {
+      const response: ESObject = JSON.parse(await native.runtimeSetServerConfig(
+        JSON.stringify(this.wireProfile(config, false, true))));
+      reply.committed = response.committed === true;
+      reply.cleanupWarning = String(response.cleanupWarning ?? '');
+      const saved = this.readServerDraft(response.draft);
+      reply.ok = response.ok === true && reply.committed && saved !== undefined && saved.resultState !== 'error';
+      if (saved !== undefined) { reply.config = saved; }
+      reply.error = String(response.error ?? response.draftError ?? saved?.message ?? '');
+      return reply;
+    } catch (error) { reply.error = String(error); return reply; }
+  }
+
+  private readServerDraft(source: ESObject): ServerConfig | undefined {
+    if (source === undefined || source === null) { return undefined; }
+    const revision = Number(source.draftRevision);
+    if (!Number.isSafeInteger(revision) || revision <= 0) { return undefined; }
+    const config = new ServerConfig();
+    config.mode = source.mode === 'custom' ? 'custom' : 'official';
+    config.idServer = String(source.idServer ?? '');
+    config.relayServer = String(source.relayServer ?? '');
+    config.apiServer = String(source.apiServer ?? '');
+    config.draftRevision = revision;
+    config.draftEditToken = String(source.draftEditToken ?? '');
+    config.draftKeyConfigured = source.draftKeyConfigured === true;
+    config.draftKeyAction = String(source.draftKeyAction ?? 'keep');
+    if (source.keyError) { config.resultState = 'error'; config.message = String(source.keyError); }
+    return config;
   }
 
   /** Lists the rows the engine stored after this client observed sessions. */
@@ -262,7 +310,7 @@ export class RustDeskMainBridge {
     profile: ApprovedServerProfile | undefined): Promise<PeerOnlineStatusResult> {
     const result = new PeerOnlineStatusResult();
     if (profile === undefined) {
-      result.message = '服务器配置尚未明确保存，未查询 RustDesk 在线状态';
+      result.message = '服务器配置尚未自动保存，未查询 RustDesk 在线状态';
       return result;
     }
     try {
@@ -326,14 +374,20 @@ export class RustDeskMainBridge {
       : entry;
   }
 
-  private wireProfile(config: ServerConfig): NativeServerProfileFields {
-    const fields: NativeServerProfileFields = {
+  private wireProfile(config: ServerConfig, probe: boolean = false, draft: boolean = false): NativeServerProfileFields {
+    const keyUpdate: ServerKeyUpdate = probe ? { action: 'keep' } : config.mode === 'official' || (config.keyEdited && config.keyInput.length === 0)
+      ? { action: 'clear' }
+      : (config.keyEdited ? { action: 'set', value: config.keyInput }
+        : (config.draftRevision > 0 ? { action: 'keep', draftRevision: config.draftRevision } : { action: 'keep' }));
+    return {
       mode: config.mode,
-      idServer: config.idServer.trim(),
-      relayServer: config.relayServer.trim(),
-      key: config.key.trim(),
+      idServer: draft ? config.idServer : config.idServer.trim(),
+      relayServer: draft ? config.relayServer : config.relayServer.trim(),
+      apiServer: draft ? config.apiServer : (config.mode === 'official' ? '' : config.apiServer.trim()),
+      keyUpdate: keyUpdate,
+      draftOnly: draft,
+      editToken: draft ? config.draftEditToken : undefined,
     };
-    return fields;
   }
 
   /** The directory's identity for a row, computed once so every write names the same key. */
@@ -366,8 +420,8 @@ export class RustDeskMainBridge {
   /**
    * Copies an engine-normalized profile into the card's shape.
    *
-   * The engine owns mode/idServer/relayServer/key only: it has no API server and
-   * no account capability, so those probes stay `untested` and unreachable.
+   * The engine owns mode/idServer/relayServer/apiServer/key and public Key metadata.
+   * It never returns shared Key text.
    */
   private copySavedServerConfig(source: ESObject, message: string): ServerConfig {
     const config = new ServerConfig();
@@ -378,11 +432,19 @@ export class RustDeskMainBridge {
     config.mode = String(source.mode ?? '').trim() === 'custom' ? 'custom' : 'official';
     config.idServer = String(source.idServer ?? '').trim();
     config.relayServer = String(source.relayServer ?? '').trim();
+    config.apiServer = String(source.apiServer ?? '').trim();
     config.key = String(source.key ?? '').trim();
+    const version = Number(source.keyVersion ?? source.relayKeyVersion ?? 0);
+    config.keyVersion = Number.isSafeInteger(version) && version >= 0 ? version : 0;
+    config.keyKind = String(source.keyKind ?? (config.keyVersion > 0
+      ? (config.key.length > 0 ? 'conflict' : 'shared') : (config.key.length > 0 ? 'public' : 'default')));
+    config.keyConfigured = typeof source.keyConfigured === 'boolean'
+      ? source.keyConfigured : config.keyVersion > 0 || config.key.length > 0;
+    config.keyInput = '';
+    config.keyEdited = false;
     config.usingPublicServer = config.mode === 'official';
-    config.apiServer = '';
-    config.effectiveApiServer = '';
-    config.accountAvailable = false;
+    config.effectiveApiServer = config.apiServer;
+    config.accountAvailable = config.apiServer.length > 0;
     config.remoteReachable = false;
     config.resultState = '';
     config.message = message;
@@ -396,6 +458,12 @@ export class RustDeskMainBridge {
     config.relayServer = source.relayServer;
     config.apiServer = source.apiServer;
     config.key = source.key;
+    config.keyInput = source.keyInput;
+    config.keyEdited = source.keyEdited;
+    config.keyNeedsEntry = source.keyNeedsEntry;
+    config.keyConfigured = source.keyConfigured;
+    config.keyVersion = source.keyVersion;
+    config.keyKind = source.keyKind;
     config.effectiveApiServer = source.effectiveApiServer;
     config.usingPublicServer = source.usingPublicServer;
     config.remoteReachable = source.remoteReachable;

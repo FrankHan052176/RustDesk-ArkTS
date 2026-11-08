@@ -9,36 +9,20 @@ import {
 } from 'luminous_neo';
 import { ServerConfig, ServerMode, ServerProfileState } from '../RustDeskDirectoryTypes';
 
-export interface ServerSettingsCardProps {
-  showHeader: boolean;
-  config: ServerConfig;
-  profile: ServerProfileState;
-  validating: boolean;
-  saving: boolean;
-  onConfigChange: (config: ServerConfig) => void;
-  onValidate: (config: ServerConfig) => void;
-  onSave: (config: ServerConfig) => void;
-}
-
 @ComponentV2
 export struct ServerSettingsCard {
-  @Param showHeader: boolean = true;
+  @Param showHeader: boolean = false;
   @Param config: ServerConfig = new ServerConfig();
   @Param profile: ServerProfileState = new ServerProfileState();
   @Param validating: boolean = false;
   @Param saving: boolean = false;
+  @Param probeMessage: string = '';
   @Local viewportWidth: number = 390;
   @Event onConfigChange: (config: ServerConfig) => void = (_config: ServerConfig) => {};
   @Event onValidate: (config: ServerConfig) => void = (_config: ServerConfig) => {};
-  @Event onSave: (config: ServerConfig) => void = (_config: ServerConfig) => {};
+  @Event onFlush: (retry?: boolean) => void = (_retry?: boolean) => {};
 
-  private isBusy(): boolean {
-    return this.validating || this.saving;
-  }
-
-  private selectorWidth(): number {
-    return Math.max(96, Math.min(this.viewportWidth - 40, 560));
-  }
+  aboutToDisappear(): void { this.onFlush(false); }
 
   private inputWidth(): number {
     return Math.max(96, this.viewportWidth - 16);
@@ -49,7 +33,18 @@ export struct ServerSettingsCard {
     next.mode = this.config.mode;
     next.idServer = this.config.idServer;
     next.relayServer = this.config.relayServer;
+    next.apiServer = this.config.apiServer;
     next.key = this.config.key;
+    next.keyInput = this.config.keyInput;
+    next.keyEdited = this.config.keyEdited;
+    next.keyNeedsEntry = this.config.keyNeedsEntry;
+    next.draftRevision = this.config.draftRevision;
+    next.draftEditToken = this.config.draftEditToken;
+    next.draftKeyConfigured = this.config.draftKeyConfigured;
+    next.draftKeyAction = this.config.draftKeyAction;
+    next.keyKind = this.config.keyKind;
+    next.keyConfigured = this.config.keyConfigured;
+    next.keyVersion = this.config.keyVersion;
     return next;
   }
 
@@ -59,173 +54,140 @@ export struct ServerSettingsCard {
     this.onConfigChange(next);
   }
 
-  private updateIdServer(value: string): void {
+  private updateField(field: string, value: string): void {
     const next = this.copyDraft();
-    next.idServer = value;
+    if (field === 'id') { next.idServer = value; }
+    else if (field === 'relay') { next.relayServer = value; }
+    else if (field === 'api') { next.apiServer = value; }
+    else {
+      next.keyInput = value;
+      next.keyEdited = true;
+      next.keyNeedsEntry = false;
+    }
     this.onConfigChange(next);
   }
 
-  private updateRelayServer(value: string): void {
-    const next = this.copyDraft();
-    next.relayServer = value;
-    this.onConfigChange(next);
+  private keyValue(): string {
+    if (this.config.keyEdited) { return this.config.keyInput; }
+    return this.config.draftKeyConfigured ||
+      (this.config.draftRevision > 0 && this.config.draftKeyAction === 'clear') ? '' : this.config.key;
   }
 
-  private updateKey(value: string): void {
-    const next = this.copyDraft();
-    next.key = value;
-    this.onConfigChange(next);
-  }
-
-  private approvalText(): ResourceStr {
-    if (this.profile.approval === 'approved') {
-      return $r('app.string.resk_server_approved');
-    }
-    if (this.profile.approval === 'legacy-unapproved') {
-      return $r('app.string.resk_server_legacy');
-    }
-    return $r('app.string.resk_server_unapproved');
-  }
-
-  private resultText(): ResourceStr {
-    if (this.config.resultState === 'format-valid') {
-      return $r('app.string.resk_server_format_valid');
-    }
-    if (this.config.resultState === 'saved') {
-      return $r('app.string.resk_server_saved');
-    }
+  private statusText(): string {
+    if (this.saving || this.config.resultState === 'pending') { return '正在自动保存…'; }
+    if (this.config.resultState === 'saved') { return this.config.message || '已自动生效'; }
     return this.config.message;
   }
 
+  private retryable(): boolean {
+    return this.config.resultState === 'error' || this.config.resultState === 'unknown';
+  }
+
   @Builder
-  private ServerField(placeholder: ResourceStr, label: ResourceStr, value: string,
-    onChange: (value: string) => void) {
+  private ServerField(label: string, placeholder: string, value: string,
+    onChange: (value: string) => void, secret: boolean = false) {
     Column({ space: 4 }) {
       Text(label)
         .width(this.inputWidth())
-        .fontSize($r('app.float.font_label'))
+        .fontSize(12)
         .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_secondary'));
-      Row() {
-        LuminousTextField({
-          value: value,
-          placeholder: placeholder,
-          fieldWidth: this.inputWidth(),
-          fieldHeight: 48,
-          isEnabled: !this.isBusy(),
-          motionEnabled: true,
-          onChange: onChange,
-        })
-          .margin({ top: -10 })
-          .translate({ x: -(LuminousNeoTokens.shadowPaddingFor(48) - 8) })
-      }
-      .width('100%')
-      .justifyContent(FlexAlign.Center);
+        .fontColor($r('app.color.neu_text_secondary'));
+      LuminousTextField({
+        value: value,
+        placeholder: placeholder,
+        fieldWidth: this.inputWidth(),
+        fieldHeight: 48,
+        inputType: secret ? InputType.Password : InputType.Normal,
+        motionEnabled: true,
+        onChange: onChange,
+      })
+        .margin({ top: -8 })
+        .translate({ x: -(LuminousNeoTokens.shadowPaddingFor(48) - 8) })
     }
     .width('100%')
     .alignItems(HorizontalAlign.Center);
   }
 
-  @Builder
-  private ActionButton(label: ResourceStr, primary: boolean, onClick: () => void) {
-    LuminousButton({
-      label: label,
-      controlWidth: Math.max(120, this.inputWidth() - 32),
-      controlSizeMode: LuminousControlSize.Regular,
-      tone: primary ? LuminousTone.Accent : LuminousTone.Neutral,
-      isEnabled: !this.isBusy(),
-      motionEnabled: true,
-      onAction: onClick,
-    })
-  }
-
   build() {
-    Column({ space: $r('app.float.space_8') }) {
-      if (this.showHeader) {
-        Column({ space: $r('app.float.space_4') }) {
-          Text($r('app.string.settings_server_title'))
-            .width('100%')
-            .fontSize($r('app.float.font_title'))
-            .fontWeight(FontWeight.Bold)
-            .fontColor($r('app.color.text_primary'));
-          Text($r('app.string.settings_server_subtitle'))
-            .width('100%')
-            .fontSize($r('app.float.font_body'))
-            .fontColor($r('app.color.text_secondary'));
-        }
-        .width('100%')
-        .alignItems(HorizontalAlign.Start);
-      }
-
-      Row() {
-        LuminousSegmentedControl({
-          items: [
-            new LuminousSelectionItem('official', $r('app.string.settings_server_official')),
-            new LuminousSelectionItem('custom', $r('app.string.settings_server_custom')),
-          ],
-          selectedIndex: this.config.mode === 'custom' ? 1 : 0,
-          controlWidth: Math.max(96, this.selectorWidth() - LuminousNeoTokens.shadowPaddingFor(50) * 2),
-          controlHeight: 50,
-          isEnabled: !this.isBusy(),
-          motionEnabled: true,
-          onChange: (index: number): void => this.updateMode(index === 1 ? 'custom' : 'official'),
-        })
-      }
-      .width('100%')
-      .justifyContent(FlexAlign.Center);
-
-      Text(this.config.mode === 'official'
-        ? $r('app.string.settings_server_public_hint')
-        : $r('app.string.settings_server_custom_hint'))
-        .width('100%')
-        .fontSize($r('app.float.font_body'))
-        .lineHeight(20)
-        .fontColor($r('app.color.neu_text_secondary'));
+    Column({ space: 12 }) {
+      LuminousSegmentedControl({
+        items: [
+          new LuminousSelectionItem('official', '官方服务器'),
+          new LuminousSelectionItem('custom', '自定义服务器'),
+        ],
+        selectedIndex: this.config.mode === 'custom' ? 1 : 0,
+        controlWidth: Math.max(96, this.inputWidth() - LuminousNeoTokens.shadowPaddingFor(50) * 2),
+        controlHeight: 50,
+        motionEnabled: true,
+        onChange: (index: number): void => this.updateMode(index === 1 ? 'custom' : 'official'),
+      })
 
       if (this.config.mode === 'custom') {
-        this.ServerField($r('app.string.settings_id_server_placeholder'), $r('app.string.settings_id_server'),
-          this.config.idServer, (value: string): void => this.updateIdServer(value));
-        this.ServerField($r('app.string.settings_relay_server_placeholder'), $r('app.string.settings_relay_server'),
-          this.config.relayServer, (value: string): void => this.updateRelayServer(value));
-        this.ServerField($r('app.string.settings_server_key_placeholder'), $r('app.string.settings_server_key'),
-          this.config.key, (value: string): void => this.updateKey(value));
+        this.ServerField('ID Server', 'id.example.com:21116', this.config.idServer,
+          (value: string): void => this.updateField('id', value));
+        this.ServerField('Relay Server', '选填，relay.example.com:21117', this.config.relayServer,
+          (value: string): void => this.updateField('relay', value));
+        this.ServerField('API Server', '选填，https://api.example.com', this.config.apiServer,
+          (value: string): void => this.updateField('api', value));
+        this.ServerField('Key', (this.config.draftKeyConfigured || this.config.keyKind === 'shared') && !this.config.keyEdited
+          ? '已保存 Key，输入新 Key 可替换' : '公钥或共享密钥', this.keyValue(),
+          (value: string): void => this.updateField('key', value),
+          this.config.keyEdited || this.config.draftKeyConfigured || this.config.keyKind === 'shared');
+        if (this.config.keyConfigured || this.config.draftKeyConfigured || this.config.keyEdited || this.config.keyKind === 'conflict') {
+          Row() {
+            if (this.config.keyKind === 'shared' && !this.config.keyEdited) {
+              Text('已配置共享 Key').fontSize(12).fontColor($r('app.color.neu_text_secondary'));
+            }
+            Blank();
+            Text('清除 Key')
+              .fontSize(12)
+              .fontColor($r('app.color.neu_accent'))
+              .padding(8)
+              .onClick((): void => this.updateField('key', ''));
+          }.width(this.inputWidth());
+        }
+        if (this.config.keyKind === 'conflict') {
+          Text('旧配置包含两个 Key，未用于新连接。请在此输入一个 Key 或清除。')
+            .width(this.inputWidth()).fontSize(12).fontColor($r('app.color.warning'));
+        }
+        if (this.config.keyKind === 'shared' && !this.config.keyEdited) {
+          Text('共享 Key 无法验证远程身份，连接可能不加密。')
+            .width(this.inputWidth()).fontSize(12).fontColor($r('app.color.warning'));
+        }
       }
 
-      Text(this.approvalText())
-        .width('100%')
-        .fontSize($r('app.float.font_label'))
-        .fontColor($r('app.color.neu_text_secondary'));
-      Text($r('app.string.settings_server_validation_note'))
-        .width('100%')
-        .fontSize($r('app.float.font_caption'))
-        .lineHeight(17)
-        .fontColor($r('app.color.text_secondary'));
-
-      Column() {
-        this.ActionButton($r('app.string.resk_server_validate'), false,
-          (): void => this.onValidate(this.copyDraft()));
-        this.ActionButton(this.saving ? $r('app.string.settings_server_saving')
-          : $r('app.string.settings_server_save'), true,
-          (): void => this.onSave(this.copyDraft()));
+      if (this.statusText().length > 0) {
+        Row({ space: 6 }) {
+          if (this.saving) { LoadingProgress().width(16).height(16); }
+          Text(this.statusText())
+            .fontSize(12)
+            .fontColor(this.retryable() ? $r('app.color.error') : $r('app.color.neu_text_secondary'));
+        }.width(this.inputWidth());
       }
-      .width('100%')
-      .alignItems(HorizontalAlign.Center);
-
-      if (this.config.resultState === 'format-valid' || this.config.resultState === 'saved' ||
-        this.config.message.length > 0) {
-        Text(this.resultText())
-          .width('100%')
-          .fontSize($r('app.float.font_label'))
-          .fontColor(this.config.resultState === 'error' ? $r('app.color.error') : $r('app.color.text_primary'));
+      if (this.retryable() && !this.saving) {
+        Text('重试自动保存')
+          .fontSize(12).fontColor($r('app.color.neu_accent'))
+          .padding(8).onClick((): void => this.onFlush(true));
       }
+      if (this.probeMessage.length > 0) {
+        Text(this.probeMessage).width(this.inputWidth()).fontSize(12)
+          .fontColor($r('app.color.neu_text_secondary'));
+      }
+      LuminousButton({
+        label: this.validating ? '正在测试 TCP 连接…' : '测试连接',
+        controlWidth: Math.max(96, this.inputWidth() - 32),
+        controlSizeMode: LuminousControlSize.Regular,
+        tone: LuminousTone.Accent,
+        isEnabled: !this.validating,
+        motionEnabled: true,
+        onAction: (): void => this.onValidate(this.copyDraft()),
+      })
     }
     .width('100%')
-    .alignItems(HorizontalAlign.Start)
+    .alignItems(HorizontalAlign.Center)
     .onAreaChange((_oldArea: Area, newArea: Area): void => {
       const width = Number(newArea.width);
-      if (width > 0) {
-        this.viewportWidth = width;
-      }
+      if (width > 0) { this.viewportWidth = width; }
     });
   }
 }

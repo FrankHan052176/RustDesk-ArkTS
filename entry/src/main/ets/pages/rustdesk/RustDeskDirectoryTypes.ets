@@ -25,6 +25,21 @@ export class ServerConfig {
   relayServer: string = '';
   apiServer: string = '';
   key: string = '';
+  /** Editor-only input. It can be a secret; never serialize this config wholesale. */
+  keyInput: string = '';
+  keyEdited: boolean = false;
+  /** A restarted draft contained an uncommitted Key: re-entry, never a secret echo. */
+  keyNeedsEntry: boolean = false;
+  /** Public reference to the native Asset-backed editor draft; never a Key. */
+  draftRevision: number = 0;
+  /** Nonsecret write witness; not a credential or native approval. */
+  draftEditToken: string = '';
+  draftKeyConfigured: boolean = false;
+  draftKeyAction: string = 'keep';
+  keyKind: string = 'default';
+  keyConfigured: boolean = false;
+  /** Opaque Asset pointer; never the shared Key. */
+  keyVersion: number = 0;
   effectiveApiServer: string = '';
   usingPublicServer: boolean = true;
   remoteReachable: boolean = false;
@@ -39,14 +54,21 @@ export class ServerConfig {
   apiServerTestMessage: string = '';
 }
 
-/** Editable configuration never carries approval. Only a durable explicit Save does. */
+export interface ServerKeyUpdate {
+  action: 'keep' | 'set' | 'clear';
+  value?: string;
+  draftRevision?: number;
+}
+
+/** The editor and the native-committed route are deliberately separate. */
 export class ServerProfileState {
   config: ServerConfig = new ServerConfig();
   approval: 'missing' | 'legacy-unapproved' | 'approved' = 'missing';
   revision: number = 0;
 
   captureApproved(): ApprovedServerProfile | undefined {
-    if (this.approval !== 'approved' || !Number.isSafeInteger(this.revision) || this.revision <= 0) {
+    if (this.approval !== 'approved' || this.config.keyKind === 'conflict' ||
+      !Number.isSafeInteger(this.revision) || this.revision <= 0) {
       return undefined;
     }
     return new ApprovedServerProfile(this.config, this.revision);
@@ -56,25 +78,34 @@ export class ServerProfileState {
 /** Value-owned session option; no reference to an editor or mutable saved config. */
 export class ApprovedServerProfile {
   readonly schemaVersion: number = 2;
-  readonly approval: string = 'explicit-save';
+  readonly approval: string = 'manual-edit';
   readonly revision: number;
   readonly mode: ServerMode;
   readonly idServer: string;
   readonly relayServer: string;
+  readonly apiServer: string;
   readonly key: string;
+  readonly keyConfigured: boolean;
+  readonly keyVersion: number;
+  readonly keyKind: string;
 
   constructor(config: ServerConfig, revision: number) {
     this.revision = revision;
     this.mode = config.mode;
     this.idServer = config.idServer;
     this.relayServer = config.relayServer;
+    this.apiServer = config.apiServer;
     this.key = config.key;
+    this.keyConfigured = config.keyConfigured;
+    this.keyKind = config.keyKind;
+    const version = Number(config.keyVersion);
+    this.keyVersion = Number.isSafeInteger(version) && version >= 0 ? version : 0;
   }
 
   /**
    * Rebuilds this value-owned route from an engine `approvedProfile` envelope.
    *
-   * Only the engine's own persisted explicit save produces that envelope, so this
+   * Only the engine's own persisted manual-edit commit produces that envelope, so this
    * validates it instead of turning an editable draft into an approval. It reads
    * `revision` from the envelope (a number there), not the string `revision` the
    * same reply carries beside it.
@@ -83,7 +114,8 @@ export class ApprovedServerProfile {
     if (source === undefined || source === null) {
       return undefined;
     }
-    if (Number(source.schemaVersion) !== 2 || String(source.approval ?? '') !== 'explicit-save') {
+    if (Number(source.schemaVersion) !== 2 ||
+      (String(source.approval ?? '') !== 'manual-edit' && String(source.approval ?? '') !== 'explicit-save')) {
       return undefined;
     }
     const revision = Number(source.revision);
@@ -98,9 +130,16 @@ export class ApprovedServerProfile {
     config.mode = mode as ServerMode;
     config.idServer = String(source.idServer ?? '').trim();
     config.relayServer = String(source.relayServer ?? '').trim();
+    config.apiServer = String(source.apiServer ?? '').trim();
     config.key = String(source.key ?? '').trim();
+    const version = Number(source.keyVersion ?? source.relayKeyVersion ?? 0);
+    config.keyVersion = Number.isSafeInteger(version) && version >= 0 ? version : 0;
+    config.keyKind = String(source.keyKind ?? (config.keyVersion > 0
+      ? (config.key.length > 0 ? 'conflict' : 'shared') : (config.key.length > 0 ? 'public' : 'default')));
+    config.keyConfigured = typeof source.keyConfigured === 'boolean'
+      ? source.keyConfigured : config.keyVersion > 0 || config.key.length > 0;
     config.usingPublicServer = mode === 'official';
-    if (config.idServer.length === 0 || config.key.length === 0) {
+    if (config.idServer.length === 0) {
       return undefined;
     }
     return new ApprovedServerProfile(config, revision);
@@ -114,6 +153,9 @@ export class ApprovedServerProfile {
  * is only the engine's own write, and no field here makes an endpoint reachable.
  */
 export class ServerProfileReply {
+  draft: ServerConfig | undefined = undefined;
+  draftError: string = '';
+  cleanupWarning: string = '';
   ok: boolean = false;
   action: string = '';
   approved: boolean = false;
@@ -135,7 +177,11 @@ export class ServerProfileReply {
     config.mode = profile.mode;
     config.idServer = profile.idServer;
     config.relayServer = profile.relayServer;
+    config.apiServer = profile.apiServer;
     config.key = profile.key;
+    config.keyConfigured = profile.keyConfigured;
+    config.keyVersion = profile.keyVersion;
+    config.keyKind = profile.keyKind;
     config.usingPublicServer = profile.mode === 'official';
     state.config = config;
     state.approval = 'approved';
@@ -268,10 +314,11 @@ export class PeerRecord {
    */
   @Trace online: boolean | undefined = undefined;
   /**
-   * TCP reachability of a direct RDP/VNC endpoint, never a RustDesk answer.
+   * TCP reachability of a direct-wire endpoint - RDP, VNC, or a RustDesk address
+   * this device dials itself - never an id server's answer.
    *
-   * The two observations stay apart so a reachable port can never read as a
-   * peer the id server reported online, and an id-only peer is not probed here.
+   * The two observations stay apart so a reachable port can never read as a peer
+   * the id server reported online, and an hbbs-answerable peer is never probed.
    */
   @Trace directWireReachable: boolean | undefined = undefined;
   @Trace favorite: boolean = false;
@@ -323,6 +370,8 @@ export class SessionDefaults {
   gesturesEnabled: boolean = true;
   toolbarExpanded: boolean = false;
   sessionSharingEnabled: boolean = false;
+  /** Phone/tablet keep their connection-time screen direction; the session stays locked. */
+  keepScreenOrientation: boolean = false;
   rdpResolution: string = 'follow';
   /** Zero means derive the whitelisted percent from this pane's pixel density. */
   rdpScaleFactor: number = 0;
@@ -332,17 +381,124 @@ export class SessionDefaults {
 
 export class AccountState {
   loggedIn: boolean = false;
-  apiServer: string = '';
+  receipt: string = '';
+  serverBindingMode: string = '';
+  serverBindingRevision: number = 0;
   name: string = '';
   displayName: string = '';
-  email: string = '';
+  avatar: string = '';
+  status: string = '';
   busy: boolean = false;
-  syncing: boolean = false;
-  challengeId: string = '';
-  challengeType: string = '';
-  emailHint: string = '';
-  oidcProvider: string = '';
   message: string = '';
+  error: string = '';
+}
+
+export interface AccountServerBinding {
+  mode: string;
+  profileRevision: number;
+}
+
+export interface AccountUser {
+  name: string;
+  displayName?: string;
+  avatar?: string;
+  status?: string;
+}
+
+export interface AccountSnapshot {
+  receipt: string;
+  loggedIn: boolean;
+  serverBinding: AccountServerBinding;
+  user?: AccountUser;
+}
+
+export interface AccountProvider {
+  id: string;
+  label: string;
+}
+
+export interface OidcStartResult {
+  attemptReceipt: string;
+  state: string;
+}
+
+export type OidcResultState =
+  | 'pending'
+  | 'url-ready'
+  | 'complete'
+  | 'failed'
+  | 'cancelled'
+  | 'needs-business';
+
+export interface OidcPollResult {
+  state: OidcResultState;
+  url?: string;
+  code?: string;
+  error?: string;
+}
+
+export interface CloudAddressBook {
+  id: string;
+  name: string;
+  kind: string;
+  writable: boolean;
+  capabilities?: ESObject;
+}
+
+export interface CloudPeer {
+  id: string;
+  alias?: string;
+  tags?: string[];
+  hostname?: string;
+  platform?: string;
+}
+
+export interface CloudBookLoadResult {
+  book: CloudAddressBook;
+  peers: CloudPeer[];
+  tags: string[];
+  revision?: number;
+}
+
+export interface CloudPeerMutationPayload {
+  id: string;
+  alias?: string;
+  tags: string[];
+}
+
+export interface CloudMutationUpsertPeer {
+  action: 'upsertPeer';
+  peer: CloudPeerMutationPayload;
+}
+
+export interface CloudMutationDeletePeer {
+  action: 'deletePeer';
+  id: string;
+}
+
+export interface CloudMutationUpsertTag {
+  action: 'upsertTag';
+  name: string;
+  newName?: string;
+}
+
+export interface CloudMutationDeleteTag {
+  action: 'deleteTag';
+  name: string;
+}
+
+export type CloudMutation =
+  | CloudMutationUpsertPeer
+  | CloudMutationDeletePeer
+  | CloudMutationUpsertTag
+  | CloudMutationDeleteTag;
+
+export interface NativeAccountResponse<T = ESObject> {
+  ok: boolean;
+  code?: string;
+  error?: string;
+  sent?: boolean;
+  data?: T;
 }
 
 export class AccountLoginProvider {

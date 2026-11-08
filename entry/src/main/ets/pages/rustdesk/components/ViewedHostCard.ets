@@ -5,8 +5,11 @@ import {
   LuminousSurface,
   LuminousTone,
 } from 'luminous_neo';
+import { pasteboard } from '@kit.BasicServicesKit';
 import { ControlledHostState } from '../../../services/controlled/ControlledHostTypes';
 import { FloatingActionSurface } from './FloatingSurface';
+
+const INPUT_SIMULATOR_SYSCAP = 'SystemCapability.MultimodalInput.Input.InputSimulator';
 
 export interface ViewedHostCardProps {
   state: ControlledHostState;
@@ -23,9 +26,7 @@ export interface ViewedHostCardProps {
 export struct ViewedHostCard {
   @Param state: ControlledHostState = new ControlledHostState();
   @Param surfaceWidth: number = 520;
-  @Local passwordVisible: boolean = false;
-  @Local passwordDisplayText: string = '等待生成';
-  @Local passwordRevealGeneration: number = 0;
+  @Local passwordCopied: boolean = false;
   @Event onStart: () => void = () => {};
   @Event onStartWithInput: () => void = () => {};
   @Event onStop: () => void = () => {};
@@ -33,25 +34,12 @@ export struct ViewedHostCard {
   @Event onReject: (requestId: string, peerId: string) => void = (_requestId: string, _peerId: string) => {};
   @Event onRefreshPassword: () => void = () => {};
 
-  aboutToAppear(): void {
-    this.hideTemporaryPassword();
-  }
-
-  aboutToDisappear(): void {
-    this.hideTemporaryPassword();
-  }
-
-  @Monitor('state.temporaryPassword')
-  private onTemporaryPasswordChanged(_monitor: IMonitor): void {
-    this.hideTemporaryPassword();
-  }
-
   private compact(): boolean {
     return this.surfaceWidth < 560;
   }
 
   private innerWidth(): number {
-    return Math.max(240, this.surfaceWidth - (this.compact() ? 32 : 44));
+    return Math.max(240, this.surfaceWidth - (this.compact() ? 24 : 36));
   }
 
   private running(): boolean {
@@ -60,47 +48,53 @@ export struct ViewedHostCard {
       this.state.teardownUnconfirmed.length > 0;
   }
 
+  private inputSimulatorSupported(): boolean {
+    return canIUse(INPUT_SIMULATOR_SYSCAP);
+  }
+
   private actionWidth(): number {
-    const shadowPadding: number = LuminousNeoTokens.shadowPaddingFor(48);
-    return Math.max(104, (this.innerWidth() - 12 - shadowPadding * 4) / 2);
+    return Math.max(104, (this.innerWidth() - 12) / 2);
   }
 
   private fullActionWidth(): number {
-    return Math.max(180,
-      this.innerWidth() - LuminousNeoTokens.shadowPaddingFor(LuminousNeoTokens.COMPACT_HEIGHT) * 2);
+    return this.innerWidth();
   }
 
-  private hideTemporaryPassword(): void {
-    this.passwordRevealGeneration += 1;
-    this.passwordVisible = false;
-    this.passwordDisplayText = this.state.temporaryPassword.length > 0 ? '••••••' : '等待生成';
+  private passwordText(): string {
+    return this.state.temporaryPassword.length > 0 ? this.state.temporaryPassword : '等待生成';
   }
 
-  private revealTemporaryPassword(): void {
-    if (this.state.temporaryPassword.length === 0) {
+  /**
+   * The password has to be readable and takeable in one tap: it is what the
+   * controller types. Nothing here hides it again, so a copied one and a read one
+   * are the same value.
+   */
+  private copyTemporaryPassword(): void {
+    const password: string = this.state.temporaryPassword;
+    if (password.length === 0) {
       return;
     }
-    this.passwordRevealGeneration += 1;
-    const generation: number = this.passwordRevealGeneration;
-    this.passwordVisible = true;
-    this.passwordDisplayText = this.state.temporaryPassword;
-    setTimeout((): void => {
-      if (generation === this.passwordRevealGeneration) {
-        this.hideTemporaryPassword();
-      }
-    }, 15000);
+    const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, password);
+    pasteboard.getSystemPasteboard().setData(data).then((): void => {
+      this.passwordCopied = true;
+      setTimeout((): void => {
+        this.passwordCopied = false;
+      }, 1500);
+    }).catch((error: Error): void => {
+      this.passwordCopied = false;
+    });
   }
 
   @Builder
   private SectionHeading(icon: Resource, title: ResourceStr, subtitle: ResourceStr) {
     Row({ space: 12 }) {
       SymbolGlyph(icon)
-        .fontSize(26)
+        .fontSize(24)
         .fontColor([$r('app.color.neu_accent')]);
       Column({ space: 3 }) {
         Text(title)
           .width('100%')
-          .fontSize(17)
+          .fontSize(18)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.neu_text_primary'));
         Text(subtitle)
@@ -112,7 +106,7 @@ export struct ViewedHostCard {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start);
     }
-    .width('100%');
+    .width(this.innerWidth());
   }
 
   @Builder
@@ -121,18 +115,19 @@ export struct ViewedHostCard {
       LuminousSurface({
         depth: -1,
         surfaceWidth: this.innerWidth(),
-        surfaceHeight: 54,
+        surfaceHeight: 56,
         cornerRadius: 16,
         motionEnabled: true,
       }) {
-        Column({ space: 1 }) {
+        Column({ space: 2 }) {
           Text(label)
             .width('100%')
-            .fontSize(10)
+            .fontSize(11)
+            .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.neu_text_secondary'));
           Text(value)
             .width('100%')
-            .fontSize(15)
+            .fontSize(16)
             .fontWeight(FontWeight.Medium)
             .fontFamily(monospace ? 'monospace' : '')
             .fontColor($r('app.color.neu_text_primary'))
@@ -140,12 +135,12 @@ export struct ViewedHostCard {
             .textOverflow({ overflow: TextOverflow.Ellipsis });
         }
         .width('100%')
-        .padding({ left: 14, right: 14, top: 7, bottom: 7 })
+        .padding({ left: 16, right: 16, top: 8, bottom: 8 })
         .alignItems(HorizontalAlign.Start);
       }
     }
     .width(this.innerWidth())
-    .height(54)
+    .height(56)
     .clip(false);
   }
 
@@ -155,19 +150,20 @@ export struct ViewedHostCard {
       LuminousSurface({
         depth: -1,
         surfaceWidth: this.innerWidth(),
-        surfaceHeight: 54,
+        surfaceHeight: 56,
         cornerRadius: 16,
         motionEnabled: true,
       }) {
-        Row({ space: 6 }) {
-          Column({ space: 1 }) {
+        Row({ space: 8 }) {
+          Column({ space: 2 }) {
             Text('临时密码')
               .width('100%')
-              .fontSize(10)
+              .fontSize(11)
+              .fontWeight(FontWeight.Medium)
               .fontColor($r('app.color.neu_text_secondary'));
-            Text(this.passwordDisplayText)
+            Text(this.passwordText())
               .width('100%')
-              .fontSize(15)
+              .fontSize(16)
               .fontWeight(FontWeight.Medium)
               .fontFamily('monospace')
               .fontColor($r('app.color.neu_text_primary'))
@@ -179,24 +175,20 @@ export struct ViewedHostCard {
 
           Stack() {
             FloatingActionSurface({
-              selected: this.passwordVisible,
+              selected: this.passwordCopied,
               compact: true,
               subtleDepth: true,
               actionEnabled: this.state.temporaryPassword.length > 0,
-              accessibilityLabel: this.passwordVisible ? '隐藏密码' : '显示密码',
+              accessibilityLabel: this.passwordCopied ? '已复制临时密码' : '复制临时密码',
               stopTouchPropagation: true,
               onActivate: (): void => {
-                if (this.passwordVisible) {
-                  this.hideTemporaryPassword();
-                } else {
-                  this.revealTemporaryPassword();
-                }
+                this.copyTemporaryPassword();
               },
             }) {
               Stack({ alignContent: Alignment.Center }) {
-                SymbolGlyph(this.passwordVisible ? $r('sys.symbol.eye_slash') : $r('sys.symbol.eye'))
+                SymbolGlyph(this.passwordCopied ? $r('sys.symbol.checkmark') : $r('sys.symbol.rectangle_on_rectangle'))
                   .fontSize(18)
-                  .fontColor([this.passwordVisible
+                  .fontColor([this.passwordCopied
                     ? $r('app.color.neu_accent')
                     : $r('app.color.neu_text_primary')]);
               }
@@ -204,8 +196,8 @@ export struct ViewedHostCard {
               .height('100%');
             }
           }
-          .width(34)
-          .height(34);
+          .width(36)
+          .height(36);
 
           Stack() {
             FloatingActionSurface({
@@ -214,7 +206,7 @@ export struct ViewedHostCard {
               accessibilityLabel: '刷新密码',
               stopTouchPropagation: true,
               onActivate: (): void => {
-                this.hideTemporaryPassword();
+                this.passwordCopied = false;
                 this.onRefreshPassword();
               },
             }) {
@@ -227,41 +219,75 @@ export struct ViewedHostCard {
               .height('100%');
             }
           }
-          .width(34)
-          .height(34);
+          .width(36)
+          .height(36);
         }
         .width('100%')
         .height('100%')
-        .padding({ left: 14, right: 12 })
+        .padding({ left: 16, right: 12 })
         .alignItems(VerticalAlign.Center);
       }
     }
     .width(this.innerWidth())
-    .height(54)
+    .height(56)
     .clip(false);
   }
 
   @Builder
+  private StatusNotice(icon: Resource, text: string, isError: boolean = false) {
+    Row({ space: 10 }) {
+      SymbolGlyph(icon)
+        .fontSize(16)
+        .fontColor([isError ? $r('app.color.error') : $r('app.color.neu_accent')]);
+      Text(text)
+        .layoutWeight(1)
+        .fontSize(12)
+        .lineHeight(18)
+        .fontColor(isError ? $r('app.color.error') : $r('app.color.neu_text_secondary'));
+    }
+    .width(this.innerWidth())
+    .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+    .backgroundColor($r('app.color.neu_base'))
+    .borderRadius(14)
+    .border({
+      width: 1,
+      color: isError ? $r('app.color.error') : $r('app.color.mica_border')
+    });
+  }
+
+  @Builder
   private IdentitySection() {
-    Column({ space: 8 }) {
-      this.SectionHeading($r('sys.symbol.display'), '设备身份', '临时密码显示 15 秒后自动隐藏。');
+    Column({ space: 12 }) {
+      this.SectionHeading($r('sys.symbol.display'), '设备身份', '临时密码用于对方连接，可复制发给对方。');
       this.InsetValue('设备 ID', this.state.myId.length > 0 ? this.state.myId : '正在加载', true);
       this.PasswordInsetValue();
     }
-    .width('100%')
-    .padding({ left: this.compact() ? 4 : 8, right: this.compact() ? 4 : 8 })
+    .width(this.innerWidth())
     .alignItems(HorizontalAlign.Center);
   }
 
   @Builder
   private ServiceSection() {
-    Column({ space: 8 }) {
+    Column({ space: 12 }) {
       if (this.state.statusText.length > 0 && this.state.statusText !== this.state.lastError) {
-        Text(this.state.statusText)
-          .width('100%')
-          .fontSize(12)
-          .lineHeight(18)
-          .fontColor($r('app.color.neu_text_secondary'));
+        // Rendered here rather than through a `@Builder`: a builder argument is
+        // captured when its branch is created, so this notice kept the idle text
+        // while the run was already listening.
+        Row({ space: 10 }) {
+          SymbolGlyph(this.running() ? $r('sys.symbol.display') : $r('sys.symbol.info_circle'))
+            .fontSize(16)
+            .fontColor([$r('app.color.neu_accent')]);
+          Text(this.state.statusText)
+            .layoutWeight(1)
+            .fontSize(12)
+            .lineHeight(18)
+            .fontColor($r('app.color.neu_text_secondary'));
+        }
+        .width(this.innerWidth())
+        .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+        .backgroundColor($r('app.color.neu_base'))
+        .borderRadius(14)
+        .border({ width: 1, color: $r('app.color.mica_border') });
       }
       if (this.state.incoming !== undefined) {
         if (this.state.incomingResolving) {
@@ -284,69 +310,88 @@ export struct ViewedHostCard {
         onAction: () => this.running() ? this.onStop() : this.onStart(),
       });
       if (!this.running()) {
-        LuminousButton({
-          label: '授权并启用远程控制',
-          controlWidth: this.fullActionWidth(),
-          controlSizeMode: LuminousControlSize.Compact,
-          tone: LuminousTone.Accent,
-          onAction: () => this.onStartWithInput(),
-        });
-      } else if (!this.state.inputEnabled && this.state.phase !== 'starting' && this.state.phase !== 'stopping') {
-        Text('仅观看；停止服务后可授权远程控制')
-          .width('100%')
-          .fontSize(12)
-          .lineHeight(18)
-          .fontColor($r('app.color.neu_text_secondary'));
+        if (this.inputSimulatorSupported()) {
+          LuminousButton({
+            label: '授权并启用远程控制',
+            controlWidth: this.fullActionWidth(),
+            controlSizeMode: LuminousControlSize.Compact,
+            tone: LuminousTone.Accent,
+            onAction: () => this.onStartWithInput(),
+          });
+        }
+      } else if (!this.state.inputEnabled && this.state.phase !== 'starting' && this.state.phase !== 'stopping' &&
+        this.inputSimulatorSupported()) {
+        this.StatusNotice($r('sys.symbol.info_circle'), '仅观看；停止服务后可授权远程控制', false);
       }
       if (this.state.inputAuthorizationError.length > 0) {
-        Text(this.state.inputAuthorizationError)
-          .width('100%')
-          .fontSize(12)
-          .lineHeight(18)
-          .fontColor($r('app.color.error'));
+        Row({ space: 10 }) {
+          SymbolGlyph($r('sys.symbol.info_circle'))
+            .fontSize(16)
+            .fontColor([$r('app.color.error')]);
+          Text(this.state.inputAuthorizationError)
+            .layoutWeight(1)
+            .fontSize(12)
+            .lineHeight(18)
+            .fontColor($r('app.color.error'));
+        }
+        .width(this.innerWidth())
+        .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+        .backgroundColor($r('app.color.neu_base'))
+        .borderRadius(14)
+        .border({ width: 1, color: $r('app.color.error') });
       }
       if (this.state.lastError.length > 0) {
-        Text(this.state.lastError)
-          .width('100%')
-          .fontSize(12)
-          .lineHeight(18)
-          .fontColor($r('app.color.error'));
+        Row({ space: 10 }) {
+          SymbolGlyph($r('sys.symbol.info_circle'))
+            .fontSize(16)
+            .fontColor([$r('app.color.error')]);
+          Text(this.state.lastError)
+            .layoutWeight(1)
+            .fontSize(12)
+            .lineHeight(18)
+            .fontColor($r('app.color.error'));
+        }
+        .width(this.innerWidth())
+        .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+        .backgroundColor($r('app.color.neu_base'))
+        .borderRadius(14)
+        .border({ width: 1, color: $r('app.color.error') });
       }
     }
-    .width('100%')
-    .padding({ left: this.compact() ? 4 : 8, right: this.compact() ? 4 : 8 })
+    .width(this.innerWidth())
     .alignItems(HorizontalAlign.Center);
   }
 
   @Builder
   private IncomingConsentActions(requestId: string, peerId: string) {
-          Row({ space: 12 }) {
-            LuminousButton({
-              label: this.state.inputEnabled && this.state.inputAuthorization === 'authorized'
-                ? '同意远程控制' : '同意观看',
-              controlWidth: this.actionWidth(),
-              controlSizeMode: LuminousControlSize.Regular,
-              tone: LuminousTone.Accent,
-              onAction: () => this.onAccept(requestId, peerId),
-            });
-            LuminousButton({
-              label: '拒绝',
-              controlWidth: this.actionWidth(),
-              controlSizeMode: LuminousControlSize.Regular,
-              tone: LuminousTone.Danger,
-              onAction: () => this.onReject(requestId, peerId),
-            });
-          }
-          .width('100%')
-          .justifyContent(FlexAlign.Center);
+    Row({ space: 12 }) {
+      LuminousButton({
+        label: this.state.inputEnabled && this.state.inputAuthorization === 'authorized'
+          ? '同意远程控制' : '同意观看',
+        controlWidth: this.actionWidth(),
+        controlSizeMode: LuminousControlSize.Regular,
+        tone: LuminousTone.Accent,
+        onAction: () => this.onAccept(requestId, peerId),
+      });
+      LuminousButton({
+        label: '拒绝',
+        controlWidth: this.actionWidth(),
+        controlSizeMode: LuminousControlSize.Regular,
+        tone: LuminousTone.Danger,
+        onAction: () => this.onReject(requestId, peerId),
+      });
+    }
+    .width(this.innerWidth())
+    .justifyContent(FlexAlign.Center);
   }
 
   build(): void {
-    Column({ space: 8 }) {
+    Column({ space: 16 }) {
       this.IdentitySection();
       Divider()
         .width(this.innerWidth())
-        .color($r('app.color.mica_border'));
+        .color($r('app.color.mica_border'))
+        .margin({ top: 4, bottom: 4 });
       this.ServiceSection();
     }
     .width(this.surfaceWidth)

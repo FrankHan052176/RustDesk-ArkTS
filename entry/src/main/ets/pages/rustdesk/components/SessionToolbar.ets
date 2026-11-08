@@ -6,20 +6,7 @@ import { SessionInputControls } from './SessionInputControls';
 
 const SOFT_KEYBOARD_TRANSITION_ID = 'rustdesk-session-soft-keyboard';
 const SYSTEM_IME_TRANSITION_ID = 'rustdesk-session-system-ime';
-/**
- * The gap between the toolbar's stacked sections.
- *
- * The page's body budget subtracts this, so the two have to be the same value.
- */
-const TOOLBAR_SECTION_GAP = 6;
-/** The header's grab strip. It carries the drag and no control. */
-const TOOLBAR_DRAG_GRIP_WIDTH = 32;
-/**
- * How much a measured header width may move before the scroll offset is
- * re-applied, in vp. It keeps a telemetry value that re-renders to a slightly
- * different width from pulling a position the operator scrolled to back.
- */
-const HEADER_ALIGN_TOLERANCE = 0.5;
+const TOOLBAR_SECTION_GAP = 8;
 
 interface ToolbarActionOptions {
   label: string;
@@ -58,7 +45,6 @@ export interface SessionToolbarProps {
   wideLayout: boolean;
   transformSummary: string;
   canResetTransform: boolean;
-  /** The middle slot's height budget: the panel body, or the home block's cap. */
   panelContentHeight: number;
   windowControlsAvailable: boolean;
   windowFullscreenAvailable: boolean;
@@ -68,6 +54,10 @@ export interface SessionToolbarProps {
   onSelectInputMode: (mode: RustDeskInputMode) => void;
   onSelectRightClick: (gesture: RustDeskRightClickGesture) => void;
   onResetTransform: () => void;
+  rotationAvailable: boolean;
+  rotationBusy: boolean;
+  onRotateToCurrent: () => void;
+  onRotate90: () => void;
   onOpenDisplay: () => void;
   onOpenQuality: () => void;
   onRefreshDisplay: () => void;
@@ -77,14 +67,8 @@ export interface SessionToolbarProps {
   onAudioChange: (enabled: boolean) => void;
   onDisconnect: () => void;
   onCollapse: () => void;
-  /** A move of the panel begins on the header's grip; the page owns the anchor. */
   onToolbarMoveStart: () => void;
   onToolbarMoveUpdate: (offsetX: number, offsetY: number) => void;
-  /**
-   * What the toolbar spends on its own chrome, in vp: the header row, the gaps
-   * between sections and the session tab bar. The page turns it into the body
-   * budget, so a taller header or a visible tab bar shortens the body.
-   */
   onChromeHeightChange: (height: number) => void;
   onMinimizeWindow: () => void;
   onToggleWindowFullscreen: () => void;
@@ -92,6 +76,7 @@ export interface SessionToolbarProps {
   onCloseSession: (sessionId: string) => void;
   onAddSession: () => void;
   content: () => void;
+  isSharedSession?: boolean;
 }
 
 @ComponentV2
@@ -99,6 +84,7 @@ export struct SessionToolbar {
   @Param tabs: Array<RemoteSessionTab> = [];
   @Param activeSessionId: string = '';
   @Param canAddSession: boolean = true;
+  @Param isSharedSession: boolean = false;
   @Param inputEnabled: boolean = true;
   @Param touchMode: boolean = true;
   @Param relativeMouseMode: boolean = false;
@@ -129,6 +115,8 @@ export struct SessionToolbar {
   @Param wideLayout: boolean = false;
   @Param transformSummary: string = '100%';
   @Param canResetTransform: boolean = false;
+  @Param rotationAvailable: boolean = false;
+  @Param rotationBusy: boolean = false;
   @Param panelContentHeight: number = 360;
   @Param windowControlsAvailable: boolean = false;
   @Param windowFullscreenAvailable: boolean = false;
@@ -140,6 +128,8 @@ export struct SessionToolbar {
     _gesture: RustDeskRightClickGesture,
   ) => {};
   @Event onResetTransform: () => void = () => {};
+  @Event onRotateToCurrent: () => void = () => {};
+  @Event onRotate90: () => void = () => {};
   @Event onOpenDisplay: () => void = () => {};
   @Event onOpenQuality: () => void = () => {};
   @Event onRefreshDisplay: () => void = () => {};
@@ -160,27 +150,11 @@ export struct SessionToolbar {
   @Event onSelectSession: (sessionId: string) => void = (_sessionId: string) => {};
   @Event onCloseSession: (sessionId: string) => void = (_sessionId: string) => {};
   @Event onAddSession: () => void = () => {};
-  @Local toolbarWidth: number = 280;
+  @Local toolbarWidth: number = 360;
   @Local sessionTabsViewportWidth: number = 0;
-  /** The measured header row height, and the measured tab bar height. */
   private toolbarHeaderHeight: number = 0;
   private sessionTabsBarHeight: number = 0;
-  /** The chrome value already handed to the page, so it is only told changes. */
   private reportedChromeHeight: number = 0;
-  /** The header row's content extent, and the width of the scroll showing it. */
-  private headerContentWidth: number = 0;
-  private headerViewportWidth: number = 0;
-  /** The pair the offset was last aligned for, so only real changes re-align. */
-  private headerAlignedContentWidth: number = -1;
-  private headerAlignedViewportWidth: number = -1;
-  /**
-   * The header's right end as last observed: the offset the last alignment
-   * scrolled to, or the end a later width change revealed while the offset was
-   * left where the operator put it. It is what "still at the right end" is
-   * measured against.
-   */
-  private headerAlignedMaxOffset: number = 0;
-  private headerScroller: Scroller = new Scroller();
   private sessionScroller: Scroller = new Scroller();
 
   @BuilderParam content: () => void = this.Empty;
@@ -209,18 +183,12 @@ export struct SessionToolbar {
 
   private sessionCardWidth(): number {
     if (this.sessionTabsViewportWidth > 0) {
-      return Math.min(220, Math.max(96, this.sessionTabsViewportWidth));
+      if (this.tabs.length <= 1) {
+        return this.sessionTabsViewportWidth;
+      }
+      return Math.min(200, Math.max(140, this.sessionTabsViewportWidth * 0.6));
     }
-    return 220;
-  }
-
-  private addSessionButtonWidth(): number {
-    return 64;
-  }
-
-  private sessionContentWidth(): number {
-    const contentWidth = this.tabs.length * this.sessionCardWidth() + Math.max(0, this.tabs.length - 1) * 6;
-    return Math.max(this.sessionTabsViewportWidth, contentWidth);
+    return 180;
   }
 
   private activeSessionIndex(): number {
@@ -247,18 +215,11 @@ export struct SessionToolbar {
     }
     const cardStep = this.sessionCardWidth() + 6;
     const cardStart = activeIndex * cardStep;
-    const cardEnd = cardStart + this.sessionCardWidth();
     try {
       const currentOffset = this.sessionScroller.currentOffset().xOffset;
-      let targetOffset = currentOffset;
-      if (cardStart < currentOffset) {
-        targetOffset = cardStart;
-      } else if (cardEnd > currentOffset + viewportWidth) {
-        targetOffset = cardStart;
-      }
-      if (Math.abs(targetOffset - currentOffset) > 0.5) {
+      if (cardStart < currentOffset || cardStart + this.sessionCardWidth() > currentOffset + viewportWidth) {
         this.sessionScroller.scrollTo({
-          xOffset: Math.max(0, targetOffset),
+          xOffset: Math.max(0, cardStart),
           yOffset: 0,
           animation: true,
         });
@@ -277,147 +238,6 @@ export struct SessionToolbar {
     return $r('app.color.warning');
   }
 
-  @Builder
-  private SessionCard(tab: RemoteSessionTab) {
-    Row({ space: 2 }) {
-      Button({ type: ButtonType.Normal, stateEffect: true }) {
-        Row({ space: 7 }) {
-          Stack()
-            .width(9)
-            .height(9)
-            .borderRadius(5)
-            .backgroundColor(this.sessionStatusColor(tab));
-
-          Column({ space: 1 }) {
-            Text(tab.label)
-              .fontSize($r('app.float.font_label'))
-              .fontWeight(FontWeight.Medium)
-              .fontColor($r('app.color.neu_text_primary'))
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis });
-            Text(tab.target)
-              .fontSize($r('app.float.font_caption'))
-              .fontColor($r('app.color.neu_text_secondary'))
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis });
-          }
-          .layoutWeight(1)
-          .alignItems(HorizontalAlign.Start);
-        }
-        .width('100%')
-        .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_4') });
-      }
-      .layoutWeight(1)
-      .height(46)
-      .padding(0)
-      .backgroundColor($r('app.color.transparent'))
-      .hoverEffect(HoverEffect.Auto)
-      .accessibilityText(`${tab.label}，${tab.target}，点击切换`)
-      .accessibilitySelected(tab.sessionId === this.activeSessionId)
-      .onClick((): void => this.onSelectSession(tab.sessionId));
-
-      Button({ type: ButtonType.Circle, stateEffect: true }) {
-        Text($r('app.string.remote_session_tab_close_symbol'))
-          .fontSize(13)
-          .fontColor($r('app.color.neu_text_secondary'));
-      }
-      .width(44)
-      .height(44)
-      .padding(0)
-      .backgroundColor($r('app.color.transparent'))
-      .hoverEffect(HoverEffect.Auto)
-      .accessibilityText(`${tab.label}，断开并关闭此会话`)
-      .onClick((): void => this.onCloseSession(tab.sessionId));
-    }
-    .width(this.sessionCardWidth())
-    .height(48)
-    .padding({ left: 2, right: 2 })
-    .backgroundColor(tab.sessionId === this.activeSessionId
-      ? $r('app.color.brand_primary_soft')
-      : $r('app.color.mica_control'))
-    .border({
-      width: 1,
-      color: tab.sessionId === this.activeSessionId
-        ? $r('app.color.brand_primary')
-        : $r('app.color.mica_border'),
-    })
-    .borderRadius($r('app.float.radius_14'))
-    .clip(true);
-  }
-
-  @Builder
-  private SessionTabsBar() {
-    Row({ space: $r('app.float.space_6') }) {
-      Scroll(this.sessionScroller) {
-        Row({ space: $r('app.float.space_6') }) {
-          ForEach(this.tabs, (tab: RemoteSessionTab) => {
-            this.SessionCard(tab);
-          }, (tab: RemoteSessionTab): string => tab.sessionId);
-        }
-        .width(this.sessionContentWidth())
-        .justifyContent(FlexAlign.End)
-        .align(Alignment.End);
-      }
-      .layoutWeight(1)
-      .height(50)
-      .align(Alignment.End)
-      .scrollable(ScrollDirection.Horizontal)
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring, {
-        alwaysEnabled: this.tabs.length * (this.sessionCardWidth() + 6) > this.sessionTabsViewportWidth,
-      })
-      .onAreaChange((_oldArea: Area, newArea: Area): void => {
-        const width = Number(newArea.width);
-        if (width > 0 && Math.abs(width - this.sessionTabsViewportWidth) > 0.5) {
-          this.sessionTabsViewportWidth = width;
-          this.scheduleRevealActiveSession();
-        }
-      });
-
-      Button({ type: ButtonType.Normal, stateEffect: true }) {
-        Column({ space: 1 }) {
-          Text($r('app.string.remote_session_tab_add_symbol'))
-            .fontSize(18)
-            .fontColor(this.canAddSession
-              ? $r('app.color.neu_text_primary')
-              : $r('app.color.neu_text_disabled'));
-          Text('新建')
-            .fontSize($r('app.float.font_caption'))
-            .fontColor(this.canAddSession
-              ? $r('app.color.neu_text_secondary')
-              : $r('app.color.neu_text_disabled'));
-        }
-      }
-      .width(this.addSessionButtonWidth())
-      .height(48)
-      .padding(0)
-      .enabled(this.canAddSession)
-      .backgroundColor($r('app.color.mica_control'))
-      .border({ width: 1, color: $r('app.color.mica_border') })
-      .borderRadius($r('app.float.radius_14'))
-      .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-      .hoverEffect(HoverEffect.Auto)
-      .accessibilityText(this.canAddSession ? '新建远程会话' : '已达到六个会话上限')
-      .onClick((): void => this.onAddSession());
-    }
-    .width('100%')
-    .alignItems(VerticalAlign.Center)
-    .onAreaChange((_oldArea: Area, newArea: Area): void => {
-      this.measureSessionTabsBar(Number(newArea.height));
-    });
-  }
-
-  private actionHeight(): number {
-    return 36;
-  }
-
-  /**
-   * The toolbar's own chrome: everything the middle slot does not get.
-   *
-   * The header row and the tab bar are measured, and the gaps are the ones the
-   * column is actually built with, so the page can size the body from what is
-   * left instead of from a constant that drifts whenever a row grows.
-   */
   private toolbarChromeHeight(): number {
     const hasTabs = this.tabs.length > 0;
     const gaps = TOOLBAR_SECTION_GAP * (hasTabs ? 2 : 1);
@@ -425,9 +245,6 @@ export struct SessionToolbar {
   }
 
   private reportToolbarChrome(): void {
-    // Both parts have to be known first: reporting the header alone would
-    // understate the chrome by the whole tab bar for that frame, and the page
-    // would size the body from it.
     if (this.toolbarHeaderHeight <= 0) {
       return;
     }
@@ -458,530 +275,60 @@ export struct SessionToolbar {
     this.reportToolbarChrome();
   }
 
-  /**
-   * Keeps the header's right end in view, without taking the view away.
-   *
-   * The header row is at least as wide as the scroll showing it and grows to its
-   * own content, so a toolbar too narrow for the whole row scrolls instead of
-   * clipping it. Two things re-seat the header at that end: the first
-   * measurement, and a real viewport change (a resize, a rotation, a wider
-   * panel). A content change alone — the telemetry text gaining a digit — only
-   * re-seats it while the header is still sitting at the right end last
-   * observed; once the operator has scrolled somewhere else, that position is
-   * theirs to keep.
-   */
-  private scheduleHeaderAlign(): void {
-    const contentWidth = this.headerContentWidth;
-    const viewportWidth = this.headerViewportWidth;
-    if (contentWidth <= 0 || viewportWidth <= 0) {
-      return;
-    }
-    const contentChanged = Math.abs(contentWidth - this.headerAlignedContentWidth)
-      > HEADER_ALIGN_TOLERANCE;
-    const viewportChanged = Math.abs(viewportWidth - this.headerAlignedViewportWidth)
-      > HEADER_ALIGN_TOLERANCE;
-    if (!contentChanged && !viewportChanged) {
-      return;
-    }
-    const maxOffset = contentWidth - viewportWidth;
-    const firstAlign = this.headerAlignedViewportWidth < 0;
-    if (!firstAlign && !viewportChanged && !this.headerSitsAtAlignedEnd()) {
-      // The width moved, the viewport did not, and the operator is looking
-      // somewhere else: record the new width and where the right end now is,
-      // and leave the offset alone.
-      this.headerAlignedContentWidth = contentWidth;
-      this.headerAlignedMaxOffset = Math.max(0, maxOffset);
-      return;
-    }
-    this.headerAlignedContentWidth = contentWidth;
-    this.headerAlignedViewportWidth = viewportWidth;
-    if (maxOffset <= 0) {
-      this.headerAlignedMaxOffset = 0;
-      return;
-    }
-    this.headerAlignedMaxOffset = maxOffset;
-    // The scroller only knows the new content extent after this layout pass.
-    setTimeout((): void => {
-      try {
-        this.headerScroller.scrollTo({ xOffset: maxOffset, yOffset: 0, animation: false });
-      } catch (_) {
-      }
-    }, 0);
-  }
-
-  /**
-   * Whether the header is still sitting at the right end last observed.
-   *
-   * An unknown reading counts as still there: the offset is only withheld when
-   * the scroller reports a position that is really somewhere else.
-   */
-  private headerSitsAtAlignedEnd(): boolean {
-    if (this.headerAlignedMaxOffset <= 0) {
-      return true;
-    }
-    try {
-      return Math.abs(this.headerScroller.currentOffset().xOffset - this.headerAlignedMaxOffset)
-        <= HEADER_ALIGN_TOLERANCE;
-    } catch (_) {
-      return true;
-    }
-  }
-
-  private measureHeaderContentWidth(width: number): void {
-    if (width <= 0 || Math.abs(width - this.headerContentWidth) <= HEADER_ALIGN_TOLERANCE) {
-      return;
-    }
-    this.headerContentWidth = width;
-    this.scheduleHeaderAlign();
-  }
-
-  private measureHeaderViewportWidth(width: number): void {
-    if (width <= 0 || Math.abs(width - this.headerViewportWidth) <= HEADER_ALIGN_TOLERANCE) {
-      return;
-    }
-    this.headerViewportWidth = width;
-    this.scheduleHeaderAlign();
-  }
-
-  private actionColumnCount(): number {
-    if (this.toolbarWidth >= 680) {
-      return 6;
-    }
-    return this.toolbarWidth >= 620 ? 4 : 2;
-  }
-
-  private actionGridWidth(): number {
-    return this.toolbarWidth;
-  }
-
-  private actionButtonWidth(): number {
-    const columns = this.actionColumnCount();
-    return (this.actionGridWidth() - (columns - 1) * 8) / columns;
-  }
-
-  private toolbarActionEnabled(options: ToolbarActionOptions): boolean {
-    return options.enabled !== false;
-  }
-
   @Builder
-  private ToolbarAction(options: ToolbarActionOptions) {
-    Button({ type: ButtonType.Normal, stateEffect: true }) {
-      Text(options.label)
-        .fontSize($r('app.float.font_label'))
-        .fontWeight(FontWeight.Medium)
-        .fontColor(!this.toolbarActionEnabled(options)
-          ? $r('app.color.neu_text_disabled')
-          : (options.active ? $r('app.color.white') : $r('app.color.neu_text_primary')))
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis });
-    }
-    .width(this.actionButtonWidth())
-    .height(this.actionHeight())
-    .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_8') })
-    .enabled(this.toolbarActionEnabled(options))
-    .backgroundColor(options.active ? $r('app.color.brand_primary') : $r('app.color.mica_control'))
-    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.56,
-    })
-    .border({
-      width: 1,
-      color: options.active ? $r('app.color.brand_primary') : $r('app.color.mica_border'),
-    })
-    .borderRadius($r('app.float.radius_14'))
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-    .hoverEffect(HoverEffect.Auto)
-    .accessibilityText(options.label)
-    .accessibilitySelected(options.active)
-    .geometryTransition(options.transitionId)
-    .transition(TransitionEffect.OPACITY)
-    .onClick((): void => {
-      options.onClick();
-    });
-  }
-
-  @Builder
-  private AudioToggle() {
-    Row({ space: $r('app.float.space_6') }) {
-      Text(this.audioAvailable ? '音频' : (this.directSession ? '音频不可用' : '准备中'))
-        .layoutWeight(1)
-        .fontSize($r('app.float.font_label'))
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.audioAvailable
-          ? $r('app.color.neu_text_primary')
-          : $r('app.color.neu_text_disabled'))
-        .maxLines(1);
-
-      Toggle({
-        type: ToggleType.Switch,
-        isOn: this.audioAvailable && !this.audioMuted,
-      })
-        .enabled(this.audioAvailable)
-        .selectedColor($r('app.color.brand_primary'))
-        .switchPointColor($r('app.color.white'))
-        .onChange((enabled: boolean): void => {
-          this.onAudioChange(enabled);
-        });
-    }
-    .width(this.actionButtonWidth())
-    .height(this.actionHeight())
-    .padding({ left: $r('app.float.space_12'), right: $r('app.float.space_8') })
-    .backgroundColor($r('app.color.mica_control'))
-    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.56,
-    })
-    .border({ width: 1, color: $r('app.color.mica_border') })
-    .borderRadius($r('app.float.radius_14'))
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-    .opacity(this.audioAvailable ? 1 : 0.72)
-    .clip(true);
-  }
-
-  @Builder
-  private AndroidNavigationAction() {
-    Button({ type: ButtonType.Normal, stateEffect: true }) {
-      Text(this.displayedAndroidNavigationVisible ? '收起导航' : '展开导航')
-        .fontSize($r('app.float.font_caption'))
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.displayedAndroidNavigationVisible
-          ? $r('app.color.white')
-          : $r('app.color.neu_text_primary'))
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis });
-    }
-    .width(84)
-    .height($r('app.float.control_compact'))
-    .padding({ left: $r('app.float.space_6'), right: $r('app.float.space_6') })
-    .backgroundColor(this.displayedAndroidNavigationVisible
-      ? $r('app.color.brand_primary')
-      : $r('app.color.mica_control'))
-    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.56,
-    })
-    .border({
-      width: 1,
-      color: this.displayedAndroidNavigationVisible
-        ? $r('app.color.brand_primary')
-        : $r('app.color.mica_border'),
-    })
-    .borderRadius($r('app.float.radius_10'))
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-    .hoverEffect(HoverEffect.Auto)
-    .accessibilityText(this.displayedAndroidNavigationVisible ? '收起安卓导航键' : '展开安卓导航键')
-    .accessibilitySelected(this.displayedAndroidNavigationVisible)
-    .transition(TransitionEffect.OPACITY)
-    .onClick((): void => {
-      this.displayedAndroidNavigationVisible = !this.displayedAndroidNavigationVisible;
-      this.onToggleAndroidNavigation();
-    });
-  }
-
-  @Builder
-  private CompactAction(
-    key: string,
+  private HeaderActionButton(
     label: string,
-    selected: boolean,
-    _adjustment: boolean,
-    enabled: boolean,
+    active: boolean,
     onClick: () => void,
+    busy: boolean = false,
+    fillWeight?: number,
   ) {
     Button({ type: ButtonType.Normal, stateEffect: true }) {
       Text(label)
         .fontSize($r('app.float.font_caption'))
         .fontWeight(FontWeight.Medium)
-        .fontColor(enabled
-          ? (selected ? $r('app.color.white') : $r('app.color.neu_text_primary'))
-          : $r('app.color.neu_text_disabled'));
-    }
-    .width(key === 'transform' ? 92 : (key === 'android-navigation' ? 84 : 68))
-    .height($r('app.float.control_compact'))
-    .padding({ left: $r('app.float.space_6'), right: $r('app.float.space_6') })
-    .enabled(enabled)
-    .backgroundColor(selected ? $r('app.color.brand_primary') : $r('app.color.mica_control'))
-    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.56,
-    })
-    .border({ width: 1, color: selected ? $r('app.color.brand_primary') : $r('app.color.mica_border') })
-    .borderRadius($r('app.float.radius_10'))
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-    .hoverEffect(HoverEffect.Auto)
-    .accessibilityText(label)
-    .onClick((): void => {
-      if (enabled) {
-        onClick();
-      }
-    });
-  }
-
-  @Builder
-  private DangerAction(label: string) {
-    Button({ type: ButtonType.Normal, stateEffect: true }) {
-      Text(label)
-        .fontSize($r('app.float.font_label'))
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.neu_danger'))
-        .maxLines(1);
-    }
-    .width(this.actionButtonWidth())
-    .height(this.actionHeight())
-    .padding({ left: $r('app.float.space_8'), right: $r('app.float.space_8') })
-    .backgroundColor($r('app.color.mica_control'))
-    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.56,
-    })
-    .border({ width: 1, color: $r('app.color.mica_border') })
-    .borderRadius($r('app.float.radius_14'))
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
-    .hoverEffect(HoverEffect.Auto)
-    .accessibilityText(label)
-    .onClick((): void => {
-      this.onDisconnect();
-    });
-  }
-
-  private transformResetLabel(): string {
-    return this.transformSummary.trim() === '100%' ? '居中' : '复位';
-  }
-
-  private windowUtilityLabel(kind: string): string {
-    if (kind === 'fullscreen') {
-      return this.windowFullscreen ? '退出全屏' : '全屏';
-    }
-    return '最小化';
-  }
-
-  @Builder
-  private WindowUtilityAction(kind: string) {
-    Button({ type: ButtonType.Normal, stateEffect: true }) {
-      Text(this.windowUtilityLabel(kind))
-        .fontSize($r('app.float.font_caption'))
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.windowControlBusy
+        .fontColor(busy
           ? $r('app.color.neu_text_disabled')
-          : $r('app.color.neu_text_primary'))
+          : (active ? $r('app.color.white') : $r('app.color.neu_text_primary')))
         .maxLines(1);
     }
-    .width(kind === 'fullscreen' ? 88 : 68)
-    .height($r('app.float.control_compact'))
-    .padding({ left: $r('app.float.space_6'), right: $r('app.float.space_6') })
-    .enabled(!this.windowControlBusy)
-    .backgroundColor($r('app.color.mica_control'))
-    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.56,
-    })
+    .layoutWeight(fillWeight !== undefined ? fillWeight : 0)
+    .height(44)
+    .constraintSize({ minWidth: 44 })
+    .padding({ left: 8, right: 8 })
+    .enabled(!busy)
+    .backgroundColor(active ? $r('app.color.brand_primary') : $r('app.color.mica_control'))
     .border({
       width: 1,
-      color: kind === 'fullscreen' && this.windowFullscreen
-        ? $r('app.color.brand_primary')
-        : $r('app.color.mica_border'),
+      color: active ? $r('app.color.brand_primary') : $r('app.color.mica_border'),
     })
     .borderRadius($r('app.float.radius_10'))
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
     .hoverEffect(HoverEffect.Auto)
-    .accessibilityText(this.windowUtilityLabel(kind))
-    .accessibilitySelected(kind === 'fullscreen' && this.windowFullscreen)
-    .onClick((): void => {
-      if (this.windowControlBusy) {
-        return;
-      }
-      if (kind === 'fullscreen') {
-        this.onToggleWindowFullscreen();
-      } else {
-        this.onMinimizeWindow();
-      }
-    });
+    .accessibilityText(label)
+    .onClick(() => onClick());
   }
 
-  @Builder
-  private TransformControls() {
-    Row({ space: $r('app.float.space_6') }) {
-      Text(this.transformSummary)
-        .fontSize($r('app.float.font_caption'))
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.neu_text_secondary'))
-        .maxLines(1);
-
-      if (this.canResetTransform) {
-        this.CompactAction(
-          'reset-transform',
-          this.transformResetLabel(),
-          false,
-          false,
-          true,
-          () => this.onResetTransform(),
-        )
-      }
-    }
-    .alignItems(VerticalAlign.Center);
-  }
-
-  @Builder
-  private ToolbarUtilityActions() {
-    Row({ space: $r('app.float.space_6') }) {
-      this.TransformControls()
-      this.CompactAction('refresh-display', '刷新画面', false, false, this.refreshDisplayEnabled,
-        () => this.onRefreshDisplay())
-      if (this.windowControlsAvailable) {
-        if (this.windowFullscreenAvailable) {
-          this.WindowUtilityAction('fullscreen')
-        }
-        this.WindowUtilityAction('minimize')
-      }
-      this.CompactAction('collapse', '收起', false, false, true, () => this.onCollapse())
-    }
-    .alignItems(VerticalAlign.Center);
-  }
-
-  @Builder
-  private NarrowToolbarUtilityActions() {
-    Row({ space: $r('app.float.space_6') }) {
-      Row() {
-        this.TransformControls()
-      }
-      .layoutWeight(1);
-
-      this.CompactAction('refresh-display', '刷新画面', false, false, this.refreshDisplayEnabled,
-        () => this.onRefreshDisplay())
-      if (this.windowControlsAvailable) {
-        if (this.windowFullscreenAvailable) {
-          this.WindowUtilityAction('fullscreen')
-        }
-        this.WindowUtilityAction('minimize')
-      }
-      this.CompactAction('collapse', '收起', false, false, true, () => this.onCollapse())
-    }
-    .width('100%')
-    .alignItems(VerticalAlign.Center);
-  }
-
-  private useNarrowUtilityLayout(): boolean {
-    return !this.wideLayout || this.toolbarWidth < 920;
-  }
-
-  @Builder
-  private SystemImeAction() {
-    this.ToolbarAction({
-      label: '输入法',
-      active: this.systemImeActive,
-      transitionId: SYSTEM_IME_TRANSITION_ID,
-      enabled: this.systemImeAvailable,
-      onClick: () => this.onToggleSystemIme(),
-    })
-  }
-
-  @Builder
-  private SoftKeyboardAction() {
-    this.ToolbarAction({
-      label: '虚拟键盘',
-      active: this.softKeyboardVisible,
-      transitionId: SOFT_KEYBOARD_TRANSITION_ID,
-      enabled: this.softKeyboardAvailable,
-      onClick: () => this.onToggleSoftKeyboard(),
-    })
-  }
-
-  @Builder
-  private DisplayAction() {
-    this.ToolbarAction({
-      label: '显示器',
-      active: this.activeOverlayPanel === 'display',
-      transitionId: this.displayTransitionId,
-      onClick: () => this.onOpenDisplay(),
-    })
-  }
-
-  @Builder
-  private QualityAction() {
-    this.ToolbarAction({
-      label: '画质',
-      active: this.activeOverlayPanel === 'quality',
-      transitionId: this.qualityTransitionId,
-      onClick: () => this.onOpenQuality(),
-    })
-  }
-
-  @Builder
-  private FunctionHome() {
-    if (this.actionColumnCount() === 6) {
-      Row({ space: $r('app.float.space_8') }) {
-        this.SystemImeAction()
-        this.SoftKeyboardAction()
-        this.AudioToggle()
-        this.DisplayAction()
-        this.QualityAction()
-        this.DangerAction('断开')
-      }
-      .width(this.actionGridWidth())
-      .alignItems(VerticalAlign.Center);
-    } else if (this.actionColumnCount() === 4) {
-      Column({ space: $r('app.float.space_8') }) {
-        Row({ space: $r('app.float.space_8') }) {
-          this.SystemImeAction()
-          this.SoftKeyboardAction()
-          this.AudioToggle()
-          this.DisplayAction()
-        }
-        .width(this.actionGridWidth());
-
-        Row({ space: $r('app.float.space_8') }) {
-          this.QualityAction()
-          this.DangerAction('断开')
-        }
-        .width(this.actionGridWidth())
-        .alignItems(VerticalAlign.Center)
-        .justifyContent(FlexAlign.End);
-      }
-      .width(this.actionGridWidth());
-    } else {
-      Column({ space: $r('app.float.space_8') }) {
-        Row({ space: $r('app.float.space_8') }) {
-          this.SystemImeAction()
-          this.SoftKeyboardAction()
-        }
-        .width(this.actionGridWidth());
-
-        Row({ space: $r('app.float.space_8') }) {
-          this.AudioToggle()
-          this.DisplayAction()
-        }
-        .width(this.actionGridWidth());
-
-        Row({ space: $r('app.float.space_8') }) {
-          this.QualityAction()
-          this.DangerAction('断开')
-        }
-        .width(this.actionGridWidth());
-      }
-      .width(this.actionGridWidth());
-    }
-  }
-
-  /**
-   * The header's grab strip.
-   *
-   * It sits in the header's right-hand strip and holds no control, so a drag of
-   * the panel never reads a button press or a header scroll as a move. It is a
-   * sibling of the header's scroll rather than part of it, so the gesture only
-   * ever owns this strip.
-   */
   @Builder
   private ToolbarDragGrip() {
-    Row() {
+    Row({ space: 3 }) {
       Stack()
-        .width(4)
-        .height(24)
+        .width(3)
+        .height(18)
         .backgroundColor($r('app.color.neu_text_secondary'))
-        .borderRadius(2)
-        .opacity(0.72);
+        .borderRadius(1.5)
+        .opacity(0.6);
+      Stack()
+        .width(3)
+        .height(18)
+        .backgroundColor($r('app.color.neu_text_secondary'))
+        .borderRadius(1.5)
+        .opacity(0.6);
     }
-    .width(TOOLBAR_DRAG_GRIP_WIDTH)
-    .height($r('app.float.control_compact'))
+    .width(44)
+    .height(44)
     .justifyContent(FlexAlign.Center)
+    .alignItems(VerticalAlign.Center)
+    .backgroundColor($r('app.color.transparent'))
     .accessibilityText($r('app.string.remote_session_toolbar_drag') as Resource)
     .gesture(
       PanGesture({ fingers: 1, direction: PanDirection.All, distance: 4 })
@@ -994,148 +341,630 @@ export struct SessionToolbar {
     );
   }
 
-  build(): void {
-    Column({ space: TOOLBAR_SECTION_GAP }) {
-      Row({ space: TOOLBAR_SECTION_GAP }) {
-        Scroll(this.headerScroller) {
-          Row({ space: $r('app.float.space_8') }) {
-            Text(`${this.metrics.codec}`)
+  @Builder
+  private SessionCard(tab: RemoteSessionTab) {
+    Row({ space: 2 }) {
+      Button({ type: ButtonType.Normal, stateEffect: true }) {
+        Row({ space: 6 }) {
+          Stack()
+            .width(8)
+            .height(8)
+            .borderRadius(4)
+            .backgroundColor(this.sessionStatusColor(tab));
+
+          Column({ space: 1 }) {
+            Text(tab.label)
               .fontSize($r('app.float.font_caption'))
               .fontWeight(FontWeight.Medium)
-              .fontColor($r('app.color.neu_accent'))
-              .maxLines(1);
-            Text($r('app.string.remote_session_header_submitted_fps', this.metrics.fps))
-              .fontSize($r('app.float.font_caption'))
-              .fontColor($r('app.color.neu_text_secondary'))
-              .maxLines(1);
-            Text($r('app.string.remote_session_header_rtt_ms', this.metrics.delay))
-              .fontSize($r('app.float.font_caption'))
-              .fontColor($r('app.color.neu_text_secondary'))
-              .maxLines(1);
-            this.ToolbarUtilityActions()
-            if (this.activeOverlayPanel === 'home' && this.toolbarWidth >= 680) {
-              SessionInputControls({
-                inputEnabled: this.inputEnabled,
-                touchMode: this.touchMode,
-                relativeMouseMode: this.relativeMouseMode,
-                relativeModeSupported: this.relativeModeSupported,
-                rightClickGesture: this.rightClickGesture,
-                wideLayout: true,
-                onSelectMode: (mode: RustDeskInputMode): void => this.onSelectInputMode(mode),
-                onSelectRightClick: (gesture: RustDeskRightClickGesture): void =>
-                  this.onSelectRightClick(gesture),
-              });
+              .fontColor($r('app.color.neu_text_primary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis });
+            if (tab.target.length > 0 && tab.target !== tab.label) {
+              Text(tab.target)
+                .fontSize(10)
+                .fontColor($r('app.color.neu_text_secondary'))
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis });
             }
           }
-          // At least the viewport, and as wide as the group needs: the header
-          // ends at the toolbar's right edge in every panel state, and a row
-          // wider than the toolbar stays reachable by scrolling instead of
-          // being clipped away.
-          .constraintSize({ minWidth: '100%' })
-          .alignItems(VerticalAlign.Center)
-          .justifyContent(FlexAlign.End)
-          .onAreaChange((_oldArea: Area, newArea: Area): void => {
-            this.measureHeaderContentWidth(Number(newArea.width));
-          });
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start);
         }
+        .width('100%')
+        .padding({ left: 8, right: 4 });
+      }
+      .layoutWeight(1)
+      .height(44)
+      .padding(0)
+      .backgroundColor($r('app.color.transparent'))
+      .hoverEffect(HoverEffect.Auto)
+      .accessibilityText(`${tab.label}，${tab.target}，点击切换`)
+      .accessibilitySelected(tab.sessionId === this.activeSessionId)
+      .onClick((): void => this.onSelectSession(tab.sessionId));
+
+      Button({ type: ButtonType.Normal, stateEffect: true }) {
+        Text($r('app.string.remote_session_tab_close_symbol'))
+          .fontSize(14)
+          .fontColor($r('app.color.neu_text_secondary'));
+      }
+      .width(44)
+      .height(44)
+      .padding(0)
+      .backgroundColor($r('app.color.transparent'))
+      .hoverEffect(HoverEffect.Auto)
+      .accessibilityText(`${tab.label}，断开并关闭此会话`)
+      .onClick((): void => this.onCloseSession(tab.sessionId));
+    }
+    .width(this.sessionCardWidth())
+    .height(44)
+    .padding({ left: 2, right: 0 })
+    .backgroundColor(tab.sessionId === this.activeSessionId
+      ? $r('app.color.brand_primary_soft')
+      : $r('app.color.mica_control'))
+    .border({
+      width: 1,
+      color: tab.sessionId === this.activeSessionId
+        ? $r('app.color.brand_primary')
+        : $r('app.color.mica_border'),
+    })
+    .borderRadius($r('app.float.radius_10'))
+    .clip(true);
+  }
+
+  @Builder
+  private SessionTabsBar() {
+    Row({ space: 6 }) {
+      Scroll(this.sessionScroller) {
+        Row({ space: 6 }) {
+          ForEach(this.tabs, (tab: RemoteSessionTab) => {
+            this.SessionCard(tab);
+          }, (tab: RemoteSessionTab): string => tab.sessionId);
+        }
+        .alignItems(VerticalAlign.Center);
+      }
+      .layoutWeight(1)
+      .height(44)
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring, {
+        alwaysEnabled: this.tabs.length * (this.sessionCardWidth() + 6) > this.sessionTabsViewportWidth,
+      })
+      .onAreaChange((_oldArea: Area, newArea: Area): void => {
+        const width = Number(newArea.width);
+        if (width > 0 && Math.abs(width - this.sessionTabsViewportWidth) > 0.5) {
+          this.sessionTabsViewportWidth = width;
+          this.scheduleRevealActiveSession();
+        }
+      });
+
+      Button({ type: ButtonType.Normal, stateEffect: true }) {
+        Row({ space: 2 }) {
+          Text($r('app.string.remote_session_tab_add_symbol'))
+            .fontSize(15)
+            .fontColor(this.canAddSession
+              ? $r('app.color.neu_text_primary')
+              : $r('app.color.neu_text_disabled'));
+          Text('新建')
+            .fontSize($r('app.float.font_caption'))
+            .fontColor(this.canAddSession
+              ? $r('app.color.neu_text_secondary')
+              : $r('app.color.neu_text_disabled'));
+        }
+        .alignItems(VerticalAlign.Center);
+      }
+      .height(44)
+      .padding({ left: 10, right: 10 })
+      .enabled(this.canAddSession)
+      .backgroundColor($r('app.color.mica_control'))
+      .border({ width: 1, color: $r('app.color.mica_border') })
+      .borderRadius($r('app.float.radius_10'))
+      .hoverEffect(HoverEffect.Auto)
+      .accessibilityText(this.canAddSession ? '新建远程会话' : '已达到六个会话上限')
+      .onClick((): void => this.onAddSession());
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
+    .onAreaChange((_oldArea: Area, newArea: Area): void => {
+      this.measureSessionTabsBar(Number(newArea.height));
+    });
+  }
+
+  @Builder
+  private ActionButton(options: ToolbarActionOptions) {
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Text(options.label)
+        .fontSize($r('app.float.font_label'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor(options.enabled === false
+          ? $r('app.color.neu_text_disabled')
+          : (options.active ? $r('app.color.white') : $r('app.color.neu_text_primary')))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis });
+    }
+    .layoutWeight(1)
+    .height(44)
+    .padding({ left: 6, right: 6 })
+    .enabled(options.enabled !== false)
+    .backgroundColor(options.active ? $r('app.color.brand_primary') : $r('app.color.mica_control'))
+    .border({
+      width: 1,
+      color: options.active ? $r('app.color.brand_primary') : $r('app.color.mica_border'),
+    })
+    .borderRadius($r('app.float.radius_10'))
+    .hoverEffect(HoverEffect.Auto)
+    .accessibilityText(options.label)
+    .accessibilitySelected(options.active)
+    .geometryTransition(options.transitionId)
+    .transition(TransitionEffect.OPACITY)
+    .onClick((): void => {
+      options.onClick();
+    });
+  }
+
+  @Builder
+  private AudioToggle() {
+    Row({ space: 4 }) {
+      Text(this.audioAvailable ? '音频' : (this.directSession ? '音频不可用' : '准备中'))
+        .fontSize($r('app.float.font_label'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.audioAvailable
+          ? $r('app.color.neu_text_primary')
+          : $r('app.color.neu_text_disabled'))
         .layoutWeight(1)
-        .scrollable(ScrollDirection.Horizontal)
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
-        .onAreaChange((_oldArea: Area, newArea: Area): void => {
-          this.measureHeaderViewportWidth(Number(newArea.width));
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis });
+
+      if (this.audioAvailable) {
+        Toggle({
+          type: ToggleType.Switch,
+          isOn: !this.audioMuted,
+        })
+          .enabled(this.audioAvailable)
+          .selectedColor($r('app.color.brand_primary'))
+          .switchPointColor($r('app.color.white'))
+          .onChange((enabled: boolean): void => {
+            this.onAudioChange(enabled);
+          });
+      }
+    }
+    .layoutWeight(1)
+    .height(44)
+    .padding({ left: 8, right: 6 })
+    .backgroundColor($r('app.color.mica_control'))
+    .border({ width: 1, color: $r('app.color.mica_border') })
+    .borderRadius($r('app.float.radius_10'))
+    .opacity(this.audioAvailable ? 1 : 0.72)
+    .alignItems(VerticalAlign.Center);
+  }
+
+  @Builder
+  private DangerButton(label: string) {
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Text(label)
+        .fontSize($r('app.float.font_label'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.neu_danger'))
+        .maxLines(1);
+    }
+    .layoutWeight(1)
+    .height(44)
+    .padding({ left: 6, right: 6 })
+    .backgroundColor($r('app.color.mica_control'))
+    .border({ width: 1, color: $r('app.color.mica_border') })
+    .borderRadius($r('app.float.radius_10'))
+    .hoverEffect(HoverEffect.Auto)
+    .accessibilityText(label)
+    .onClick((): void => {
+      this.onDisconnect();
+    });
+  }
+
+  @Builder
+  private AndroidNavButton() {
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Text(this.displayedAndroidNavigationVisible ? '收起导航' : '安卓导航')
+        .fontSize($r('app.float.font_label'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.displayedAndroidNavigationVisible
+          ? $r('app.color.white')
+          : $r('app.color.neu_text_primary'))
+        .maxLines(1);
+    }
+    .layoutWeight(1)
+    .height(44)
+    .padding({ left: 6, right: 6 })
+    .backgroundColor(this.displayedAndroidNavigationVisible
+      ? $r('app.color.brand_primary')
+      : $r('app.color.mica_control'))
+    .border({
+      width: 1,
+      color: this.displayedAndroidNavigationVisible
+        ? $r('app.color.brand_primary')
+        : $r('app.color.mica_border'),
+    })
+    .borderRadius($r('app.float.radius_10'))
+    .hoverEffect(HoverEffect.Auto)
+    .accessibilityText(this.displayedAndroidNavigationVisible ? '收起安卓导航键' : '展开安卓导航键')
+    .onClick((): void => {
+      this.displayedAndroidNavigationVisible = !this.displayedAndroidNavigationVisible;
+      this.onToggleAndroidNavigation();
+    });
+  }
+
+  private showUtilityRow(): boolean {
+    if (this.windowControlsAvailable) {
+      return true;
+    }
+    if (this.refreshDisplayEnabled && this.toolbarWidth < 360) {
+      return true;
+    }
+    return false;
+  }
+
+  @Builder
+  private FunctionHome() {
+    Column({ space: $r('app.float.space_8') }) {
+      if (this.rotationAvailable) {
+        Row({ space: 8 }) {
+          this.HeaderActionButton('旋转至当前方向', false, () => this.onRotateToCurrent(), this.rotationBusy, 1);
+          this.HeaderActionButton('旋转90度', false, () => this.onRotate90(), this.rotationBusy, 1);
+        }
+        .width('100%');
+      }
+      if (this.isSharedSession) {
+        Row({ space: $r('app.float.space_8') }) {
+          this.ActionButton({
+            label: '画质',
+            active: this.activeOverlayPanel === 'quality',
+            transitionId: this.qualityTransitionId,
+            onClick: () => this.onOpenQuality(),
+          });
+          this.DangerButton('断开连接');
+        }
+        .width('100%');
+      } else {
+        SessionInputControls({
+          inputEnabled: this.inputEnabled,
+          touchMode: this.touchMode,
+          relativeMouseMode: this.relativeMouseMode,
+          relativeModeSupported: this.relativeModeSupported,
+          rightClickGesture: this.rightClickGesture,
+          wideLayout: false,
+          onSelectMode: (mode: RustDeskInputMode): void => this.onSelectInputMode(mode),
+          onSelectRightClick: (gesture: RustDeskRightClickGesture): void =>
+            this.onSelectRightClick(gesture),
         });
 
-        this.ToolbarDragGrip();
+        if (this.toolbarWidth >= 360) {
+          Row({ space: $r('app.float.space_8') }) {
+            this.ActionButton({
+              label: '显示器',
+              active: this.activeOverlayPanel === 'display',
+              transitionId: this.displayTransitionId,
+              onClick: () => this.onOpenDisplay(),
+            });
+            this.ActionButton({
+              label: '画质',
+              active: this.activeOverlayPanel === 'quality',
+              transitionId: this.qualityTransitionId,
+              onClick: () => this.onOpenQuality(),
+            });
+            this.AudioToggle();
+          }
+          .width('100%');
+
+          Row({ space: $r('app.float.space_8') }) {
+            this.ActionButton({
+              label: '虚拟键盘',
+              active: this.softKeyboardVisible,
+              transitionId: SOFT_KEYBOARD_TRANSITION_ID,
+              enabled: this.softKeyboardAvailable,
+              onClick: () => this.onToggleSoftKeyboard(),
+            });
+            this.ActionButton({
+              label: '输入法',
+              active: this.systemImeActive,
+              transitionId: SYSTEM_IME_TRANSITION_ID,
+              enabled: this.systemImeAvailable,
+              onClick: () => this.onToggleSystemIme(),
+            });
+            this.DangerButton('断开连接');
+          }
+          .width('100%');
+        } else {
+          Row({ space: $r('app.float.space_8') }) {
+            this.ActionButton({
+              label: '显示器',
+              active: this.activeOverlayPanel === 'display',
+              transitionId: this.displayTransitionId,
+              onClick: () => this.onOpenDisplay(),
+            });
+            this.ActionButton({
+              label: '画质',
+              active: this.activeOverlayPanel === 'quality',
+              transitionId: this.qualityTransitionId,
+              onClick: () => this.onOpenQuality(),
+            });
+          }
+          .width('100%');
+
+          Row({ space: $r('app.float.space_8') }) {
+            this.ActionButton({
+              label: '虚拟键盘',
+              active: this.softKeyboardVisible,
+              transitionId: SOFT_KEYBOARD_TRANSITION_ID,
+              enabled: this.softKeyboardAvailable,
+              onClick: () => this.onToggleSoftKeyboard(),
+            });
+            this.ActionButton({
+              label: '输入法',
+              active: this.systemImeActive,
+              transitionId: SYSTEM_IME_TRANSITION_ID,
+              enabled: this.systemImeAvailable,
+              onClick: () => this.onToggleSystemIme(),
+            });
+          }
+          .width('100%');
+
+          Row({ space: $r('app.float.space_8') }) {
+            this.AudioToggle();
+            this.DangerButton('断开连接');
+          }
+          .width('100%');
+        }
+
+        if (this.androidNavigationAvailable) {
+          Row() {
+            this.AndroidNavButton();
+          }
+          .width('100%');
+        }
+      }
+
+      if (!this.audioAvailable && this.audioUnavailableText !== '') {
+        Text(this.audioUnavailableText)
+          .width('100%')
+          .fontSize($r('app.float.font_caption'))
+          .fontColor($r('app.color.neu_text_secondary'))
+          .padding({ left: 4, right: 4 });
+      }
+
+      if (this.directSession) {
+        if (this.keyboardUnavailableText !== '') {
+          Text(this.keyboardUnavailableText)
+            .width('100%')
+            .fontSize($r('app.float.font_caption'))
+            .fontColor($r('app.color.neu_text_secondary'))
+            .padding({ left: 4, right: 4 });
+        }
+        if (this.windowUnavailableText !== '') {
+          Text(this.windowUnavailableText)
+            .width('100%')
+            .fontSize($r('app.float.font_caption'))
+            .fontColor($r('app.color.neu_text_secondary'))
+            .padding({ left: 4, right: 4 });
+        }
+      }
+      if ((this.directSession || this.isSharedSession) && this.statusMessage.length > 0) {
+        Text(this.statusMessage)
+          .width('100%')
+          .fontSize($r('app.float.font_caption'))
+          .fontColor($r('app.color.neu_text_secondary'))
+          .padding({ left: 4, right: 4 });
+      }
+    }
+    .width('100%');
+  }
+
+  @Builder
+  private HeaderTelemetry() {
+    Row() {
+      Row({ space: this.toolbarWidth < 360 ? 8 : 12 }) {
+        // 编码格式
+        Column({ space: 1 }) {
+          Text('编码')
+            .fontSize(10)
+            .fontWeight(FontWeight.Normal)
+            .fontColor($r('app.color.neu_text_secondary'))
+            .maxLines(1);
+
+          Text(this.metrics.codec)
+            .fontSize($r('app.float.font_caption'))
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.metrics.codec === '--'
+              ? $r('app.color.neu_text_secondary')
+              : $r('app.color.neu_accent'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start);
+
+        // 实测提交帧率
+        Column({ space: 1 }) {
+          Text('提交')
+            .fontSize(10)
+            .fontWeight(FontWeight.Normal)
+            .fontColor($r('app.color.neu_text_secondary'))
+            .maxLines(1);
+
+          Row({ space: 2 }) {
+            Text(this.metrics.fps)
+              .fontSize($r('app.float.font_caption'))
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.metrics.fps === '--'
+                ? $r('app.color.neu_text_secondary')
+                : $r('app.color.neu_text_primary'))
+              .maxLines(1);
+
+            Text('FPS')
+              .fontSize(10)
+              .fontWeight(FontWeight.Normal)
+              .fontColor($r('app.color.neu_text_secondary'))
+              .maxLines(1);
+          }
+          .alignItems(VerticalAlign.Bottom);
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start);
+
+        // 网络延迟 RTT
+        Column({ space: 1 }) {
+          Text('RTT')
+            .fontSize(10)
+            .fontWeight(FontWeight.Normal)
+            .fontColor($r('app.color.neu_text_secondary'))
+            .maxLines(1);
+
+          Row({ space: 2 }) {
+            Text(this.metrics.delay)
+              .fontSize($r('app.float.font_caption'))
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.metrics.delay === '--'
+                ? $r('app.color.neu_text_secondary')
+                : $r('app.color.neu_text_primary'))
+              .maxLines(1);
+
+            Text('ms')
+              .fontSize(10)
+              .fontWeight(FontWeight.Normal)
+              .fontColor($r('app.color.neu_text_secondary'))
+              .maxLines(1);
+          }
+          .alignItems(VerticalAlign.Bottom);
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start);
+      }
+      .layoutWeight(1)
+      .alignItems(VerticalAlign.Center);
+
+      if (this.canResetTransform) {
+        Button({ type: ButtonType.Normal, stateEffect: true }) {
+          Text(this.transformSummary.trim() === '100%' ? '居中' : '复位')
+            .fontSize($r('app.float.font_caption'))
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.neu_accent'));
+        }
+        .height(44)
+        .constraintSize({ minWidth: 44 })
+        .padding({ left: 6, right: 6 })
+        .backgroundColor($r('app.color.transparent'))
+        .borderRadius($r('app.float.radius_10'))
+        .hoverEffect(HoverEffect.Auto)
+        .accessibilityText(this.transformSummary.trim() === '100%' ? '居中画面' : '复位画面')
+        .onClick(() => this.onResetTransform());
+      }
+    }
+    .layoutWeight(1)
+    .height(44)
+    .padding({
+      left: this.toolbarWidth < 360 ? 8 : 10,
+      right: this.canResetTransform ? 0 : (this.toolbarWidth < 360 ? 8 : 10),
+    })
+    .alignItems(VerticalAlign.Center)
+    .backgroundColor($r('app.color.mica_control'))
+    .borderRadius($r('app.float.radius_10'))
+    .border({ width: 1, color: $r('app.color.mica_border') });
+  }
+
+  build(): void {
+    Column({ space: TOOLBAR_SECTION_GAP }) {
+      // Header section: Row 1 + optional Utility Row
+      Column({ space: 6 }) {
+        Row({ space: 6 }) {
+          this.HeaderTelemetry();
+
+          // Utilities + Drag grip
+          Row({ space: 4 }) {
+            if (!this.showUtilityRow() && this.refreshDisplayEnabled) {
+              this.HeaderActionButton('刷新', false, () => this.onRefreshDisplay());
+            }
+
+            this.HeaderActionButton('收起', false, () => this.onCollapse());
+
+            this.ToolbarDragGrip();
+          }
+          .alignItems(VerticalAlign.Center);
+        }
+        .width('100%')
+        .constraintSize({ minHeight: 44 })
+        .alignItems(VerticalAlign.Center);
+
+        if (this.showUtilityRow()) {
+          Row({ space: 6 }) {
+            if (this.refreshDisplayEnabled) {
+              this.HeaderActionButton('刷新', false, () => this.onRefreshDisplay(), false, 1);
+            }
+            if (this.windowControlsAvailable) {
+              if (this.windowFullscreenAvailable) {
+                this.HeaderActionButton(
+                  this.windowFullscreen ? '退出全屏' : '全屏',
+                  this.windowFullscreen,
+                  () => {
+                    if (!this.windowControlBusy) {
+                      this.onToggleWindowFullscreen();
+                    }
+                  },
+                  this.windowControlBusy,
+                  1,
+                );
+              }
+              this.HeaderActionButton(
+                '最小化',
+                false,
+                () => {
+                  if (!this.windowControlBusy) {
+                    this.onMinimizeWindow();
+                  }
+                },
+                this.windowControlBusy,
+                1,
+              );
+            }
+          }
+          .width('100%')
+          .height(44)
+          .alignItems(VerticalAlign.Center);
+        }
       }
       .width('100%')
-      .alignItems(VerticalAlign.Center)
       .onAreaChange((_oldArea: Area, newArea: Area): void => {
         this.measureToolbarHeader(Number(newArea.height));
       });
 
-      if (this.activeOverlayPanel === 'home') {
-        // The home block gets the same budget as a panel body and scrolls past
-        // it, so a short viewport shortens the block instead of pushing the
-        // session tab bar and the disconnect action off the pane.
-        Scroll() {
-          Column({ space: $r('app.float.space_8') }) {
-            if (this.toolbarWidth < 680) {
-              SessionInputControls({
-                inputEnabled: this.inputEnabled,
-                touchMode: this.touchMode,
-                relativeMouseMode: this.relativeMouseMode,
-                relativeModeSupported: this.relativeModeSupported,
-                rightClickGesture: this.rightClickGesture,
-                wideLayout: false,
-                onSelectMode: (mode: RustDeskInputMode): void => this.onSelectInputMode(mode),
-                onSelectRightClick: (gesture: RustDeskRightClickGesture): void =>
-                  this.onSelectRightClick(gesture),
-              });
-            }
-            this.FunctionHome();
-            if (!this.audioAvailable && this.audioUnavailableText !== '') {
-              Text(this.audioUnavailableText)
-                .width('100%')
-                .fontSize($r('app.float.font_caption'))
-                .fontColor($r('app.color.neu_text_secondary'));
-            }
-            if (this.directSession) {
-              Text($r('app.string.direct_toolbar_capabilities'))
-                .width('100%')
-                .fontSize($r('app.float.font_caption'))
-                .fontColor($r('app.color.neu_text_secondary'));
-              if (this.keyboardUnavailableText !== '') {
-                Text(this.keyboardUnavailableText)
-                  .width('100%')
-                  .fontSize($r('app.float.font_caption'))
-                  .fontColor($r('app.color.neu_text_secondary'));
-              }
-              if (this.windowUnavailableText !== '') {
-                Text(this.windowUnavailableText)
-                  .width('100%')
-                  .fontSize($r('app.float.font_caption'))
-                  .fontColor($r('app.color.neu_text_secondary'));
-              }
-              if (this.statusMessage.length > 0) {
-                Text(this.statusMessage)
-                  .width('100%')
-                  .fontSize($r('app.float.font_caption'))
-                  .fontColor($r('app.color.neu_text_secondary'));
-              }
-            }
+      // Session tabs bar (if multi-session or tabs exist)
+      if (this.tabs.length > 0) {
+        this.SessionTabsBar();
+      }
 
-            if (this.androidNavigationAvailable) {
-              Row() {
-                this.AndroidNavigationAction();
-              }
-              .width('100%')
-              .justifyContent(FlexAlign.End);
-            }
-          }
-          .width('100%');
+      // Body
+      if (this.activeOverlayPanel === 'home') {
+        Scroll() {
+          this.FunctionHome();
         }
         .width('100%')
         .constraintSize({ maxHeight: this.panelContentHeight })
         .scrollable(ScrollDirection.Vertical)
         .scrollBar(BarState.Off);
-      } else {
-        Stack() {
-          this.content();
-        }
-        .width('100%')
-        .height(this.panelContentHeight)
-        .padding({
-          left: $r('app.float.space_8'),
-          right: $r('app.float.space_8'),
-          bottom: $r('app.float.space_8'),
-        })
-        .clip(false);
       }
-
-      if (this.tabs.length > 0) {
-        this.SessionTabsBar();
+      // The submenu subtree stays mounted while the toolbar shows its home, so the
+      // native device picker inside it keeps the selected-device state it drew. It is
+      // `Visibility.None` rather than an `if`: that only stops it participating in
+      // layout, so the toolbar's height is still the home content's own height and the
+      // submenu never inflates the panel.
+      Stack() {
+        this.content();
       }
+      .width('100%')
+      .height(this.panelContentHeight)
+      .padding({
+        left: $r('app.float.space_6'),
+        right: $r('app.float.space_6'),
+        bottom: $r('app.float.space_6'),
+      })
+      .clip(false)
+      .visibility(this.activeOverlayPanel === 'home' ? Visibility.None : Visibility.Visible);
     }
     .width('100%')
     .clip(false)

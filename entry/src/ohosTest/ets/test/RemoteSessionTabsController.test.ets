@@ -100,6 +100,52 @@ export default function remoteSessionTabsControllerTest(): void {
       expect(controller.cursorDataSnapshot('session-2').length).assertEqual(0);
     });
 
+    it('retires an invalidated cursor image before a background tab can replay it', 0, () => {
+      const controller = new RemoteSessionTabsController();
+      controller.add('one', 'one', 'remote_control');
+      controller.add('two', 'two', 'remote_control');
+      const oldImage: NativeEvent = { name: 'cursor_data', id: '7', colors: '[1]' };
+      controller.cacheCursorEvent('one', oldImage);
+      controller.cacheCursorEvent('two', oldImage);
+      controller.cacheCursorEvent('one', { name: 'cursor_id', id: '7', cache_miss: 'true' });
+      expect(controller.cursorDataSnapshot('one').includes(oldImage)).assertFalse();
+      expect(controller.lastCursorId('one')).assertEqual('7');
+      expect(controller.cursorDataSnapshot('two').includes(oldImage)).assertTrue();
+      const newImage: NativeEvent = { name: 'cursor_data', id: '7', colors: '[2]' };
+      controller.cacheCursorEvent('one', newImage);
+      expect(controller.cursorDataSnapshot('one')[0] === newImage).assertTrue();
+      controller.cacheCursorEvent('one', { name: 'cursor_position', x: '-100', y: '20' });
+      controller.cacheCursorEvent('one', { name: 'cursor_position', x: '-90', y: '30' });
+      controller.activate('one');
+      expect(controller.cursorPositionSnapshot('one')?.x).assertEqual('-90');
+      expect(controller.cursorPositionSnapshot('two') === undefined).assertTrue();
+      expect(controller.lastCursorId('one')).assertEqual('7');
+    });
+
+    it('bounds retained cursor history by count and JSON storage while keeping the current shape', 0, () => {
+      const controller = new RemoteSessionTabsController();
+      controller.add('one', 'one', 'remote_control');
+      for (let index = 0; index < 257; index += 1) {
+        controller.cacheCursorEvent('one', { name: 'cursor_data', id: `${index}`, colors: '[0]' });
+      }
+      expect(controller.cursorDataSnapshot('one').length).assertEqual(256);
+      expect(controller.cursorDataSnapshot('one')[0].id).assertEqual('1');
+      // Three individually valid large RGBA JSON arrays exceed the raw string
+      // cache budget, although their decoded RGBA would still fit in 16 MiB.
+      const colors = `[${'255,'.repeat(512 * 512 * 4 - 1)}255]`;
+      for (const id of ['large-a', 'large-b', 'large-c']) {
+        controller.cacheCursorEvent('one', { name: 'cursor_data', id, colors });
+      }
+      const snapshot = controller.cursorDataSnapshot('one');
+      let bytes = 0;
+      for (const event of snapshot) {
+        bytes += (event.colors?.length ?? 0) * 2;
+      }
+      expect(bytes <= 16 * 1024 * 1024).assertTrue();
+      expect(snapshot.some((event: NativeEvent) => event.id === 'large-c')).assertTrue();
+      expect(snapshot.some((event: NativeEvent) => event.id === 'large-a')).assertFalse();
+    });
+
     it('keeps protected actions when replaceable background events overflow', 0, () => {
       const controller = new RemoteSessionTabsController();
       controller.add('session-1', 'one', 'remote_control');

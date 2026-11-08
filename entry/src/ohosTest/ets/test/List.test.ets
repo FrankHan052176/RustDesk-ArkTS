@@ -1,6 +1,8 @@
 import decoderCandidateSnapshotTest from './DecoderCandidateSnapshot.test';
 import directWireCredentialsTest from './DirectWireCredentials.test';
 import rdpCertificateTrustTest from './RdpCertificateTrust.test';
+import rememberedPasswordTest from './RememberedPassword.test';
+import cursorPresentationTest from './RustDeskCursorPresentation.test';
 import downloadRootManagerTest from './DownloadRootManager.test';
 import easyTierConnectionIntentTest from './EasyTierConnectionIntent.test';
 import easyTierReadinessControllerTest from './EasyTierReadinessController.test';
@@ -26,13 +28,17 @@ import transferManagerTest from './TransferManager.test';
 import viewportModelTest from './RustDeskViewportModel.test';
 import directSessionSettingsTest from './DirectSessionSettings.test';
 import savedDeviceModelTest from './SavedDeviceModel.test';
+import serverConfigImportTest from './ServerConfigImport.test';
 
 export default function testsuite(): void {
   decoderCandidateSnapshotTest();
   directSessionSettingsTest();
   savedDeviceModelTest();
+  serverConfigImportTest();
   directWireCredentialsTest();
   rdpCertificateTrustTest();
+  rememberedPasswordTest();
+  cursorPresentationTest();
   downloadRootManagerTest();
   easyTierConnectionIntentTest();
   easyTierReadinessControllerTest();

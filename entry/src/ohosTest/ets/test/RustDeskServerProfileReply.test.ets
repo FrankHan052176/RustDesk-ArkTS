@@ -44,7 +44,10 @@ export default function rustDeskServerProfileReplyTest(): void {
       expect(wire.mode).assertEqual('custom');
       expect(wire.idServer).assertEqual('rd.example.com:21116');
       expect(wire.relayServer).assertEqual('rd.example.com:21117');
+      expect(wire.apiServer).assertEqual('');
       expect(wire.key).assertEqual('AAAA');
+      expect(wire.relayKeyConfigured).assertEqual(false);
+      expect(wire.relayKeyVersion).assertEqual(0);
     });
 
     it('refuses an envelope the engine did not approve', 0, () => {

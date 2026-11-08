@@ -2,12 +2,12 @@ import { LuminousButton, LuminousControlSize, LuminousTextField, LuminousTone } 
 import { PeerProtocol, PeerRecord, PeerViewSource } from '../RustDeskDirectoryTypes';
 import {
   bareTargetAddress,
-  peerDisplaySubtitle,
   peerDisplayTitle,
-  peerOnlineState,
   peerReachability,
   peerProtocolLabel,
+  peerProtocolName,
   peerProtocolOf,
+  peerStatusKind,
 } from '../RustDeskPeerDirectoryModel';
 import { FloatingActionSurface, FloatingGlassSurface } from './FloatingSurface';
 import { deviceConnectionTarget } from '../SavedDeviceModel';
@@ -56,7 +56,7 @@ export struct PeerCard {
   }
 
   private identityDetail(): string {
-    return peerDisplaySubtitle(this.peer);
+    return peerProtocolName(peerProtocolOf(this.peer));
   }
 
   private canEditNote(): boolean {
@@ -99,13 +99,6 @@ export struct PeerCard {
   /** `VNC` or `RDP` when the peer's protocol names that scheme, otherwise empty. */
   private protocolBadge(): string {
     return peerProtocolLabel(peerProtocolOf(this.peer));
-  }
-
-  private protocolAccent(): ResourceColor {
-    if (this.protocolBadge() === 'VNC') {
-      return $r('app.color.brand_secondary');
-    }
-    return $r('app.color.brand_primary');
   }
 
   /** The action a tap on the primary button takes, following the peer's protocol. */
@@ -155,32 +148,44 @@ export struct PeerCard {
   }
 
   /**
-   * A peer the runtime has not observed reads as `device_status_checking`, not
-   * as offline: after a restart an unobserved peer is unknown, and claiming it
-   * is offline would be a reachability claim nobody made.
+   * The card's claim, in the words of the evidence behind it.
+   *
+   * A rendezvous peer reads only hbbs's answer, so it reads `在线`/`离线`. A
+   * direct wire's accepted socket reads `端口可达`/`端口不可达`: the port answered
+   * and nothing behind it was authenticated or identified. A peer the runtime has
+   * not observed reads `未知`, because after a restart nobody claimed either way.
    */
   private onlineStatusText(): ResourceStr {
-    const state = peerOnlineState(peerReachability(this.peer));
-    if (state === 'unknown') {
+    const kind = peerStatusKind(this.peer);
+    if (kind === 'unknown') {
       return $r('app.string.device_status_checking');
     }
-    return state === 'online'
-      ? $r('app.string.device_status_online')
-      : $r('app.string.device_status_offline');
+    if (kind === 'online') {
+      return $r('app.string.device_status_online');
+    }
+    if (kind === 'offline') {
+      return $r('app.string.device_status_offline');
+    }
+    return kind === 'reachable'
+      ? $r('app.string.device_status_reachable')
+      : $r('app.string.device_status_unreachable');
   }
 
   private onlineStatusColor(): ResourceColor {
-    return peerReachability(this.peer) === true
+    const kind = peerStatusKind(this.peer);
+    return kind === 'online' || kind === 'reachable'
       ? $r('app.color.success')
       : $r('app.color.neu_text_secondary');
   }
 
   private onlineStatusDotColor(): ResourceColor {
-    const state = peerOnlineState(peerReachability(this.peer));
-    if (state === 'unknown') {
+    const kind = peerStatusKind(this.peer);
+    if (kind === 'unknown') {
       return $r('app.color.info');
     }
-    return state === 'online' ? $r('app.color.success') : $r('app.color.neu_text_disabled');
+    return kind === 'online' || kind === 'reachable'
+      ? $r('app.color.success')
+      : $r('app.color.neu_text_disabled');
   }
 
   private toggleFavorite(): void {
@@ -188,13 +193,13 @@ export struct PeerCard {
   }
 
   private canRemoveFromCurrentView(): boolean {
-    return this.viewSource === 'recent' || this.viewSource === 'lan';
+    return this.viewSource === 'recent' || this.viewSource === 'lan' || this.viewSource === 'addressBook';
   }
 
   private removeFromCurrentView(): void {
     if (this.viewSource === 'lan') {
       this.onRemoveLan(this.connectionTarget(), peerProtocolOf(this.peer));
-    } else if (this.viewSource === 'recent') {
+    } else if (this.viewSource === 'recent' || this.viewSource === 'addressBook') {
       this.onRemoveRecent(this.connectionTarget(), peerProtocolOf(this.peer), this.peer.rustdeskIdOnly);
     }
   }
@@ -316,25 +321,12 @@ export struct PeerCard {
           .fontColor($r('app.color.neu_text_primary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
-        Row({ space: 6 }) {
-          Text(this.identityDetail())
-            .layoutWeight(1)
-            .fontSize(12)
-            .fontColor($r('app.color.neu_text_secondary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis });
-          if (this.protocolBadge().length > 0) {
-            Text(this.protocolBadge())
-              .fontSize(10)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(this.protocolAccent())
-              .padding({ left: 6, right: 6, top: 1, bottom: 1 })
-              .borderRadius($r('app.float.radius_6'))
-              .backgroundColor($r('app.color.mica_control'));
-          }
-        }
-        .width('100%')
-        .alignItems(VerticalAlign.Center);
+        Text(this.identityDetail())
+          .width('100%')
+          .fontSize(12)
+          .fontColor($r('app.color.neu_text_secondary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start);
@@ -416,17 +408,18 @@ export struct PeerCard {
             .fontSize(11)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.neu_text_secondary'));
-          Text(this.noteText().length > 0
-            ? this.noteText()
-            : $r('app.string.device_note_placeholder'))
-            .layoutWeight(1)
-            .fontSize(11)
-            .fontColor(this.noteText().length > 0
-              ? $r('app.color.neu_text_primary')
-              : $r('app.color.neu_text_disabled'))
-            .maxLines(2)
-            .lineHeight(16)
-            .textOverflow({ overflow: TextOverflow.Ellipsis });
+          if (this.noteText().length > 0) {
+            Text(this.noteText())
+              .layoutWeight(1)
+              .fontSize(11)
+              .fontColor($r('app.color.neu_text_primary'))
+              .maxLines(2)
+              .lineHeight(16)
+              .textOverflow({ overflow: TextOverflow.Ellipsis });
+          } else {
+            Blank()
+              .layoutWeight(1);
+          }
           Button({ type: ButtonType.Normal, stateEffect: false }) {
             Text(this.noteActionLabel())
               .fontSize(11)
@@ -543,13 +536,6 @@ export struct PeerCard {
         Column({ space: this.compact ? 8 : 12 }) {
           this.IdentityRow();
           this.NoteRow();
-          if (this.viewSource !== 'addressBook') {
-            Button($r('app.string.device_editor_edit'), { type: ButtonType.Normal })
-              .height(44)
-              .backgroundColor($r('app.color.mica_control'))
-              .fontColor($r('app.color.neu_accent'))
-              .onClick((): void => this.onEditDevice(this.peer));
-          }
           this.StatusRow();
           this.SessionActions();
         }

@@ -7,6 +7,7 @@ import { ActionResponse, NativeEvent, PeerDisplayInfo, ResolutionInfo } from '..
 
 class RecordingNativeSessionBridge implements NativeSessionBridge {
   commands: string[] = [];
+  customFpsResponse?: ActionResponse;
 
   switchDisplay(_sessionId: string, display: number): ActionResponse {
     this.commands.push(`switch:${display}`);
@@ -70,7 +71,13 @@ class RecordingNativeSessionBridge implements NativeSessionBridge {
 
   setCustomFps(_sessionId: string, fps: number): ActionResponse {
     this.commands.push(`custom-fps:${fps}`);
-    return this.ok('set_custom_fps');
+    return this.customFpsResponse ?? {
+      ok: true,
+      action: 'sessionSetCustomFps',
+      scope: 'session',
+      requested_fps: fps,
+      applied: false,
+    };
   }
 
   getFrameRateSnapshot(_sessionId: string): string {
@@ -132,6 +139,14 @@ class RecordingNativeSessionBridge implements NativeSessionBridge {
 
   setViewOnly(_sessionId: string, _enabled: boolean): ActionResponse {
     return this.ok('set_view_only');
+  }
+
+  setUnverifiedInputAccepted(_sessionId: string, _accepted: boolean): ActionResponse {
+    return {
+      ok: false,
+      action: 'sessionSetUnverifiedInputAccepted',
+      message: 'Test fixture does not authorize unverified input',
+    };
   }
 
   login(_sessionId: string, _password: string, _remember: boolean = false): ActionResponse {
@@ -323,7 +338,7 @@ export default function sessionDisplayControllerTest(): void {
       expect(bridge.commands.length).assertEqual(0);
     });
 
-    it('asks the peer for a capture rate and remembers the one it accepted', 0, () => {
+    it('remembers a matching current-session FPS queue receipt without a peer applied ACK', 0, () => {
       const bridge = new RecordingNativeSessionBridge();
       const controller = createController(bridge);
 
@@ -332,11 +347,57 @@ export default function sessionDisplayControllerTest(): void {
       expect(controller.getRefreshRate()).assertEqual(120);
 
       bridge.commands = [];
-      // 0 is below the peer's bound and 241 above it; neither may be sent.
+      // Keep the existing 1..240 request range; neither out-of-range value may be sent.
       expect(controller.applyRefreshRate('session-1', 0)).assertFalse();
       expect(controller.applyRefreshRate('session-1', 241)).assertFalse();
       expect(bridge.commands.length).assertEqual(0);
       expect(controller.getRefreshRate()).assertEqual(120);
+    });
+
+    it('rejects legacy saved-only and mismatched FPS receipts without changing the selection', 0, () => {
+      const bridge = new RecordingNativeSessionBridge();
+      const errors: ActionResponse[] = [];
+      const controller = new SessionDisplayController(new RustDeskViewportModel(), bridge,
+        (response: ActionResponse) => errors.push(response));
+      controller.restoreRefreshRate(90);
+      const receipts: ActionResponse[] = [
+        { ok: true, action: 'sessionSetCustomFps' },
+        { ok: true, action: 'sessionSetCustomFps', scope: 'next_session', requested_fps: 30, applied: false },
+        { ok: true, action: 'sessionSetCustomFps', scope: 'session', requested_fps: 60, applied: false },
+      ];
+
+      receipts.forEach((response: ActionResponse) => {
+        bridge.customFpsResponse = response;
+        expect(controller.applyRefreshRate('session-1', 30)).assertFalse();
+        expect(controller.getRefreshRate()).assertEqual(90);
+        expect(controller.isAwaitingAction()).assertFalse();
+      });
+      expect(bridge.commands.join(',')).assertEqual('custom-fps:30,custom-fps:30,custom-fps:30');
+      expect(errors.length).assertEqual(receipts.length);
+      errors.forEach((response: ActionResponse) => expect(response.ok).assertFalse());
+    });
+
+    it('preserves the prior FPS request and reports a native failure unchanged', 0, () => {
+      const bridge = new RecordingNativeSessionBridge();
+      bridge.customFpsResponse = {
+        ok: false,
+        action: 'sessionSetCustomFps',
+        scope: 'session',
+        requested_fps: 30,
+        applied: false,
+        message: 'FPS queue is closed',
+      };
+      const errors: ActionResponse[] = [];
+      const controller = new SessionDisplayController(new RustDeskViewportModel(), bridge,
+        (response: ActionResponse) => errors.push(response));
+      controller.restoreRefreshRate(90);
+
+      expect(controller.applyRefreshRate('session-1', 30)).assertFalse();
+      expect(controller.getRefreshRate()).assertEqual(90);
+      expect(bridge.commands.join(',')).assertEqual('custom-fps:30');
+      expect(errors.length).assertEqual(1);
+      expect(errors[0].message).assertEqual('FPS queue is closed');
+      expect(controller.isAwaitingAction()).assertFalse();
     });
 
     it('can change resolution for Windows', 0, () => {

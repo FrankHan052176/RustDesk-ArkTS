@@ -61,6 +61,7 @@ export function copySessionDefaults(source: SessionDefaults): SessionDefaults {
   next.gesturesEnabled = source.gesturesEnabled;
   next.toolbarExpanded = source.toolbarExpanded;
   next.sessionSharingEnabled = source.sessionSharingEnabled;
+  next.keepScreenOrientation = source.keepScreenOrientation;
   next.rdpResolution = source.rdpResolution;
   next.rdpScaleFactor = source.rdpScaleFactor;
   next.rdpAudioEnabled = source.rdpAudioEnabled;

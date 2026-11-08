@@ -16,21 +16,40 @@ import {
   PASSWORD_MODE_TEMPORARY,
 } from './ControlledHostTypes';
 import { NativeHostBridge } from './NativeHostBridge';
+import { rustDeskRuntimeController, RustDeskRuntimeState } from '../RustDeskRuntimeController';
 
 const DOMAIN = 0xFF00;
 const TAG = 'RustDeskViewedHost';
 const POLL_INTERVAL_MS = 250;
 const STOPPING_RECHECK_MS = 250;
+/**
+ * The capture-fact sample interval.
+ *
+ * The poll runs every 250 ms; writing its whole status text four times a second
+ * pushed the real failures out of the device log window. One sample per five
+ * seconds keeps the counters readable as a progression and leaves the log for
+ * errors. Nothing else in this coordinator is throttled.
+ */
+const CAPTURE_DIAG_INTERVAL_MS = 5000;
 /** The native teardown bound is 30 s; this only observes it from the foreground. */
 const STOPPING_RECHECK_LIMIT = 120;
+/**
+ * The real background fact of a consented run.
+ *
+ * A foreground/background transition retires discovery/presence and the injection
+ * grant only; the viewed-host run keeps listening and capturing, so nothing here
+ * claims a close the engine never requested.
+ */
+const BACKGROUND_KEEPALIVE_TEXT = '已进入后台，被看服务继续运行';
 
 /**
  * The start request the legacy UI built.
  *
- * `requireLocalApproval: true` is the real policy this service runs: the engine
- * pins the run to per-connection local approval (a click on this machine), and
- * `false` would only fall back to password-or-click, which still authenticates a
- * password or a local click and never auto-approves. Clipboard stays off. Input
+ * `requireLocalApproval: false` selects the engine's password-or-click policy,
+ * which is what the operator asked for: a controller authenticates with this
+ * run's real temporary or permanent password, or waits for a click on this
+ * machine. Neither path is an auto-approval, and the panel prints the policy the
+ * native run actually reports. Clipboard stays off. Input
  * is opt-in for one explicit control-start action and only a fresh OS-authorized
  * fact admits it; ordinary start remains view-only. Desktop audio is requested
  * and reported: this engine has no audio owner yet, so the answer carries
@@ -41,7 +60,7 @@ const STOPPING_RECHECK_LIMIT = 120;
  * LAN hit or a target string.
  */
 class ControlledStartOptions {
-  requireLocalApproval: boolean = true;
+  requireLocalApproval: boolean = false;
   enableInput: boolean = false;
   inputAuthorizationRequestId: string = '';
   enableClipboard: boolean = false;
@@ -95,6 +114,12 @@ interface HostPayload {
   captureActive?: boolean;
   systemCaptureConfirmed?: boolean;
   framesObserved?: number;
+  /** The encoded bytes the same capture owner really produced. */
+  captureEncodedBytes?: number;
+  /** Which owner really holds the capture: `run`, `peer`, or none at all. */
+  captureOwner?: string | null;
+  /** Unix ms the run-level capture owner was created; null for a peer owner. */
+  captureOpenedAtMs?: number | null;
   sdkStateCode?: number | null;
   consentState?: string | null;
   terminal?: boolean;
@@ -151,6 +176,75 @@ function runEpochOf(payload: HostPayload): string {
   return isRunEpoch(raw) ? raw : '';
 }
 
+/** The run a diagnostic line really names: the epoch, `none`, or `missing`. */
+function runEpochFact(payload: HostPayload): string {
+  if (payload.runEpoch === undefined) {
+    return 'missing';
+  }
+  const epoch: string = runEpochOf(payload);
+  return epoch.length > 0 ? epoch : 'none';
+}
+
+/** A number the answer really carries; a null is `none`, an absent one `missing`. */
+function numberFact(value: number | null | undefined): string {
+  if (value === undefined) {
+    return 'missing';
+  }
+  return value === null ? 'none' : String(value);
+}
+
+/** A boolean the answer really carries: an absent one is never reported as `false`. */
+function booleanFact(value: boolean | undefined): string {
+  if (value === undefined) {
+    return 'missing';
+  }
+  return value ? 'true' : 'false';
+}
+
+/** A closed engine enum (`captureOwner`, `captureState`), or how it was omitted. */
+function enumFact(value: string | null | undefined): string {
+  if (value === undefined) {
+    return 'missing';
+  }
+  return value === null || value.length === 0 ? 'none' : value;
+}
+
+/**
+ * The host may be admitted only by the one native lifecycle receipt: current
+ * privacy consent and foreground, a completed `appInit`, and the native owner
+ * generation that receipt named. A pending update, a failed one or a bare
+ * `ready` (the private root stays initialized across a fence) admit nothing.
+ */
+function runtimeAdmits(runtime: RustDeskRuntimeState): boolean {
+  return !runtime.pending && runtime.privacyAccepted && runtime.foreground && runtime.ready &&
+    runtime.discoveryAllowed && runtime.ownerGeneration.length > 0;
+}
+
+/** Why a start is refused right now, from the same lifecycle state. */
+function runtimeBlockText(runtime: RustDeskRuntimeState): string {
+  if (!runtime.privacyAccepted) {
+    return '尚未获得隐私授权，无法启用被看服务。';
+  }
+  if (!runtime.foreground) {
+    return '应用不在前台，无法启用被看服务。';
+  }
+  if (runtime.pending) {
+    return 'RustDesk Core 正在初始化，请稍后重试。';
+  }
+  if (runtime.error.length > 0) {
+    return `RustDesk Core 初始化失败：${runtime.error}`;
+  }
+  return 'RustDesk Core 尚未就绪，请稍后重试。';
+}
+
+/**
+ * What the panel says when a real close is being observed.
+ *
+ * A withdrawn consent is the only lifecycle fact that makes the native fence close
+ * the viewed-host run, and it is reported as exactly that.
+ */
+const PRIVACY_WITHDRAWN_TEXT = '隐私授权已撤回：已请求关闭被看服务';
+
 /** One queued security operation and the panel generation it was queued for. */
 class SecurityTicket {
   readonly panel: number;
@@ -194,6 +288,8 @@ export class ControlledHostCoordinator {
   private listeners: ControlledHostStateListener[] = [];
   private pollTimer: number = -1;
   private pollInFlight: boolean = false;
+  /** The last capture-fact sample (wall-clock ms); `0` means none was printed yet. */
+  private captureDiagAtMs: number = 0;
   private generation: number = 0;
   /** The one start attempt in flight, kept until its run is closed or admitted. */
   private startTask: Promise<void> | undefined = undefined;
@@ -203,7 +299,25 @@ export class ControlledHostCoordinator {
   /** A control run must fail closed on revocation, not silently become view-only. */
   private runRequiresInput: boolean = false;
   private initialized: boolean = false;
+  /**
+   * True only between a native lifecycle receipt that admits the host and the
+   * next change of that state. It is derived, never set by a caller: the single
+   * writer is `applyRuntimeState`, fed by RustDeskRuntimeController.
+   */
   private runtimeReady: boolean = false;
+  /** The native discovery/lifecycle owner generation `runtimeReady` was granted for. */
+  private runtimeOwner: string = '';
+  private runtimeBlock: string = 'RustDesk Core 尚未就绪，请稍后重试。';
+  /**
+   * The app-foreground fact the current lifecycle state reports.
+   *
+   * A backgrounded app keeps a consented run, so this only decides how a live
+   * status text names that fact; it never withdraws a run by itself.
+   */
+  private appInBackground: boolean = false;
+  private runtimeListener: (runtime: RustDeskRuntimeState) => void = (runtime: RustDeskRuntimeState): void => {
+    this.applyRuntimeState(runtime);
+  };
   private resolvingRequestId: string = '';
   private resolvingAccepted: boolean = false;
   /** The run epoch this coordinator admitted; every stop names it. */
@@ -234,6 +348,7 @@ export class ControlledHostCoordinator {
     });
     this.initialized = true;
     this.runtimeReady = false;
+    this.runtimeOwner = '';
     this.panelGeneration += 1;
     this.state.temporaryPassword = '';
     // Nothing queued for the panel that just went away may run against this one.
@@ -246,20 +361,153 @@ export class ControlledHostCoordinator {
     this.state.statusText = '可启用屏幕共享（设备内音频尚未实现）';
     this.state.lastError = '';
     this.emitState();
+    // The listener is handed the current lifecycle state at once, so a runtime
+    // that is already admitted is picked up here and not only on the next change.
+    rustDeskRuntimeController.addListener(this.runtimeListener);
   }
 
-  onRuntimeReady(): void {
+  /**
+   * The only writer of `runtimeReady`: a change of the native lifecycle state.
+   *
+   * Every lifecycle update is a native fence that invalidates this admission
+   * synchronously (`pending`) before its receipt arrives. Admission is therefore
+   * granted only by a current, completed receipt and is withdrawn by the next
+   * update, whatever its cause (a foreground/background transition, a consent
+   * change, a same-state refresh or a destroy). A late receipt of a superseded
+   * update never reaches this method.
+   *
+   * What that fence really closes is the *new* state's own consent answer: with
+   * consent it retires discovery/presence and the injection grant and leaves the
+   * listening run, its peers and its capture alone. The panel therefore keeps a
+   * run it really still has and observes a close only when one really happened.
+   */
+  private applyRuntimeState(runtime: RustDeskRuntimeState): void {
     if (!this.initialized) {
       return;
     }
+    this.appInBackground = !runtime.foreground;
+    const admitted: boolean = runtimeAdmits(runtime);
+    if (admitted && this.runtimeReady && this.runtimeOwner === runtime.ownerGeneration) {
+      return; // Same owner: a LAN notification, not a lifecycle change.
+    }
     if (this.runtimeReady) {
-      this.refreshIdentityState();
+      this.runtimeReady = false;
+      this.runtimeOwner = '';
+      this.withdrawAdmission(runtime);
+    }
+    if (!admitted) {
+      this.runtimeBlock = runtimeBlockText(runtime);
       return;
     }
+    this.runtimeBlock = '';
     this.runtimeReady = true;
-    this.refreshIdentityState();
+    this.runtimeOwner = runtime.ownerGeneration;
+    // A host closed by the previous fence may still be settling.
+    this.stoppingAttempts = 0;
+    this.reconcileStoppedRun();
+    this.publishIdentity();
     this.refreshPasswordState();
     this.refreshTwoFactorState();
+  }
+
+  /**
+   * What one withdrawn admission really did to the run this panel owns.
+   *
+   * The fence closes the host only when the new lifecycle state carries no privacy
+   * consent; a foreground/background transition keeps it. The panel mirrors exactly
+   * that instead of assuming either outcome: a consented run that is still
+   * listening stays this panel's run, and a run that is really not listening any
+   * more is observed as a close rather than reported as still sharing.
+   */
+  private withdrawAdmission(runtime: RustDeskRuntimeState): void {
+    if (!runtime.privacyAccepted) {
+      this.retireRuntimeAdmission(PRIVACY_WITHDRAWN_TEXT, runtime.foreground);
+      return;
+    }
+    const unkept: string = this.keepConsentedRun(runtime.foreground);
+    if (unkept.length > 0) {
+      this.retireRuntimeAdmission(unkept, runtime.foreground);
+    }
+  }
+
+  /**
+   * Keeps the running host a consent-preserving fence did not close.
+   *
+   * The empty string means the run this panel owns is still the engine's listening
+   * run and was kept; anything else is the honest reason it cannot be kept, and the
+   * caller then observes the real close. Nothing here stops the run and nothing here
+   * claims a close that was never requested: the temporary password, the continuous
+   * task, pending connections and polling stay with the run they belong to.
+   */
+  private keepConsentedRun(foreground: boolean): string {
+    if (this.startTask !== undefined) {
+      // A start admitted for the withdrawn generation cannot complete: native
+      // refuses it at resolution and closes whatever that attempt really created.
+      // It is abandoned like any other superseded attempt.
+      return '被看服务启动已被系统生命周期中断，正在请求关闭';
+    }
+    if (!this.running()) {
+      return ''; // Nothing is owned here: no run and no close to observe.
+    }
+    let payload: HostPayload;
+    try {
+      payload = this.parse(this.bridge.status());
+    } catch (error) {
+      return `无法读取原生被看服务状态：${String(error)}`;
+    }
+    if (payload.ok !== true || payload.serverRunning !== true || payload.state !== 'listening' ||
+      runEpochOf(payload) !== this.runEpoch) {
+      return '原生被看服务已不在监听，正在确认关闭';
+    }
+    this.stoppingAttempts = 0;
+    this.clearStoppingTimer();
+    this.applyHostPolicy(payload);
+    this.applyInputPolicy(payload);
+    this.state.lastError = '';
+    if (!foreground) {
+      // Only a background transition needs new words; a foreground one keeps the
+      // text the run already has and refreshes it from the real status.
+      this.state.statusText = BACKGROUND_KEEPALIVE_TEXT;
+    }
+    this.emitState();
+    this.schedulePoll(0);
+    return '';
+  }
+
+  /** The background fact a live status text names, or nothing. */
+  private backgroundSuffix(): string {
+    return this.appInBackground ? '；应用在后台，被看服务继续运行' : '';
+  }
+
+  /**
+   * The engine's status document carries the local ID only after the host bridge
+   * was handed it by `configureScreen` or a start, and no run exists yet. Handing
+   * it the display geometry (the same call a start makes; it starts no capture
+   * and grants no consent) is what makes the device ID readable before the first
+   * start. A refusal leaves the ID empty rather than invented.
+   */
+  private publishIdentity(): void {
+    if (this.startTask === undefined && (this.state.phase === 'disabled' || this.state.phase === 'failed')) {
+      try {
+        const configured: HostPayload = this.configureDisplay();
+        if (configured.ok !== true) {
+          hilog.warn(DOMAIN, TAG, 'Display geometry was not published: %{public}s',
+            this.failureText(configured, 'refused'));
+        }
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'Display geometry was not published: %{public}s', String(error));
+      }
+    }
+    this.refreshIdentityState();
+  }
+
+  private configureDisplay(): HostPayload {
+    const displayInfo = display.getDefaultDisplaySync();
+    const screenOptions = new ControlledScreenOptions();
+    screenOptions.displayId = displayInfo.id;
+    screenOptions.width = displayInfo.width;
+    screenOptions.height = displayInfo.height;
+    return this.parse(this.bridge.configureScreen(JSON.stringify(screenOptions)));
   }
 
   addStateListener(listener: ControlledHostStateListener): void {
@@ -342,7 +590,9 @@ export class ControlledHostCoordinator {
       }
     }
     if (!this.runtimeReady) {
-      this.state.lastError = 'RustDesk Core 尚未初始化，请稍后重试。';
+      // Refused at the source: native would refuse the same start (app scope),
+      // and nothing is dispatched or faked ready here.
+      this.state.lastError = this.runtimeBlock;
       this.state.statusText = this.state.lastError;
       this.emitState();
       return;
@@ -371,25 +621,22 @@ export class ControlledHostCoordinator {
       if (config.approved !== true || config.approvedProfile === undefined) {
         throw new Error('尚未保存并确认服务器配置：请先在设置中保存 ID/中继服务器后再启用被看服务');
       }
-      const backgroundStarted = await backgroundService?.start();
+      const backgroundFailure = await backgroundService?.start();
       if (currentGeneration !== this.generation) {
         // Only the continuous task this attempt started is released; the run
         // itself was never asked for.
         backgroundService?.stop();
         return;
       }
-      if (backgroundStarted !== true) {
-        throw new Error('无法启动被看服务后台任务');
+      if (backgroundFailure === undefined) {
+        throw new Error('被看服务后台任务不可用');
       }
-      const displayInfo = display.getDefaultDisplaySync();
-      const screenOptions = new ControlledScreenOptions();
-      screenOptions.displayId = displayInfo.id;
-      screenOptions.width = displayInfo.width;
-      screenOptions.height = displayInfo.height;
-      this.requireSuccess(
-        this.parse(this.bridge.configureScreen(JSON.stringify(screenOptions))),
-        '屏幕参数配置失败',
-      );
+      if (backgroundFailure.length > 0) {
+        // The system's own reason (a mode this UIAbility has not declared, a
+        // denied permission) is the only actionable answer for this failure.
+        throw new Error(backgroundFailure);
+      }
+      this.requireSuccess(this.configureDisplay(), '屏幕参数配置失败');
       if (currentGeneration !== this.generation) {
         backgroundService?.stop();
         return;
@@ -465,6 +712,7 @@ export class ControlledHostCoordinator {
       this.state.statusText = this.readyStatusText();
       this.state.lastError = '';
       this.emitState();
+      this.reportCapture(startReply, true);
       if (currentGeneration !== this.generation) {
         // Superseded while this answer was being published: the run this attempt
         // created is closed by its own epoch and joined, and the newer generation
@@ -596,6 +844,9 @@ export class ControlledHostCoordinator {
 
   /** Reads the password panel from the record the host really authenticates with. */
   refreshPasswordState(): void {
+    if (!this.runtimeReady) {
+      return; // Admission re-reads it; native would only refuse outside the app scope.
+    }
     this.enqueueSecurity((): Promise<void> => this.loadPasswordState());
   }
 
@@ -653,6 +904,9 @@ export class ControlledHostCoordinator {
   }
 
   refreshTwoFactorState(): void {
+    if (!this.runtimeReady) {
+      return;
+    }
     this.enqueueSecurity((): Promise<void> => this.loadTwoFactorState());
   }
 
@@ -745,18 +999,36 @@ export class ControlledHostCoordinator {
   }
 
   /**
-   * The app is leaving the foreground, and the native lifecycle fence has just
-   * requested the host service's close: nothing may keep claiming a live share.
+   * The app is leaving the foreground.
    *
-   * This is not a second stop and adds no background keep-alive: the fence
-   * already revoked the listener and every peer, and the owner's own join reports
-   * an unconfirmed reclamation as such. The panel only stops claiming that the
-   * screen is still being shared while the native close settles.
+   * The fence of this transition retires discovery/presence and the injection grant
+   * only: a consented viewed-host run keeps listening and capturing in the
+   * background. The panel therefore keeps that run — its temporary password, its
+   * continuous task and its pending connections — and names the background fact
+   * instead of claiming a close the engine never requested. A state without consent
+   * is the one case where the fence really closes, and it is observed as before.
    */
   onAbilityBackground(): void {
     if (!this.initialized) {
       return;
     }
+    // The lifecycle update that precedes this call already reached this decision
+    // from the same state; repeating it is idempotent and keeps this hook correct
+    // on its own if the Ability ever calls it in another order.
+    this.withdrawAdmission(rustDeskRuntimeController.state());
+  }
+
+  /**
+   * Withdraws everything one admission owned *when its run really ends*: the
+   * panel's secrets and queued writes, an in-flight start, polling, and any claim
+   * that a share is live.
+   *
+   * It is not a second stop: a fence that closes the host (a withdrawn consent or a
+   * destroyed Ability) already requested the close and the owner joins its own
+   * teardown. When the app is still in the foreground the close is observed at
+   * once; from the background it is observed on the next foreground.
+   */
+  private retireRuntimeAdmission(statusText: string, foreground: boolean): void {
     this.twoFactorSetupGeneration += 1;
     this.panelGeneration += 1;
     this.state.temporaryPassword = '';
@@ -787,10 +1059,21 @@ export class ControlledHostCoordinator {
     this.resolvingRequestId = '';
     this.state.activePeerName = '';
     this.state.phase = 'stopping';
-    this.state.statusText = '应用已进入后台：系统生命周期已请求关闭被看服务，共享不会在后台继续';
+    this.state.statusText = statusText;
     this.emitState();
+    if (foreground) {
+      this.stoppingAttempts = 0;
+      this.reconcileStoppedRun();
+    }
   }
 
+  /**
+   * Returning to the foreground re-reads the real native status.
+   *
+   * The fence of this transition keeps a consented run, so a run that is really
+   * still listening is still the enabled service this panel shows, and only a run
+   * that really is not listening any more moves to the close observation.
+   */
   onAbilityForeground(): void {
     if (!this.initialized) {
       return;
@@ -799,20 +1082,9 @@ export class ControlledHostCoordinator {
       this.refreshIdentityState();
     }
     this.stoppingAttempts = 0;
-    if (this.running() && !this.stillListening()) {
-      // Every native lifecycle update runs the app fence, and that fence asks
-      // the host service to close (this foreground one included). A run that is
-      // no longer listening is not reported as still sharing.
-      this.clearPoll();
-      this.clearStoppingTimer();
-      this.backgroundService?.stop();
-      this.state.runningInBackground = false;
-      this.state.incoming = undefined;
-      this.state.incomingResolving = false;
-      this.resolvingRequestId = '';
-      this.state.activePeerName = '';
-      this.state.phase = 'stopping';
-      this.state.statusText = '系统生命周期已请求关闭被看服务，正在等待原生确认';
+    const unkept: string = this.keepConsentedRun(true);
+    if (unkept.length > 0) {
+      this.retireRuntimeAdmission(unkept, true);
     }
     this.reconcileStoppedRun();
     if (this.running()) {
@@ -824,18 +1096,8 @@ export class ControlledHostCoordinator {
     this.emitState();
   }
 
-  /** One read: the service is still in its real listening state right now. */
-  private stillListening(): boolean {
-    try {
-      const payload = this.parse(this.bridge.status());
-      return payload.ok === true && payload.serverRunning === true && payload.state === 'listening'
-        && runEpochOf(payload) === this.runEpoch;
-    } catch (error) {
-      return false;
-    }
-  }
-
   onAbilityDestroy(): void {
+    rustDeskRuntimeController.removeListener(this.runtimeListener);
     void this.stop('应用已退出，被看服务已停止');
     this.panelGeneration += 1;
     this.twoFactorSetupGeneration += 1;
@@ -854,6 +1116,7 @@ export class ControlledHostCoordinator {
     this.context = undefined;
     this.initialized = false;
     this.runtimeReady = false;
+    this.runtimeOwner = '';
   }
 
   private running(): boolean {
@@ -1090,6 +1353,42 @@ export class ControlledHostCoordinator {
     return '';
   }
 
+  /**
+   * One sampled line of capture facts, and the only capture diagnostic there is.
+   *
+   * Every value is a field of the native answer itself: the owner that really
+   * holds the capture, the system consent it reported, the access units and
+   * encoded bytes it produced, the peer counts of that run, and its opaque run
+   * epoch. An omitted field prints as `missing` and a null as `none`, so a host
+   * that has no capture yet is never read as an authorized one, and no low field
+   * set promotes `captureActive` into consent. Only numbers, booleans, those
+   * closed enums and the epoch are printed: no password, peer id or name, screen
+   * geometry, free error text or panel status text reaches this line.
+   *
+   * `force` is the start snapshot: printed at once, and at info level so it is
+   * visible even where debug lines are filtered. Every later sample is throttled
+   * by `CAPTURE_DIAG_INTERVAL_MS`.
+   */
+  private reportCapture(payload: HostPayload, force: boolean): void {
+    const now: number = Date.now();
+    if (!force && this.captureDiagAtMs !== 0 && now - this.captureDiagAtMs < CAPTURE_DIAG_INTERVAL_MS) {
+      return;
+    }
+    this.captureDiagAtMs = now;
+    const facts: string = `epoch=${runEpochFact(payload)} owner=${enumFact(payload.captureOwner)}` +
+      ` state=${enumFact(payload.captureState)} captureActive=${booleanFact(payload.captureActive)}` +
+      ` systemCaptureConfirmed=${booleanFact(payload.systemCaptureConfirmed)}` +
+      ` framesObserved=${numberFact(payload.framesObserved)}` +
+      ` captureEncodedBytes=${numberFact(payload.captureEncodedBytes)}` +
+      ` openedAtMs=${numberFact(payload.captureOpenedAtMs)}` +
+      ` peerCount=${numberFact(payload.peerCount)} clientCount=${numberFact(payload.clientCount)}`;
+    if (force) {
+      hilog.info(DOMAIN, TAG, 'DIAG capture %{public}s', facts);
+      return;
+    }
+    hilog.debug(DOMAIN, TAG, 'DIAG capture %{public}s', facts);
+  }
+
   /** What the operator's local-approval policy really requires, or empty. */
   private approveModeText(): string {
     const scoped: string = this.state.approveModeScoped ? '（仅本次服务）' : '';
@@ -1218,6 +1517,7 @@ export class ControlledHostCoordinator {
       }
       this.applyIncoming(incomingPayload, status);
       this.emitState();
+      this.reportCapture(status, false);
     } catch (error) {
       await this.failClosed(`服务轮询失败：${String(error)}`);
       return;
@@ -1301,6 +1601,18 @@ export class ControlledHostCoordinator {
       }
       this.state.statusText = this.readyStatusText();
     }
+    const plainClient: boolean = clients.some((peer: ControlledIncomingPeer): boolean => peer.encrypted === false);
+    if (nextRequest?.encrypted === false || plainClient) {
+      this.state.statusText += '；未加密连接，控制端身份未验证';
+    } else if (activePeer?.encrypted === true || nextRequest?.encrypted === true) {
+      this.state.statusText += '；传输已加密';
+      if (activePeer?.peerVerified === false || nextRequest?.peerVerified === false) {
+        this.state.statusText += '，控制端身份未验证';
+      }
+    }
+    // The app being in the background does not end this run: every text above
+    // keeps the fact it reports and additionally names that one.
+    this.state.statusText = `${this.state.statusText}${this.backgroundSuffix()}`;
   }
 
   /**

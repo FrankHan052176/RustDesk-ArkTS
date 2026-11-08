@@ -1,5 +1,6 @@
 {
   "string": [
+    { "name": "nearby_share_permission_reason", "value": "用于连接你选择的附近设备并分享显示器画面。" },
     { "name": "direct_settings_title", "value": "VNC / RDP" },
     { "name": "direct_settings_summary", "value": "桌面尺寸、Windows 缩放、RDP 声音与 VNC 画质" },
     { "name": "direct_rdp_resolution", "value": "RDP 分辨率" },
@@ -34,12 +35,12 @@
     { "name": "device_editor_save_unavailable", "value": "设备保存接口不可用，请返回后重试" },
     { "name": "resk_target_claimed_id_hint", "value": "此目标来自局域网声明或其保存记录，始终按设备 ID 经已批准的服务器路由连接，即使文字看起来像 IP。不会自动降级为 IP 直连；手工编辑目标才会重新选择普通解析。" },
     { "name": "resk_connect_claimed_id", "value": "按设备 ID 连接" },
-    { "name": "resk_server_validate", "value": "校验格式（不联网）" },
-    { "name": "resk_server_format_valid", "value": "格式有效，尚未保存；未检测服务器可达性。" },
-    { "name": "resk_server_saved", "value": "已明确保存，等待实际连接验证；未检测服务器可达性。" },
+    { "name": "resk_server_validate", "value": "校验格式" },
+    { "name": "resk_server_format_valid", "value": "格式有效，尚未保存" },
+    { "name": "resk_server_saved", "value": "配置已保存" },
     { "name": "resk_server_approved", "value": "新连接使用最近已明确保存的配置；编辑草稿不会改变已有连接或重试的路由。" },
-    { "name": "resk_server_legacy", "value": "旧版配置仅作为草稿展示；需要重新明确保存才能连接设备 ID。" },
-    { "name": "resk_server_unapproved", "value": "尚无已批准的 ID 路由。请选择你信任的服务器并明确保存；IP 直连不受影响。" },
+    { "name": "resk_server_legacy", "value": "请重新保存服务器配置" },
+    { "name": "resk_server_unapproved", "value": "请保存服务器配置" },
     { "name": "resk_privacy_unavailable", "value": "系统隐私管理服务不可用或本应用尚未接入：局域网发现和新 ID 连接已禁用。下方显示真实服务错误，不能用本地开关代替系统授权。" },
     { "name": "resk_privacy_required", "value": "系统未报告当前隐私协议的完整模式同意：局域网发现和新 ID 连接已禁用。" },
     { "name": "resk_discovery_foreground_required", "value": "局域网发现仅限应用前台且页面仍在使用时；回到前台不会自动扫描。" },
@@ -51,7 +52,7 @@
     { "name": "resk_lan_inactivity", "value": "扫描已结束：达到无活动等待时间。" },
     { "name": "resk_lan_deadline", "value": "扫描已结束：达到本次扫描时限。" },
     { "name": "resk_lan_cancelled", "value": "扫描已取消，原生清理已完成。" },
-    { "name": "resk_lan_failed", "value": "本次扫描失败；以下缓存不是成功扫描或在线证明。" },
+    { "name": "resk_lan_failed", "value": "局域网扫描失败" },
     { "name": "resk_lan_cached", "value": "本地发现缓存；不代表本次扫描结果或当前在线状态。" },
     { "name": "resk_lan_loading", "value": "正在读取本地发现缓存，尚未开始扫描。" },
     { "name": "resk_lan_unavailable", "value": "当前没有可用的发现状态。" },
@@ -149,7 +150,7 @@
     },
     {
       "name": "device_directory_subtitle",
-      "value": "从本地最近设备、收藏或局域网发起会话；云端通讯录暂不支持"
+      "value": "从本地最近设备、收藏、局域网或云端通讯录发起会话"
     },
     {
       "name": "device_source_recent",
@@ -174,6 +175,14 @@
     {
       "name": "device_status_offline",
       "value": "离线"
+    },
+    {
+      "name": "device_status_reachable",
+      "value": "端口可达"
+    },
+    {
+      "name": "device_status_unreachable",
+      "value": "端口不可达"
     },
     {
       "name": "device_search_placeholder",
@@ -225,19 +234,19 @@
     },
     {
       "name": "device_empty_recent",
-      "value": "还没有最近设备，完成一次连接后会自动出现在这里。"
+      "value": "连接设备后会显示在这里"
     },
     {
       "name": "device_empty_address_book",
-      "value": "Resk 尚未接入云端通讯录同步与编辑；可继续使用本地最近设备与收藏。"
+      "value": "当前通讯录暂无设备"
     },
     {
       "name": "device_address_book_unavailable",
-      "value": "云端通讯录暂不支持"
+      "value": "云端同步设备"
     },
     {
       "name": "device_empty_lan",
-      "value": "当前列表没有缓存设备。点击扫描或下拉可主动发现；切换到此页不会自动扫描。"
+      "value": "下拉可重新扫描"
     },
     {
       "name": "device_empty_search",
@@ -325,7 +334,7 @@
     },
     {
       "name": "settings_server_save",
-      "value": "保存并批准 ID 路由"
+      "value": "保存"
     },
     {
       "name": "settings_server_effective_api",
@@ -389,7 +398,7 @@
     },
     {
       "name": "settings_server_validation_note",
-      "value": "格式校验只检查地址和公钥，不联网探测、不保存也不批准。保存成功仅允许后续连接使用该路由，不证明服务器在线。API、账户与云端通讯录在 Resk 中暂不支持。"
+      "value": "账户登录需要 HTTPS API 服务地址。"
     },
     {
       "name": "settings_server_error_id_required",
@@ -545,15 +554,15 @@
     },
     {
       "name": "settings_account_subtitle",
-      "value": "账户登录与云端通讯录暂未接入 Resk"
+      "value": "登录以查看云端通讯录"
     },
     {
       "name": "settings_account_unavailable",
-      "value": "Resk 暂不支持"
+      "value": "未登录 · 点击登录"
     },
     {
       "name": "settings_account_unavailable_detail",
-      "value": "Resk 暂不支持账户登录、登录验证、浏览器授权，以及云端通讯录同步与编辑。现有远程连接不受影响。"
+      "value": "支持官方与自建服务器 OAuth 网页授权登录；登录后可同步云端通讯录与标签。"
     },
     {
       "name": "settings_back",
@@ -633,7 +642,7 @@
     },
     {
       "name": "guide_official_description",
-      "value": "跨网络连接使用内置 RustDesk 官方 ID 与 Relay 服务，无需手动填写服务器。Resk 暂不支持账户登录与云端通讯录。"
+      "value": "跨网络连接使用内置 RustDesk 官方 ID 与 Relay 服务，无需手动填写服务器。可登录官方或自建账户同步通讯录。"
     },
     {
       "name": "guide_official_step_1_title",
@@ -657,7 +666,7 @@
     },
     {
       "name": "guide_official_step_3_body",
-      "value": "输入受控设备的一次性密码，或等待对方确认。远程连接与账户登录是独立能力；Resk 暂不支持账户登录与云端通讯录。"
+      "value": "输入受控设备的一次性密码，或等待对方确认。远程连接与账户登录是独立能力，通讯录设备可直接发起连接。"
     },
     {
       "name": "guide_direct_description",
@@ -713,7 +722,7 @@
     },
     {
       "name": "guide_server_step_3_body",
-      "value": "远程连接与账户登录是独立能力。Resk 暂不支持账户登录与云端通讯录同步、编辑，配置 API 服务也不会启用这些功能。"
+      "value": "配置 HTTPS API 服务并完成登录后，可查看云端通讯录；编辑操作取决于通讯录权限。远程连接无需账户登录。"
     },
     {
       "name": "guide_remote_heading",
@@ -761,7 +770,7 @@
     },
     {
       "name": "guide_devices_body",
-      "value": "在“设备”中查看本地最近设备、收藏和局域网发现结果，可搜索、检查在线状态并发起会话。云端通讯录同步与编辑暂不支持。"
+      "value": "在“设备”中查看本地最近设备、收藏、局域网与云端通讯录，可搜索、检查在线状态并发起会话。"
     },
     {
       "name": "guide_transfer_title",
@@ -793,7 +802,7 @@
     },
     {
       "name": "guide_defaults_body",
-      "value": "在“远控默认”设置输入、右键手势、音频、剪贴板、画质、编码和工具栏状态；在服务器与安全页面管理网络和远控授权。账户登录与云端通讯录暂不支持。"
+      "value": "在“远控默认”设置输入、右键手势、音频、剪贴板、画质、编码和工具栏状态；在服务器与安全页面管理网络和账户授权。"
     },
     {
       "name": "remote_session_tab_add",

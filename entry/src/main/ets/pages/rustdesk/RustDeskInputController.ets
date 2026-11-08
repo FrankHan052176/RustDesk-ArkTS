@@ -16,6 +16,7 @@ import {
   RustDeskKeyMapping,
   RustDeskModifierKey,
   RustDeskMousePayload,
+  RustDeskRect,
 } from './RustDeskInputMapper';
 import {
   RustDeskPressedButtonOwner,
@@ -53,6 +54,8 @@ export interface RustDeskInputControllerCallbacks {
   gesturesEnabled: () => boolean;
   rightClickGesture: () => RustDeskRightClickGesture;
   getCoordinateSpace: () => RustDeskCoordinateSpace | undefined;
+  getCursorMoveRects?: () => RustDeskRect[] | undefined;
+  usesSharedPointerAuthority?: () => boolean;
   sendMouse: (payload: RustDeskMousePayload, binding: RustDeskInputBinding) => boolean;
   sendKey: (payload: RustDeskKeyPayload, binding: RustDeskInputBinding) => boolean;
   sendKeysym: (keysym: number, down: boolean, binding: RustDeskInputBinding) => boolean;
@@ -143,6 +146,11 @@ export class RustDeskInputController {
     this.callbacks = callbacks;
     this.mouseModeActive = callbacks.isMouseMode();
     this.relativeModeActive = false;
+  }
+
+  private isSharedPointerAuthority(): boolean {
+    return this.callbacks.usesSharedPointerAuthority !== undefined
+      && this.callbacks.usesSharedPointerAuthority();
   }
 
   reset(): void {
@@ -263,7 +271,7 @@ export class RustDeskInputController {
     this.clearTouchPointerState();
     this.touchSuppressedIds.clear();
     this.releasePressedButtons();
-    if (this.relativeModeActive) {
+    if (this.relativeModeActive || this.isSharedPointerAuthority()) {
       this.flushRelativeMouseMove();
     }
     this.clearRelativeMouseState(false);
@@ -283,7 +291,7 @@ export class RustDeskInputController {
     this.clearTouchPointerState();
     this.touchSuppressedIds.clear();
     this.releasePressedButtons();
-    if (this.relativeModeActive) {
+    if (this.relativeModeActive || this.isSharedPointerAuthority()) {
       this.flushRelativeMouseMove();
     }
     this.clearRelativeMouseState(false);
@@ -680,7 +688,7 @@ export class RustDeskInputController {
 
   private handleMouseMove(event: MouseEvent): void {
     this.claimPointerForMouse();
-    if (this.relativeModeActive) {
+    if (this.relativeModeActive || this.isSharedPointerAuthority()) {
       const rawDeltaX = event.rawDeltaX ?? 0;
       const rawDeltaY = event.rawDeltaY ?? 0;
       const hasRawDelta = rawDeltaX !== 0 || rawDeltaY !== 0;
@@ -743,7 +751,7 @@ export class RustDeskInputController {
     if (!isPress && !this.pressedButtons.hasOwner(button, 'physical_mouse')) {
       return;
     }
-    if (this.relativeModeActive) {
+    if (this.relativeModeActive || this.isSharedPointerAuthority()) {
       this.rebaseRelativeMouseAt(event.x, event.y, false);
       this.flushRelativeMouseMove();
       this.relativeSuppressMoveUntil = Date.now() + RELATIVE_MOUSE_BUTTON_SUPPRESS_MS;
@@ -848,7 +856,11 @@ export class RustDeskInputController {
       return;
     }
     this.applyTouchActions(
-      this.touchGestureState.onMove(primaryTouch.x, primaryTouch.y, !this.relativeModeActive),
+      this.touchGestureState.onMove(
+        primaryTouch.x,
+        primaryTouch.y,
+        !this.relativeModeActive && !this.isSharedPointerAuthority(),
+      ),
     );
     if (!this.touchGestureState.isHoldPending()) {
       this.cancelHoldTimer();
@@ -862,7 +874,7 @@ export class RustDeskInputController {
         const remoteDelta = this.mapLocalDeltaToRemoteDelta(deltaX, deltaY);
         const scaledDeltaX = remoteDelta.x * TOUCHPAD_MOVE_SENSITIVITY;
         const scaledDeltaY = remoteDelta.y * TOUCHPAD_MOVE_SENSITIVITY;
-        if (this.relativeModeActive) {
+        if (this.relativeModeActive || this.isSharedPointerAuthority()) {
           this.queueRelativeMouseMove(scaledDeltaX, scaledDeltaY);
         } else if (this.advanceVirtualCursorBy(scaledDeltaX, scaledDeltaY)) {
           this.sendVirtualCursorAbsoluteMove();
@@ -990,6 +1002,9 @@ export class RustDeskInputController {
    * it names, not to the cursor the touchpad would be nudging.
    */
   private isTouchpadGesture(): boolean {
+    if (this.isSharedPointerAuthority()) {
+      return true;
+    }
     return this.mouseModeActive && !this.pointerTouchSequence;
   }
 
@@ -1210,11 +1225,16 @@ export class RustDeskInputController {
         return;
       case 'drag_start':
         if (this.isTouchpadGesture()) {
-          if (this.relativeModeActive) {
+          if (this.relativeModeActive || this.isSharedPointerAuthority()) {
             this.flushRelativeMouseMove();
           } else {
             this.sendVirtualCursorAbsoluteMove();
           }
+          this.transitionMouseButton('left', true, 'touch_drag', false);
+          return;
+        }
+        if (this.isSharedPointerAuthority()) {
+          this.flushRelativeMouseMove();
           this.transitionMouseButton('left', true, 'touch_drag', false);
           return;
         }
@@ -1230,9 +1250,13 @@ export class RustDeskInputController {
 
   private applyTouchClick(localX: number, localY: number, button: string): void {
     if (this.isTouchpadGesture()) {
-      if (!this.relativeModeActive) {
+      if (!this.relativeModeActive && !this.isSharedPointerAuthority()) {
         this.sendVirtualCursorAbsoluteMove();
       }
+      this.clickCurrentCursor(button);
+      return;
+    }
+    if (this.isSharedPointerAuthority()) {
       this.clickCurrentCursor(button);
       return;
     }
@@ -1241,9 +1265,11 @@ export class RustDeskInputController {
 
   private applyTouchDoubleClick(localX: number, localY: number): void {
     if (this.isTouchpadGesture()) {
-      if (!this.relativeModeActive) {
+      if (!this.relativeModeActive && !this.isSharedPointerAuthority()) {
         this.sendVirtualCursorAbsoluteMove();
       }
+    } else if (this.isSharedPointerAuthority()) {
+      // Shared pointer authority: do not move cursor to local point
     } else if (!this.moveRemoteCursorToLocalPoint(localX, localY)) {
       return;
     }
@@ -1259,6 +1285,9 @@ export class RustDeskInputController {
   }
 
   private moveRemoteCursorToLocalPoint(localX: number, localY: number): boolean {
+    if (this.isSharedPointerAuthority()) {
+      return false;
+    }
     const space = this.callbacks.getCoordinateSpace();
     if (!space || !isLocalPointInsidePaintRect(space, localX, localY)) {
       this.callbacks.log('cursor_move_skipped', `space=${space !== undefined} x=${localX} y=${localY}`);
@@ -1302,7 +1331,7 @@ export class RustDeskInputController {
   }
 
   private clickCurrentCursor(button: string): void {
-    if (this.relativeModeActive) {
+    if (this.relativeModeActive || this.isSharedPointerAuthority()) {
       this.flushRelativeMouseMove();
     }
     this.transitionMouseButton(button, true, 'touch_click', false);
@@ -1310,7 +1339,7 @@ export class RustDeskInputController {
   }
 
   private getPointerMode(): RustDeskPointerMode {
-    return this.relativeModeActive ? 'relative' : 'absolute';
+    return (this.relativeModeActive || this.isSharedPointerAuthority()) ? 'relative' : 'absolute';
   }
 
   private sendPressedButtonTransition(transition: RustDeskPressedButtonTransition, flushPending: boolean = true): void {
@@ -1357,7 +1386,7 @@ export class RustDeskInputController {
     }, RELATIVE_MOUSE_FLUSH_MS) as number;
   }
 
-  private flushRelativeMouseMove(): void {
+  flushRelativeMouseMove(): void {
     if (this.relativeFlushTimer !== -1) {
       clearTimeout(this.relativeFlushTimer);
       this.relativeFlushTimer = -1;
@@ -1369,7 +1398,9 @@ export class RustDeskInputController {
     }
     this.relativePendingX -= moveX;
     this.relativePendingY -= moveY;
-    this.advanceVirtualCursorBy(moveX, moveY);
+    if (!this.isSharedPointerAuthority()) {
+      this.advanceVirtualCursorBy(moveX, moveY);
+    }
     const payload = new RustDeskMousePayload();
     payload.type = 'move_relative';
     payload.x = String(moveX);
@@ -1513,6 +1544,9 @@ export class RustDeskInputController {
   // ---- Flutter-mobile local virtual cursor ----
 
   hasVirtualCursor(): boolean {
+    if (this.isSharedPointerAuthority()) {
+      return false;
+    }
     return this.virtualCursorValid;
   }
 
@@ -1531,7 +1565,7 @@ export class RustDeskInputController {
   // Seed the virtual cursor from an authoritative remote cursor_position, but only
   // before local input has established it (Flutter mobile syncCursorPosition).
   syncVirtualCursorToRemote(remoteX: number, remoteY: number): void {
-    if (this.virtualCursorValid) {
+    if (this.isSharedPointerAuthority() || this.virtualCursorValid) {
       return;
     }
     this.setVirtualCursorRemote(remoteX, remoteY);
@@ -1540,6 +1574,9 @@ export class RustDeskInputController {
   // Place the virtual cursor at the center of the current remote display.
   // Used when a session/preview becomes ready so the cursor is visible at once.
   initVirtualCursorToCenter(): void {
+    if (this.isSharedPointerAuthority()) {
+      return;
+    }
     const space = this.callbacks.getCoordinateSpace();
     if (!space) {
       return;
@@ -1551,22 +1588,92 @@ export class RustDeskInputController {
     this.callbacks.onVirtualCursorMoved(this.virtualCursorX, this.virtualCursorY);
   }
 
-  // Absolute placement (already in remote coords), clamped to the display.
+  private getValidCursorMoveRects(): Array<RustDeskRect> {
+    if (this.callbacks.getCursorMoveRects) {
+      const customRects = this.callbacks.getCursorMoveRects();
+      if (customRects && customRects.length > 0) {
+        const validRects: Array<RustDeskRect> = [];
+        for (let i = 0; i < customRects.length; i++) {
+          const rect = customRects[i];
+          if (rect && rect.width > 0 && rect.height > 0) {
+            validRects.push(rect);
+          }
+        }
+        if (validRects.length > 0) {
+          return validRects;
+        }
+      }
+    }
+    const space = this.callbacks.getCoordinateSpace();
+    if (space && space.remoteRect && space.remoteRect.width > 0 && space.remoteRect.height > 0) {
+      return [space.remoteRect];
+    }
+    return [];
+  }
+
+  private clampToNearestRect(
+    targetX: number,
+    targetY: number,
+    rects: Array<RustDeskRect>,
+  ): RemotePointerPosition {
+    if (rects.length === 0) {
+      return { x: targetX, y: targetY };
+    }
+    let bestClampedX = targetX;
+    let bestClampedY = targetY;
+    let bestDistSq = Number.POSITIVE_INFINITY;
+
+    for (let index = 0; index < rects.length; index++) {
+      const rect = rects[index];
+      const minX = rect.left;
+      const maxX = rect.left + Math.max(rect.width - 1, 0);
+      const minY = rect.top;
+      const maxY = rect.top + Math.max(rect.height - 1, 0);
+
+      if (targetX >= minX && targetX <= maxX && targetY >= minY && targetY <= maxY) {
+        return { x: targetX, y: targetY };
+      }
+
+      const clampedX = Math.min(Math.max(targetX, minX), maxX);
+      const clampedY = Math.min(Math.max(targetY, minY), maxY);
+      const deltaX = targetX - clampedX;
+      const deltaY = targetY - clampedY;
+      const distSq = deltaX * deltaX + deltaY * deltaY;
+
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq;
+        bestClampedX = clampedX;
+        bestClampedY = clampedY;
+      }
+    }
+
+    return { x: bestClampedX, y: bestClampedY };
+  }
+
+  // Absolute placement (already in remote coords), clamped across valid displays.
   private setVirtualCursorRemote(remoteX: number, remoteY: number): void {
+    if (this.isSharedPointerAuthority()) {
+      return;
+    }
     const space = this.callbacks.getCoordinateSpace();
     if (!space) {
       return;
     }
-    const rect = space.remoteRect;
-    const maxX = rect.left + Math.max(rect.width - 1, 0);
-    const maxY = rect.top + Math.max(rect.height - 1, 0);
-    this.virtualCursorX = Math.min(Math.max(remoteX, rect.left), maxX);
-    this.virtualCursorY = Math.min(Math.max(remoteY, rect.top), maxY);
+    const rects = this.getValidCursorMoveRects();
+    if (rects.length === 0) {
+      return;
+    }
+    const clamped = this.clampToNearestRect(remoteX, remoteY, rects);
+    this.virtualCursorX = clamped.x;
+    this.virtualCursorY = clamped.y;
     this.virtualCursorValid = true;
     this.callbacks.onVirtualCursorMoved(this.virtualCursorX, this.virtualCursorY);
   }
 
   private sendVirtualCursorAbsoluteMove(): void {
+    if (this.isSharedPointerAuthority()) {
+      return;
+    }
     if (!this.virtualCursorValid) {
       this.initVirtualCursorToCenter();
     }
@@ -1579,22 +1686,32 @@ export class RustDeskInputController {
     this.sendMouseIfAllowed(payload);
   }
 
-  // Move by a remote-space delta, clamped to the display (Flutter's maxCursorCanMove).
+  // Move by a remote-space delta, clamped across valid displays (current + share).
   private advanceVirtualCursorBy(deltaX: number, deltaY: number): boolean {
+    if (this.isSharedPointerAuthority()) {
+      return false;
+    }
     const space = this.callbacks.getCoordinateSpace();
     if (!space) {
       return false;
     }
-    const rect = space.remoteRect;
-    const maxX = rect.left + Math.max(rect.width - 1, 0);
-    const maxY = rect.top + Math.max(rect.height - 1, 0);
+    const rects = this.getValidCursorMoveRects();
+    if (rects.length === 0) {
+      return false;
+    }
     if (!this.virtualCursorValid) {
+      const rect = space.remoteRect;
       this.virtualCursorX = rect.left + rect.width / 2;
       this.virtualCursorY = rect.top + rect.height / 2;
       this.virtualCursorValid = true;
     }
-    this.virtualCursorX = Math.min(Math.max(this.virtualCursorX + deltaX, rect.left), maxX);
-    this.virtualCursorY = Math.min(Math.max(this.virtualCursorY + deltaY, rect.top), maxY);
+    const clamped = this.clampToNearestRect(
+      this.virtualCursorX + deltaX,
+      this.virtualCursorY + deltaY,
+      rects,
+    );
+    this.virtualCursorX = clamped.x;
+    this.virtualCursorY = clamped.y;
     this.callbacks.onVirtualCursorMoved(this.virtualCursorX, this.virtualCursorY);
     return true;
   }

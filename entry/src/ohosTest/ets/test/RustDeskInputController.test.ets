@@ -5,6 +5,7 @@ import {
   RustDeskInputControllerCallbacks,
 } from '../../../main/ets/pages/rustdesk/RustDeskInputController';
 import {
+  RemotePointerPosition,
   RustDeskCoordinateSpace,
   RustDeskInputBinding,
   RustDeskKeyPayload,
@@ -88,6 +89,8 @@ class TestMouseEvent implements MouseEvent {
   screenY: number = 0;
   x: number = 0;
   y: number = 0;
+  rawDeltaX?: number = 0;
+  rawDeltaY?: number = 0;
   stopPropagation: () => void = (): void => {};
   target: EventTarget = new TestEventTarget();
   timestamp: number = 0;
@@ -121,11 +124,17 @@ function fingerTouch(type: TouchType, x: number, y: number): TouchEvent {
   return touchEvent(SourceTool.Finger, type, x, y);
 }
 
-function mouseEvent(action: MouseAction, x: number, y: number): MouseEvent {
+function mouseEvent(action: MouseAction, x: number, y: number, rawDeltaX?: number, rawDeltaY?: number): MouseEvent {
   const event = new TestMouseEvent();
   event.action = action;
   event.x = x;
   event.y = y;
+  if (rawDeltaX !== undefined) {
+    event.rawDeltaX = rawDeltaX;
+  }
+  if (rawDeltaY !== undefined) {
+    event.rawDeltaY = rawDeltaY;
+  }
   return event;
 }
 
@@ -158,10 +167,13 @@ class InputRecord {
   releases: string[] = [];
   errors: string[] = [];
   space: RustDeskCoordinateSpace | undefined = undefined;
+  moveRects: RustDeskRect[] | undefined = undefined;
+  cursorPositions: RemotePointerPosition[] = [];
   binding: RustDeskInputBinding | undefined = { sessionId: 'session-a', inputGeneration: 7 };
   acceptKeySend: boolean = true;
   acceptMouseSend: boolean = true;
   vnc: boolean = false;
+  sharedPointerAuthority: boolean = false;
   rejectKeysymAt: number = -1;
   /** A fixture-supplied native refusal/release generation, never a UI counter. */
   refusalGeneration: number | undefined = undefined;
@@ -188,6 +200,8 @@ function callbacksFor(record: InputRecord): RustDeskInputControllerCallbacks {
     gesturesEnabled: (): boolean => false,
     rightClickGesture: (): RustDeskRightClickGesture => 'two_finger_tap',
     getCoordinateSpace: (): RustDeskCoordinateSpace | undefined => record.space,
+    getCursorMoveRects: (): RustDeskRect[] | undefined => record.moveRects,
+    usesSharedPointerAuthority: (): boolean => record.sharedPointerAuthority,
     sendMouse: (payload: RustDeskMousePayload, _binding: RustDeskInputBinding): boolean => {
       record.mouse.push(payload);
       if (!record.acceptMouseSend) {
@@ -227,7 +241,9 @@ function callbacksFor(record: InputRecord): RustDeskInputControllerCallbacks {
     log: (_label: string, _payload: string): void => {},
     remoteCursorDebugText: (): string => '',
     overlayCursorDebugText: (_label: string): string => '',
-    onVirtualCursorMoved: (_remoteX: number, _remoteY: number): void => {},
+    onVirtualCursorMoved: (remoteX: number, remoteY: number): void => {
+      record.cursorPositions.push({ x: remoteX, y: remoteY });
+    },
     onCanvasTransform: (
       _scaleFactor: number,
       _panX: number,
@@ -530,6 +546,297 @@ export default function rustDeskInputControllerTest(): void {
       expect(record.mouse.length).assertEqual(1);
       expect(record.mouse[0].x).assertEqual('1200');
       expect(record.mouse[0].y).assertEqual('600');
+    });
+
+    it('allows touchpad cursor to move into shared screen and return', 0, () => {
+      const record = new InputRecord();
+      record.space = spaceFor(800, 600, 1600, 1200);
+      const currentRect = new RustDeskRect(0, 0, 1600, 1200);
+      const shareRect = new RustDeskRect(1600, 0, 1920, 1080);
+      record.moveRects = [currentRect, shareRect];
+      const controller = new RustDeskInputController(callbacksFor(record));
+
+      // Initial center is (800, 600)
+      // Finger swipe right: dx = 500 local => 1000 remote
+      // Target: 800 + 1000 = 1800 (inside shareRect 1600..3519)
+      controller.handleTouchEvent(fingerTouch(TouchType.Down, 100, 100));
+      controller.handleTouchEvent(fingerTouch(TouchType.Move, 600, 100));
+      expect(record.mouse.length).assertEqual(1);
+      expect(record.mouse[0].x).assertEqual('1800');
+      expect(record.mouse[0].y).assertEqual('600');
+      expect(controller.getVirtualCursorX()).assertEqual(1800);
+      expect(controller.getVirtualCursorY()).assertEqual(600);
+
+      // Continue moving right by dx = 200 local => 400 remote
+      // Target: 1800 + 400 = 2200 (still inside shareRect)
+      controller.handleTouchEvent(fingerTouch(TouchType.Move, 800, 100));
+      expect(record.mouse.length).assertEqual(2);
+      expect(record.mouse[1].x).assertEqual('2200');
+      expect(record.mouse[1].y).assertEqual('600');
+      expect(controller.getVirtualCursorX()).assertEqual(2200);
+
+      // Release first swipe
+      controller.handleTouchEvent(fingerTouch(TouchType.Up, 800, 100));
+
+      // Second swipe to move back left: dx = -600 local => -1200 remote
+      // Target: 2200 - 1200 = 1000 (back inside currentRect 0..1599)
+      controller.handleTouchEvent(fingerTouch(TouchType.Down, 700, 100));
+      controller.handleTouchEvent(fingerTouch(TouchType.Move, 100, 100));
+      const lastMouse = record.mouse[record.mouse.length - 1];
+      expect(lastMouse.x).assertEqual('1000');
+      expect(lastMouse.y).assertEqual('600');
+      expect(controller.getVirtualCursorX()).assertEqual(1000);
+      expect(controller.getVirtualCursorY()).assertEqual(600);
+    });
+
+    it('clamps touchpad cursor to outer boundary of shared screen', 0, () => {
+      const record = new InputRecord();
+      record.space = spaceFor(800, 600, 1600, 1200);
+      const currentRect = new RustDeskRect(0, 0, 1600, 1200);
+      const shareRect = new RustDeskRect(1600, 0, 1920, 1080);
+      record.moveRects = [currentRect, shareRect];
+      const controller = new RustDeskInputController(callbacksFor(record));
+
+      // Far right move: shareRect maxX = 1600 + 1920 - 1 = 3519
+      // From 800, dx = 2000 local => 4000 remote -> target 4800
+      controller.handleTouchEvent(fingerTouch(TouchType.Down, 0, 100));
+      controller.handleTouchEvent(fingerTouch(TouchType.Move, 2000, 100));
+      expect(record.mouse.length).assertEqual(1);
+      expect(record.mouse[0].x).assertEqual('3519');
+      expect(record.mouse[0].y).assertEqual('600');
+      expect(controller.getVirtualCursorX()).assertEqual(3519);
+    });
+
+    it('allows touchpad cursor to enter shared screen with negative origin', 0, () => {
+      const record = new InputRecord();
+      record.space = spaceFor(800, 600, 1600, 1200);
+      const currentRect = new RustDeskRect(0, 0, 1600, 1200);
+      const leftShareRect = new RustDeskRect(-1920, 0, 1920, 1080);
+      record.moveRects = [currentRect, leftShareRect];
+      const controller = new RustDeskInputController(callbacksFor(record));
+
+      // Initial center is (800, 600)
+      // Swipe left: dx = -600 local => -1200 remote
+      // Target: 800 - 1200 = -400 (inside leftShareRect: -1920..-1)
+      controller.handleTouchEvent(fingerTouch(TouchType.Down, 700, 200));
+      controller.handleTouchEvent(fingerTouch(TouchType.Move, 100, 200));
+      expect(record.mouse.length).assertEqual(1);
+      expect(record.mouse[0].x).assertEqual('-400');
+      expect(record.mouse[0].y).assertEqual('600');
+      expect(controller.getVirtualCursorX()).assertEqual(-400);
+
+      // Swipe further left past -1920
+      controller.handleTouchEvent(fingerTouch(TouchType.Move, -1000, 200));
+      expect(record.mouse.length).assertEqual(2);
+      expect(record.mouse[1].x).assertEqual('-1920');
+      expect(controller.getVirtualCursorX()).assertEqual(-1920);
+    });
+
+    it('clamps to nearest valid screen when target falls in gap/void', 0, () => {
+      const record = new InputRecord();
+      // remote 1000x1000, view 500x500 (scale 2)
+      record.space = spaceFor(500, 500, 1000, 1000);
+      const currentRect = new RustDeskRect(0, 0, 1000, 1000);
+      const steppedRect = new RustDeskRect(1000, 500, 1000, 1000);
+      record.moveRects = [currentRect, steppedRect];
+      const controller = new RustDeskInputController(callbacksFor(record));
+
+      // Initial center: (500, 500)
+      // Move up to y = 200: dy = -150 local => -300 remote (500 - 300 = 200)
+      controller.handleTouchEvent(fingerTouch(TouchType.Down, 250, 250));
+      controller.handleTouchEvent(fingerTouch(TouchType.Move, 250, 100));
+      expect(record.mouse[0].x).assertEqual('500');
+      expect(record.mouse[0].y).assertEqual('200');
+
+      // Now move right into void at y = 200: dx = +200 local => +400 remote
+      // Target: x = 900, y = 200 (still inside currentRect)
+      controller.handleTouchEvent(fingerTouch(TouchType.Move, 450, 100));
+      expect(record.mouse[1].x).assertEqual('900');
+      expect(record.mouse[1].y).assertEqual('200');
+
+      // Move right further into void: dx = +150 local => +300 remote
+      // Target: x = 1200, y = 200
+      // CurrentRect: clamped (999, 200), distSq = (1200-999)^2 = 40401
+      // SteppedRect: clamped (1200, 500), distSq = (200-500)^2 = 90000
+      // CurrentRect is closer, so clamped to (999, 200)!
+      controller.handleTouchEvent(fingerTouch(TouchType.Move, 600, 100));
+      expect(record.mouse[2].x).assertEqual('999');
+      expect(record.mouse[2].y).assertEqual('200');
+      expect(controller.getVirtualCursorX()).assertEqual(999);
+      expect(controller.getVirtualCursorY()).assertEqual(200);
+    });
+
+    it('preserves single display remoteRect clamp when share callback returns undefined or empty', 0, () => {
+      const record = new InputRecord();
+      record.space = spaceFor(800, 600, 1600, 1200);
+      record.moveRects = undefined;
+      const controller = new RustDeskInputController(callbacksFor(record));
+
+      // Move past right boundary (target: 800 + 1200 = 2000)
+      controller.handleTouchEvent(fingerTouch(TouchType.Down, 100, 100));
+      controller.handleTouchEvent(fingerTouch(TouchType.Move, 700, 100));
+      expect(record.mouse[0].x).assertEqual('1599');
+      expect(record.mouse[0].y).assertEqual('600');
+      expect(controller.getVirtualCursorX()).assertEqual(1599);
+
+      // Now with empty array
+      record.moveRects = [];
+      controller.handleTouchEvent(fingerTouch(TouchType.Move, 800, 100));
+      expect(record.mouse[1].x).assertEqual('1599');
+      expect(controller.getVirtualCursorX()).assertEqual(1599);
+    });
+
+    it('broadcasts unclipped virtual cursor coordinates to onVirtualCursorMoved', 0, () => {
+      const record = new InputRecord();
+      record.space = spaceFor(800, 600, 1600, 1200);
+      const currentRect = new RustDeskRect(0, 0, 1600, 1200);
+      const shareRect = new RustDeskRect(1600, 0, 1920, 1080);
+      record.moveRects = [currentRect, shareRect];
+      const controller = new RustDeskInputController(callbacksFor(record));
+
+      // Move into shared screen at 1800, 600
+      controller.handleTouchEvent(fingerTouch(TouchType.Down, 100, 100));
+      controller.handleTouchEvent(fingerTouch(TouchType.Move, 600, 100));
+
+      const lastReported = record.cursorPositions[record.cursorPositions.length - 1];
+      expect(lastReported !== undefined).assertTrue();
+      expect(lastReported.x).assertEqual(1800);
+      expect(lastReported.y).assertEqual(600);
+    });
+
+    it('shared pointer mode: physical mouse with rawDelta sends move_relative and does not track virtualCursor', 0, () => {
+      const record = new InputRecord();
+      record.sharedPointerAuthority = true;
+      record.space = spaceFor(800, 600, 1600, 1200);
+      const controller = new RustDeskInputController(callbacksFor(record));
+
+      // rawDelta (10, 5) in view -> remote delta (20, 10)
+      controller.handleMouseEvent(mouseEvent(MouseAction.Move, 100, 100, 10, 5));
+      controller.flushRelativeMouseMove();
+
+      expect(record.mouse.length).assertEqual(1);
+      expect(record.mouse[0].type).assertEqual('move_relative');
+      expect(record.mouse[0].x).assertEqual('20');
+      expect(record.mouse[0].y).assertEqual('10');
+      expect(controller.hasVirtualCursor()).assertFalse();
+      expect(record.cursorPositions.length).assertEqual(0);
+    });
+
+    it('shared pointer mode: physical mouse fallback local delta rebases on first move and sends move_relative on second', 0, () => {
+      const record = new InputRecord();
+      record.sharedPointerAuthority = true;
+      record.space = spaceFor(800, 600, 1600, 1200);
+      const controller = new RustDeskInputController(callbacksFor(record));
+
+      // First move without rawDelta: only rebase, no payload sent
+      controller.handleMouseEvent(mouseEvent(MouseAction.Move, 100, 100));
+      controller.flushRelativeMouseMove();
+      expect(record.mouse.length).assertEqual(0);
+
+      // Second move without rawDelta: localDelta (15, -10) -> remote delta (30, -20)
+      controller.handleMouseEvent(mouseEvent(MouseAction.Move, 115, 90));
+      controller.flushRelativeMouseMove();
+      expect(record.mouse.length).assertEqual(1);
+      expect(record.mouse[0].type).assertEqual('move_relative');
+      expect(record.mouse[0].x).assertEqual('30');
+      expect(record.mouse[0].y).assertEqual('-20');
+      expect(controller.hasVirtualCursor()).assertFalse();
+    });
+
+    it('shared pointer mode: physical mouse click sends button down and up without absolute move or coordinates', 0, () => {
+      const record = new InputRecord();
+      record.sharedPointerAuthority = true;
+      record.space = spaceFor(800, 600, 1600, 1200);
+      const controller = new RustDeskInputController(callbacksFor(record));
+
+      // Click at (200, 200) inside content
+      controller.handleMouseEvent(mouseEvent(MouseAction.Press, 200, 200));
+      controller.handleMouseEvent(mouseEvent(MouseAction.Release, 200, 200));
+
+      expect(record.mouse.length).assertEqual(2);
+      expect(record.mouse[0].type).assertEqual('down');
+      expect(record.mouse[0].buttons).assertEqual('left');
+      expect(record.mouse[0].x).assertUndefined();
+      expect(record.mouse[0].y).assertUndefined();
+      expect(record.mouse[1].type).assertEqual('up');
+      expect(record.mouse[1].buttons).assertEqual('left');
+      expect(record.mouse[1].x).assertUndefined();
+      expect(record.mouse[1].y).assertUndefined();
+      expect(controller.hasVirtualCursor()).assertFalse();
+      expect(record.cursorPositions.length).assertEqual(0);
+    });
+
+    it('shared pointer mode: touchpad finger swipe sends move_relative without advancing virtual cursor', 0, () => {
+      const record = new InputRecord();
+      record.sharedPointerAuthority = true;
+      record.space = spaceFor(800, 600, 1600, 1200);
+      const currentRect = new RustDeskRect(0, 0, 1600, 1200);
+      const shareRect = new RustDeskRect(1600, 0, 1920, 1080);
+      record.moveRects = [currentRect, shareRect];
+      const controller = new RustDeskInputController(callbacksFor(record));
+
+      // Touchpad move: dx = 50 local => 100 remote, dy = 30 local => 60 remote
+      controller.handleTouchEvent(fingerTouch(TouchType.Down, 100, 100));
+      controller.handleTouchEvent(fingerTouch(TouchType.Move, 150, 130));
+      controller.flushRelativeMouseMove();
+
+      expect(record.mouse.length).assertEqual(1);
+      expect(record.mouse[0].type).assertEqual('move_relative');
+      expect(record.mouse[0].x).assertEqual('100');
+      expect(record.mouse[0].y).assertEqual('60');
+      // No local virtual cursor integral, no clamping against rects
+      expect(controller.hasVirtualCursor()).assertFalse();
+      expect(record.cursorPositions.length).assertEqual(0);
+    });
+
+    it('shared pointer mode: touch tap sends button click without cursor absolute move', 0, () => {
+      const record = new InputRecord();
+      record.sharedPointerAuthority = true;
+      record.space = spaceFor(800, 600, 1600, 1200);
+      const controller = new RustDeskInputController(callbacksFor(record));
+
+      // Pointer-sourced touch fallback tap
+      controller.handleTouchEvent(pointerTouch(TouchType.Down, 100, 100));
+      controller.handleTouchEvent(pointerTouch(TouchType.Up, 100, 100));
+
+      expect(record.mouse.length).assertEqual(2);
+      expect(record.mouse[0].type).assertEqual('down');
+      expect(record.mouse[0].buttons).assertEqual('left');
+      expect(record.mouse[0].x).assertUndefined();
+      expect(record.mouse[0].y).assertUndefined();
+      expect(record.mouse[1].type).assertEqual('up');
+      expect(record.mouse[1].buttons).assertEqual('left');
+      expect(record.mouse[1].x).assertUndefined();
+      expect(record.mouse[1].y).assertUndefined();
+      expect(controller.hasVirtualCursor()).assertFalse();
+    });
+
+    it('shared pointer mode: pointer-sourced touch move sends move_relative instead of absolute move', 0, () => {
+      const record = new InputRecord();
+      record.sharedPointerAuthority = true;
+      record.space = spaceFor(800, 600, 1600, 1200);
+      const controller = new RustDeskInputController(callbacksFor(record));
+
+      controller.handleTouchEvent(pointerTouch(TouchType.Down, 100, 100));
+      controller.handleTouchEvent(pointerTouch(TouchType.Move, 120, 110));
+      controller.flushRelativeMouseMove();
+
+      expect(record.mouse.length).assertEqual(1);
+      expect(record.mouse[0].type).assertEqual('move_relative');
+      expect(record.mouse[0].x).assertEqual('40');
+      expect(record.mouse[0].y).assertEqual('20');
+      expect(controller.hasVirtualCursor()).assertFalse();
+    });
+
+    it('shared pointer mode: initVirtualCursorToCenter does not fabricate virtual cursor', 0, () => {
+      const record = new InputRecord();
+      record.sharedPointerAuthority = true;
+      record.space = spaceFor(800, 600, 1600, 1200);
+      const controller = new RustDeskInputController(callbacksFor(record));
+
+      controller.initVirtualCursorToCenter();
+      expect(controller.hasVirtualCursor()).assertFalse();
+      expect(record.cursorPositions.length).assertEqual(0);
     });
   });
 }

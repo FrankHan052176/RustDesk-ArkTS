@@ -33,6 +33,12 @@ signingConfigs.json
 # Logs
 *.log
 
+# Local/agent scratch state that must never reach the repository
+.env
+__pycache__/
+*.pyc
+entry/.fh-save-honesty/
+
 # OS generated files
 .DS_Store
 Thumbs.db

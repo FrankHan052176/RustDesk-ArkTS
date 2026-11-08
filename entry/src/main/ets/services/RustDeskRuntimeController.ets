@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
   appInit,
   appSetLifecycle,
@@ -51,6 +52,9 @@ export interface RustDeskRuntimeState {
 }
 
 export type RustDeskRuntimeObserver = (state: RustDeskRuntimeState) => void;
+
+const DOMAIN = 0xFF00;
+const TAG = 'RustDeskRuntime';
 
 // JS call identities are independent of the native decimal tokens.
 class RuntimeCall {}
@@ -108,6 +112,8 @@ function lanReply(raw: string): RustDeskLanReply {
 /**
  * One module singleton; EntryAbility alone supplies the private root and lifecycle.
  * The main page owns one observer, never another runtime or a session service.
+ * Ability-scoped services (the viewed-host coordinator) follow admission through
+ * `addListener`; a listener only reads this state and never owns a lifecycle.
  * No lifecycle call is serialized behind initialization or LAN I/O.
  * App/LAN retirement is not a sessionClose receipt: this owner neither closes
  * viewers nor infers released/settle or permission to destroy a Surface.
@@ -116,6 +122,7 @@ class RustDeskRuntimeController {
   private lifecycle: RuntimeCall = new RuntimeCall();
   private command: RuntimeCall = new RuntimeCall();
   private observer: RustDeskRuntimeObserver | undefined = undefined;
+  private listeners: RustDeskRuntimeObserver[] = [];
   private filesDir: string | undefined = undefined;
   private pending: boolean = false;
   private privacyAccepted: boolean = false;
@@ -151,6 +158,25 @@ class RustDeskRuntimeController {
     }
     this.observer = observer;
     this.emit();
+  }
+
+  /**
+   * Ability-scoped followers of the same state. Unlike the page observer there
+   * may be several and they are told the current state at once; they cannot
+   * stop LAN scans and a throwing listener never blocks the others or the page.
+   */
+  addListener(listener: RustDeskRuntimeObserver): void {
+    if (this.listeners.indexOf(listener) < 0) {
+      this.listeners.push(listener);
+    }
+    listener(this.state());
+  }
+
+  removeListener(listener: RustDeskRuntimeObserver): void {
+    const index = this.listeners.indexOf(listener);
+    if (index >= 0) {
+      this.listeners.splice(index, 1);
+    }
   }
 
   unbind(observer: RustDeskRuntimeObserver): Promise<RustDeskLanReply | undefined> {
@@ -439,7 +465,17 @@ class RustDeskRuntimeController {
   }
 
   private emit(): void {
-    this.observer?.(this.state());
+    const state = this.state();
+    // Admission followers first: retiring a host run must not depend on the page.
+    const listeners: RustDeskRuntimeObserver[] = this.listeners.slice();
+    for (let index = 0; index < listeners.length; index += 1) {
+      try {
+        listeners[index](state);
+      } catch (error) {
+        hilog.error(DOMAIN, TAG, 'Runtime listener failed: %{public}s', String(error));
+      }
+    }
+    this.observer?.(state);
   }
 }
 

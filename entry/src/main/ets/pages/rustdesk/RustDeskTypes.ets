@@ -57,6 +57,11 @@ export interface NativeSurfaceRelease {
 export interface ActionResponse {
   ok: boolean;
   action: string;
+  /** Real engine phase; sessionUiPhase derives display state without rewriting it. */
+  phase?: string;
+  /** Current native close facts, independent of authentication or media phase. */
+  closing?: boolean;
+  closed?: boolean;
   /** Local renderer generation; only native_render_ready confirms a new submission. */
   presentation_generation?: string;
   message?: string;
@@ -108,6 +113,13 @@ export interface ActionResponse {
   /** A mutation answer: the change was really applied. */
   applied?: boolean;
   /**
+   * `sessionSetCustomFps`: `session` confirms writer queue admission only;
+   * `next_session` only stores a future setting. Neither is a peer FPS ACK.
+   */
+  scope?: string;
+  /** `sessionSetCustomFps`: the requested cap, not a measured or peer-confirmed rate. */
+  requested_fps?: number;
+  /**
    * `sessionSendClipboard` on a direct wire: the text was accepted into the
    * session's one-slot queue.
    *
@@ -132,8 +144,26 @@ export interface ActionResponse {
   coreAccepted?: boolean;
 }
 
+/** UI connection state only. Authentication does not grant input permission. */
+export function sessionUiPhase(response: ActionResponse): string {
+  const phase = response.session?.phase ?? response.phase ?? '';
+  if (response.closed === true || phase === 'closed' || response.phase === 'closed') {
+    return 'closed';
+  }
+  if (response.closing === true || phase === 'closing' || response.phase === 'closing') {
+    return 'closing';
+  }
+  if (phase === 'failed' || response.phase === 'failed') {
+    return 'failed';
+  }
+  return response.authenticated === true ? 'connected' : phase;
+}
+
 export interface NativeEvent {
   name: string;
+  /** Handshake facts, available before a password prompt. */
+  encrypted?: boolean;
+  peer_verified?: boolean;
   /** native_render_ready: native submission, not physical scanout. */
   presentation_generation?: string;
   lifecycleEpoch?: string;
@@ -192,6 +222,8 @@ export interface NativeEvent {
   hotx?: string;
   hoty?: string;
   colors?: string;
+  /** A cursor_id whose current bitmap is unavailable must retire any cached image. */
+  cache_miss?: string;
   gpu_texture?: boolean;
   speed?: string;
   target_bitrate?: string;

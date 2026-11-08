@@ -1,7 +1,7 @@
 import socket from '@ohos.net.socket';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { PeerRecord } from '../pages/rustdesk/RustDeskDirectoryTypes';
-import { copyPeerRecord, peerProtocolOf } from '../pages/rustdesk/RustDeskPeerDirectoryModel';
+import { copyPeerRecord, peerLivenessSource } from '../pages/rustdesk/RustDeskPeerDirectoryModel';
 import { isIpv4Address, isIpv6Address, migrateDeviceRecord, savedDeviceKey } from '../pages/rustdesk/SavedDeviceModel';
 
 const PROBE_TIMEOUT_MS = 1500;
@@ -42,9 +42,14 @@ export class DeviceLivenessProbe {
       workers.push((async (): Promise<void> => {
         while (generation === this.generation && next < records.length) {
           const peer = records[next++];
+          // Only a direct-wire peer has an endpoint to accept here; an
+          // hbbs-answerable id is never handed to a socket.
+          if (peerLivenessSource(peer) !== 'direct') {
+            continue;
+          }
           const endpoint = migrateDeviceRecord(peer);
           const ip = isIpv4Address(endpoint.address) || isIpv6Address(endpoint.address);
-          if ((peer.rustdeskIdOnly && peerProtocolOf(peer) === 'rustdesk') || !ip || endpoint.port <= 0) {
+          if (!ip || endpoint.port <= 0) {
             continue;
           }
           // A TCP accept on this direct endpoint is that wire's reachability;

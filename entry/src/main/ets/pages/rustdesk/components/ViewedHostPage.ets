@@ -1,8 +1,3 @@
-import {
-  LuminousNeoTokens,
-  LuminousSegmentedControl,
-  LuminousSelectionItem,
-} from 'luminous_neo';
 import { ControlledHostState } from '../../../services/controlled/ControlledHostTypes';
 import { ViewedHostCard } from './ViewedHostCard';
 
@@ -37,50 +32,29 @@ export struct ViewedHostPage {
 
   private horizontalPadding(): number {
     if (this.viewportWidth >= 1100) {
-      return 48;
+      return 56;
     }
     if (this.viewportWidth >= 720) {
-      return 32;
+      return 40;
     }
     return 20;
   }
 
   private contentWidth(): number {
-    return Math.max(280, Math.min(this.viewportWidth - this.horizontalPadding() * 2, 760));
-  }
-
-  private modeControlWidth(): number {
-    return Math.max(220, this.contentWidth() - LuminousNeoTokens.shadowPaddingFor(44) * 2);
-  }
-
-  private modeItems(): LuminousSelectionItem[] {
-    return [new LuminousSelectionItem('viewed', '被控端', '')];
+    return Math.max(280, Math.min(this.viewportWidth - this.horizontalPadding() * 2, this.wideLayout ? 600 : 540));
   }
 
   private contentTitleSpacerHeight(): number {
-    return this.wideLayout ? this.titleSpacerHeight : Math.min(this.titleSpacerHeight, 24);
+    return this.wideLayout ? Math.max(this.titleSpacerHeight + 36, 56) : Math.max(this.titleSpacerHeight, 40);
   }
 
   build(): void {
     Scroll(this.scroller) {
-      Column({ space: 8 }) {
+      Column({ space: 16 }) {
         Blank()
           .width('100%')
           .height(this.contentTitleSpacerHeight())
           .flexShrink(0);
-        Row() {
-          LuminousSegmentedControl({
-            items: this.modeItems(),
-            selectedIndex: 0,
-            controlWidth: this.modeControlWidth(),
-            controlHeight: 44,
-            motionEnabled: true,
-            onChange: (_index: number): void => {},
-          })
-        }
-        .width(this.contentWidth())
-        .justifyContent(FlexAlign.Center)
-        .clip(false);
         ViewedHostCard({
           state: this.state,
           surfaceWidth: this.contentWidth(),

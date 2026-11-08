@@ -1,6 +1,6 @@
 import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
-import { PeerRecord, RustDeskRightClickGesture, SessionDefaults, VncQuality } from './RustDeskDirectoryTypes';
+import { PeerRecord, RustDeskRightClickGesture, ServerConfig, SessionDefaults, VncQuality } from './RustDeskDirectoryTypes';
 import { DEFAULT_TOUCH_SCROLL_DIVISOR, isValidTouchScrollDivisor } from './RustDeskTouchGestureState';
 import { isValidRefreshRate } from './RustDeskRefreshRate';
 import { SavedConnectionSettings } from './RustDeskTypes';
@@ -15,6 +15,7 @@ import {
 } from './RdpCertificateTrust';
 
 const PREF_NAME = 'rustdesk_connection';
+const SERVER_DRAFT_KEY = 'server_editor_draft_v1';
 const TARGET_KEY = 'target';
 const TARGET_RECORDED_KEY = 'target_recorded';
 const TARGET_MODE_KEY = 'target_mode';
@@ -38,6 +39,7 @@ const DEFAULT_CODEC_PRIORITY_VERSION = 1;
 const DEFAULT_GESTURES_ENABLED_KEY = 'default_gestures_enabled';
 const DEFAULT_TOOLBAR_EXPANDED_KEY = 'default_toolbar_expanded';
 const SESSION_SHARING_ENABLED_KEY = 'session_sharing_enabled';
+const DEFAULT_KEEP_SCREEN_ORIENTATION_KEY = 'default_keep_screen_orientation';
 const DEFAULT_TOUCH_SCROLL_DIVISOR_KEY = 'default_touch_scroll_divisor';
 const DEFAULT_SESSION_FULLSCREEN_KEY = 'default_session_fullscreen_layout';
 const ANDROID_NAVIGATION_VISIBLE_KEY = 'android_navigation_visible';
@@ -81,6 +83,41 @@ export class RustDeskPreferences {
     } catch (_) {
       return null;
     }
+  }
+
+  /** Only raw public route fields. Never serialize ServerConfig or any Key text. */
+  saveServerDraft(config: ServerConfig): boolean {
+    const store = this.getStore();
+    if (store === null) { return false; }
+    try {
+      store.putSync(SERVER_DRAFT_KEY, JSON.stringify({
+        mode: config.mode,
+        idServer: config.idServer,
+        relayServer: config.relayServer,
+        apiServer: config.apiServer,
+        draftEditToken: config.draftEditToken,
+        keyNeedsEntry: config.keyNeedsEntry || (config.keyEdited && config.keyInput.length > 0),
+      }));
+      store.flushSync();
+      return true;
+    } catch (_) { return false; }
+  }
+
+  loadServerDraft(): ServerConfig | undefined {
+    const store = this.getStore();
+    if (store === null) { throw new Error('无法读取服务器草稿'); }
+    const text = store.getSync(SERVER_DRAFT_KEY, '') as string;
+    if (text.length === 0) { return undefined; }
+    const raw: ESObject = JSON.parse(text);
+    if (raw.mode !== 'custom' && raw.mode !== 'official') { throw new Error('服务器草稿格式无效'); }
+    const config = new ServerConfig();
+    config.mode = raw.mode;
+    config.idServer = String(raw.idServer ?? '');
+    config.relayServer = String(raw.relayServer ?? '');
+    config.apiServer = String(raw.apiServer ?? '');
+    config.keyNeedsEntry = raw.keyNeedsEntry === true;
+    config.draftEditToken = String(raw.draftEditToken ?? '');
+    return config;
   }
 
   shouldShowBeginnerGuide(): boolean {
@@ -408,6 +445,10 @@ export class RustDeskPreferences {
         SESSION_SHARING_ENABLED_KEY,
         defaults.sessionSharingEnabled,
       ) as boolean;
+      defaults.keepScreenOrientation = store.getSync(
+        DEFAULT_KEEP_SCREEN_ORIENTATION_KEY,
+        defaults.keepScreenOrientation,
+      ) as boolean;
       const resolution = store.getSync(RDP_RESOLUTION_KEY, defaults.rdpResolution) as string;
       if (RDP_RESOLUTION_CHOICES.indexOf(resolution) >= 0) {
         defaults.rdpResolution = resolution;
@@ -444,6 +485,7 @@ export class RustDeskPreferences {
       store.putSync(DEFAULT_GESTURES_ENABLED_KEY, defaults.gesturesEnabled);
       store.putSync(DEFAULT_TOOLBAR_EXPANDED_KEY, defaults.toolbarExpanded);
       store.putSync(SESSION_SHARING_ENABLED_KEY, defaults.sessionSharingEnabled);
+      store.putSync(DEFAULT_KEEP_SCREEN_ORIENTATION_KEY, defaults.keepScreenOrientation);
       store.putSync(RDP_RESOLUTION_KEY, defaults.rdpResolution);
       store.putSync(RDP_SCALE_KEY, defaults.rdpScaleFactor);
       store.putSync(RDP_AUDIO_KEY, defaults.rdpAudioEnabled);

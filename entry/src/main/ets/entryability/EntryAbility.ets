@@ -23,6 +23,9 @@ import {
   shouldUseStatusBarKeepAlive,
   StatusBarKeepAliveService,
 } from '../services/desktop/StatusBarKeepAliveService';
+import { nearbyShareService } from '../services/share/NearbyShareService';
+import { displaySharePickerStore } from '../services/share/DisplaySharePickerStore';
+import { ScreenShareInviteService } from '../services/share/ScreenShareInviteService';
 import { controlledHostCoordinator } from '../services/controlled/ControlledHostCoordinator';
 
 const DOMAIN = 0xFF00;
@@ -88,6 +91,14 @@ export default class EntryAbility extends UIAbility {
     this.handleIncomingWant(want, launchParam);
   }
 
+  onCollaborate(wantParam: Record<string, Object>): AbilityConstant.CollaborateResult {
+    if (this.abilityDestroyed || !PrivacyConsentService.readSystemState().accepted) {
+      return AbilityConstant.CollaborateResult.REJECT;
+    }
+    return nearbyShareService.offerIncoming(this.context, wantParam)
+      ? AbilityConstant.CollaborateResult.ACCEPT : AbilityConstant.CollaborateResult.REJECT;
+  }
+
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(DOMAIN, TAG, 'Ability onNewWant');
     this.restoreMainWindow();
@@ -148,6 +159,8 @@ export default class EntryAbility extends UIAbility {
   onDestroy(): void {
     hilog.info(DOMAIN, TAG, 'Ability onDestroy');
     this.abilityDestroyed = true;
+    nearbyShareService.destroy();
+    displaySharePickerStore.releaseAll();
     this.privacyConsentAccepted = false;
     this.appForeground = false;
     this.syncRuntimeLifecycle();
@@ -191,6 +204,10 @@ export default class EntryAbility extends UIAbility {
 
   /** Every authoritative consent/foreground refresh retires the old native owner. */
   private syncRuntimeLifecycle(): void {
+    if (!this.privacyConsentAccepted) {
+      nearbyShareService.destroy();
+      displaySharePickerStore.releaseAll();
+    }
     rustDeskRuntimeController.updateLifecycle(this.context, this.privacyConsentAccepted, this.appForeground)
       .then((): void => {
         const state = rustDeskRuntimeController.state();
@@ -425,6 +442,17 @@ export default class EntryAbility extends UIAbility {
   }
 
   private handleIncomingWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    // The screen share invite is recognised before every other want handler; the
+    // remaining routing only runs once this service declined the want.
+    void ScreenShareInviteService.handleWant(this.context, want).then((consumed: boolean): void => {
+      if (consumed) {
+        return;
+      }
+      this.routeRemainingWant(want, launchParam);
+    });
+  }
+
+  private routeRemainingWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     if (launchParam.launchReason === AbilityConstant.LaunchReason.CONTINUATION &&
       RemoteSessionHandoffService.handleContinuationWant(this.context, want)) {
       return;

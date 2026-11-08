@@ -22,6 +22,7 @@ import { SessionDefaultsCard } from './SessionDefaultsCard';
 import { DirectSessionSettingsCard } from './DirectSessionSettingsCard';
 import { copySessionDefaults } from '../DirectSessionSettings';
 import { HostSecuritySettingsCard } from './HostSecuritySettingsCard';
+import { RustDeskAccountController, rustDeskAccountController } from '../NativeAccountBridge';
 import {
   ControlledHostState,
   ControlledPasswordMode,
@@ -54,9 +55,11 @@ export interface SettingsTabProps {
   titleSpacerHeight: number;
   bottomAvoidInset: number;
   tutorialLaunchToken: number;
+  accountController?: RustDeskAccountController;
   onServerConfigChange: (config: ServerConfig) => void;
   onValidateServerConfig: (config: ServerConfig) => void;
-  onSaveServerConfig: (config: ServerConfig) => void;
+  serverProbeMessage: string;
+  onFlushServerConfig: (retry?: boolean) => void;
   onSessionDefaultsChange: (defaults: SessionDefaults) => void;
   onControlledRefresh: () => void;
   onControlledPasswordModeChange: (mode: ControlledPasswordMode) => void;
@@ -78,6 +81,7 @@ export struct SettingsTab {
   @Param decoderCapabilities: DecoderCapability[] = [];
   @Param serverConfig: ServerConfig = new ServerConfig();
   @Param serverProfile: ServerProfileState = new ServerProfileState();
+  @Param accountController: RustDeskAccountController = rustDeskAccountController;
   @Param serverValidating: boolean = false;
   @Param serverSaving: boolean = false;
   @Param sessionDefaults: SessionDefaults = new SessionDefaults();
@@ -103,7 +107,8 @@ export struct SettingsTab {
   private handledTutorialLaunchToken: number = 0;
   @Event onServerConfigChange: (config: ServerConfig) => void = (_config: ServerConfig) => {};
   @Event onValidateServerConfig: (config: ServerConfig) => void = (_config: ServerConfig) => {};
-  @Event onSaveServerConfig: (config: ServerConfig) => void = (_config: ServerConfig) => {};
+  @Param serverProbeMessage: string = '';
+  @Event onFlushServerConfig: (retry?: boolean) => void = (_retry?: boolean) => {};
   @Event onSessionDefaultsChange: (defaults: SessionDefaults) => void = (_defaults: SessionDefaults) => {};
   @Event onControlledRefresh: () => void = () => {};
   @Event onControlledPasswordModeChange: (mode: ControlledPasswordMode) => void =
@@ -295,10 +300,10 @@ export struct SettingsTab {
       return $r('app.string.settings_tutorial_title');
     }
     if (this.selectedSection === 'server') {
-      return $r('app.string.settings_server_title');
+      return '服务器';
     }
     if (this.selectedSection === 'account') {
-      return $r('app.string.settings_account_title');
+      return '账号';
     }
     if (this.selectedSection === 'session_input') {
       return '输入模式';
@@ -322,11 +327,8 @@ export struct SettingsTab {
     if (this.selectedSection === 'tutorial') {
       return $r('app.string.settings_tutorial_subtitle');
     }
-    if (this.selectedSection === 'server') {
-      return $r('app.string.settings_server_subtitle');
-    }
-    if (this.selectedSection === 'account') {
-      return $r('app.string.settings_account_subtitle');
+    if (this.selectedSection === 'server' || this.selectedSection === 'account') {
+      return '';
     }
     if (this.selectedSection === 'session_input') {
       return '设置新远控会话的操作方式与右键手势';
@@ -343,11 +345,26 @@ export struct SettingsTab {
     return this.diagnosticSummary();
   }
 
-  private serverSummary(): ResourceStr {
-    if (this.serverConfig.idServer.trim().length > 0) {
-      return this.serverConfig.idServer.trim();
+  private accountSummary(): ResourceStr {
+    if (this.accountController.state.loggedIn) {
+      const name = this.accountController.state.displayName || this.accountController.state.name || '已登录';
+      return `已登录 · ${name}`;
     }
-    return $r('app.string.settings_server_custom');
+    return '未登录 · 支持官方与自建服务登录';
+  }
+
+  private serverSummary(): ResourceStr {
+    // The row names the route the engine actually holds, which is the approved
+    // profile, never the editable draft: a refused or unanswered save leaves its
+    // values in the card's inputs and must not look like the current server.
+    const current = this.serverProfile.config;
+    if (current.mode === 'official') {
+      return $r('app.string.settings_server_official');
+    }
+    if (current.idServer.trim().length > 0) {
+      return current.idServer.trim();
+    }
+    return $r('app.string.settings_server_status_unconfigured');
   }
 
   private sessionSummary(): ResourceStr {
@@ -505,8 +522,8 @@ export struct SettingsTab {
           this.SettingsTile(
             'account',
             $r('sys.symbol.person_crop_circle_fill'),
-            $r('app.string.settings_account_title'),
-            $r('app.string.settings_account_unavailable'),
+            '账号',
+            this.accountSummary(),
             $r('app.color.neu_accent'),
           )
           this.SettingsTile(
@@ -580,8 +597,8 @@ export struct SettingsTab {
         this.SettingsTile(
           'account',
           $r('sys.symbol.person_crop_circle_fill'),
-          $r('app.string.settings_account_title'),
-          $r('app.string.settings_account_unavailable'),
+          '账号',
+          this.accountSummary(),
           $r('app.color.neu_accent'),
         )
         this.SettingsTile(
@@ -959,11 +976,13 @@ export struct SettingsTab {
         saving: this.serverSaving,
         onConfigChange: (config: ServerConfig) => this.onServerConfigChange(config),
         onValidate: (config: ServerConfig) => this.onValidateServerConfig(config),
-        onSave: (config: ServerConfig) => this.onSaveServerConfig(config),
+        probeMessage: this.serverProbeMessage,
+        onFlush: (retry?: boolean) => this.onFlushServerConfig(retry),
       })
     } else if (this.selectedSection === 'account') {
       AccountSettingsCard({
         showHeader: false,
+        controller: this.accountController,
       })
     } else if (this.selectedSection === 'session_input') {
       SessionDefaultsCard({
@@ -1017,13 +1036,17 @@ export struct SettingsTab {
     }
   }
 
+  private pageTopClearance(): number {
+    return this.wideLayout ? Math.max(this.titleSpacerHeight + 36, 56) : Math.max(this.titleSpacerHeight, 40);
+  }
+
   @Builder
   private SettingsHubPage() {
     Scroll(this.scroller) {
       Column() {
         Blank()
           .width('100%')
-          .height(this.titleSpacerHeight)
+          .height(this.pageTopClearance())
           .flexShrink(0);
 
         Row() {
@@ -1039,7 +1062,7 @@ export struct SettingsTab {
         .padding({
           left: this.useWideContentAnchor() ? this.wideHubLeftInset() : this.horizontalPadding(),
           right: this.useWideContentAnchor() ? 0 : this.horizontalPadding(),
-          top: RustDeskLayoutTokens.PAGE_CONTENT_TOP_PADDING,
+          top: 0,
           bottom: this.hubBottomPadding(),
         });
       }
@@ -1059,6 +1082,19 @@ export struct SettingsTab {
     });
   }
 
+  private sheetContentMaxWidth(): number {
+    if (this.selectedSection === 'diagnostics') {
+      return 960;
+    }
+    if (this.sheetViewportWidth >= 920) {
+      return 600;
+    }
+    if (this.sheetViewportWidth >= 600) {
+      return 560;
+    }
+    return 600;
+  }
+
   @Builder
   private SettingsSheet() {
     HdsNavigation() {
@@ -1069,7 +1105,7 @@ export struct SettingsTab {
               this.SelectedSettingsContent()
             }
             .width('100%')
-            .constraintSize({ maxWidth: 960 })
+            .constraintSize({ maxWidth: this.sheetContentMaxWidth() })
             .alignItems(HorizontalAlign.Start)
             .onAreaChange((_oldArea: Area, newArea: Area) => {
               const width = Number(newArea.width);
@@ -1117,7 +1153,9 @@ export struct SettingsTab {
     .titleBar({
       enableComponentSafeArea: true,
       content: {
-        title: {
+        title: (this.selectedSection === 'server' || this.selectedSection === 'account') ? {
+          mainTitle: this.sheetTitle(),
+        } : {
           mainTitle: this.sheetTitle(),
           subTitle: this.sheetSubtitle(),
         },

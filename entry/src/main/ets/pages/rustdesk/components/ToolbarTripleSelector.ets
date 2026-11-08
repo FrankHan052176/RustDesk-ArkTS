@@ -13,26 +13,22 @@ export struct ToolbarTripleSelector {
   @Param labels: Array<string> = [];
   @Param enabledItems: Array<boolean> = [];
   @Param selectedIndex: number = 0;
-  @Param controlWidth: number = 180;
-  @Param controlHeight: number = 38;
+  @Param controlWidth: number = 0;
+  @Param controlHeight: number = 44;
   @Param accessibilityLabel: string = '';
   @Event onChange: (index: number) => void = (_index: number) => {};
-
-  private segmentWidth(): number {
-    return this.controlWidth / Math.max(this.labels.length, 1);
-  }
 
   private itemEnabled(index: number): boolean {
     return index >= this.enabledItems.length || this.enabledItems[index];
   }
 
   build(): void {
-    Row() {
+    Row({ space: 2 }) {
       ForEach(this.labels, (label: string, index: number) => {
         Button({ type: ButtonType.Normal, stateEffect: true }) {
           Text(label)
             .fontSize($r('app.float.font_caption'))
-            .fontWeight(FontWeight.Medium)
+            .fontWeight(this.selectedIndex === index ? FontWeight.Bold : FontWeight.Medium)
             .fontColor(!this.itemEnabled(index)
               ? $r('app.color.neu_text_disabled')
               : (this.selectedIndex === index
@@ -40,14 +36,14 @@ export struct ToolbarTripleSelector {
                 : $r('app.color.neu_text_primary')))
             .maxLines(1);
         }
-        .width(this.segmentWidth())
-        .height(this.controlHeight)
+        .layoutWeight(1)
+        .height('100%')
         .padding(0)
         .enabled(this.itemEnabled(index))
         .backgroundColor(this.selectedIndex === index
           ? $r('app.color.brand_primary')
           : $r('app.color.transparent'))
-        .borderRadius($r('app.float.radius_10'))
+        .borderRadius($r('app.float.radius_6'))
         .hoverEffect(HoverEffect.Auto)
         .accessibilityText(`${this.accessibilityLabel}，${label}`)
         .accessibilitySelected(this.selectedIndex === index)
@@ -58,16 +54,12 @@ export struct ToolbarTripleSelector {
         });
       }, (label: string, index: number): string => `${label}-${index}`);
     }
-    .width(this.controlWidth)
-    .height(this.controlHeight)
+    .width(this.controlWidth > 0 ? this.controlWidth : '100%')
+    .height(this.controlHeight >= 44 ? this.controlHeight : 44)
+    .padding({ left: 2, right: 2, top: 0, bottom: 0 })
     .backgroundColor($r('app.color.mica_control'))
-    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
-      adaptiveColor: AdaptiveColor.DEFAULT,
-      scale: 0.56,
-    })
     .border({ width: 1, color: $r('app.color.mica_border') })
-    .borderRadius($r('app.float.radius_14'))
-    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+    .borderRadius($r('app.float.radius_10'))
     .clip(true);
   }
 }

@@ -3,6 +3,10 @@ import { ServerConfig, SessionDefaults } from './RustDeskDirectoryTypes';
 import { DEFAULT_REFRESH_RATE } from './RustDeskRefreshRate';
 
 const MAX_PENDING_PROTECTED_ACTIONS = 128;
+const MAX_CURSOR_EVENTS = 256;
+// These entries retain JSON strings, not decoded RGBA. Budget two bytes per
+// UTF-16 code unit so a background tab cannot retain unbounded bitmap history.
+const MAX_CURSOR_EVENT_BYTES = 16 * 1024 * 1024;
 
 export type RemoteSessionKind = 'remote_control' | 'vnc' | 'rdp';
 
@@ -14,6 +18,8 @@ export class RemoteSessionTab {
   /** This session's last native numeric input_generation; absent means not yet known. */
   inputGeneration: number | undefined = undefined;
   peerVerified: boolean | undefined = undefined;
+  encrypted: boolean = true;
+  isSharedSession: boolean = false;
   target: string = '';
   label: string = '';
   kind: RemoteSessionKind = 'remote_control';
@@ -44,6 +50,7 @@ export class RemoteSessionTab {
   peerInfo?: NativeEvent = undefined;
   cursorDataEvents: Array<NativeEvent> = [];
   lastCursorId: string = '';
+  cursorPosition?: NativeEvent = undefined;
   pendingEvents: Array<NativeEvent> = [];
   omittedProtectedEvents: number = 0;
   createdAt: number = 0;
@@ -91,6 +98,10 @@ export class RemoteSessionTabsController {
 
   get(sessionId: string): RemoteSessionTab | undefined {
     return this.tabs.find((tab: RemoteSessionTab) => tab.sessionId === sessionId);
+  }
+
+  isShared(sessionId: string): boolean {
+    return this.get(sessionId)?.isSharedSession === true;
   }
 
   add(sessionId: string, target: string, kind: RemoteSessionKind): RemoteSessionTab | undefined {
@@ -171,21 +182,42 @@ export class RemoteSessionTabsController {
     if (tab === undefined) {
       return;
     }
+    if (event.name === 'cursor_position') {
+      tab.cursorPosition = event;
+      return;
+    }
     const id = String(event.id ?? '');
     if (id.length === 0) {
       return;
     }
     tab.lastCursorId = id;
+    const existingIndex = tab.cursorDataEvents.findIndex((item: NativeEvent) =>
+      String(item.id ?? '') === id);
+    if (event.cache_miss === 'true' || (event.colors?.length ?? 0) * 2 > MAX_CURSOR_EVENT_BYTES) {
+      if (existingIndex >= 0) {
+        tab.cursorDataEvents.splice(existingIndex, 1);
+      }
+      return;
+    }
     if (event.name !== 'cursor_data') {
       return;
     }
-    const existingIndex = tab.cursorDataEvents.findIndex((item: NativeEvent) =>
-      String(item.id ?? '') === id);
     if (existingIndex >= 0) {
       tab.cursorDataEvents[existingIndex] = event;
-      return;
+    } else {
+      tab.cursorDataEvents.push(event);
     }
-    tab.cursorDataEvents.push(event);
+    let bytes = 0;
+    for (const item of tab.cursorDataEvents) {
+      bytes += (item.colors?.length ?? 0) * 2;
+    }
+    while (tab.cursorDataEvents.length > MAX_CURSOR_EVENTS || bytes > MAX_CURSOR_EVENT_BYTES) {
+      // The current event fits on its own. Evict the oldest other ID, keeping
+      // event references intact so an async tab restore can detect retirement.
+      const oldest = tab.cursorDataEvents[0].id === id ? 1 : 0;
+      bytes -= (tab.cursorDataEvents[oldest].colors?.length ?? 0) * 2;
+      tab.cursorDataEvents.splice(oldest, 1);
+    }
   }
 
   cursorDataSnapshot(sessionId: string): Array<NativeEvent> {
@@ -194,6 +226,10 @@ export class RemoteSessionTabsController {
 
   lastCursorId(sessionId: string): string {
     return this.get(sessionId)?.lastCursorId ?? '';
+  }
+
+  cursorPositionSnapshot(sessionId: string): NativeEvent | undefined {
+    return this.get(sessionId)?.cursorPosition;
   }
 
   markPhase(sessionId: string, phase: string, message: string = ''): void {

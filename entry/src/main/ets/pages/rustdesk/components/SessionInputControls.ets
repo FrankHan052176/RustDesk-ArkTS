@@ -68,10 +68,6 @@ export struct SessionInputControls {
       : (this.rightClickGesture === 'two_finger_tap' ? 1 : 2);
   }
 
-  private selectorWidth(): number {
-    return this.wideLayout ? 150 : 204;
-  }
-
   private selectMode(index: number): void {
     this.selectedModeIndex = index;
     const mode: RustDeskInputMode = index === 0 ? 'off' : (index === 1 ? 'touch' : 'mouse');
@@ -88,83 +84,94 @@ export struct SessionInputControls {
 
   build(): void {
     if (this.wideLayout) {
-      Row({ space: $r('app.float.space_12') }) {
-        Row({ space: $r('app.float.space_4') }) {
+      Row({ space: $r('app.float.space_8') }) {
+        Row({ space: $r('app.float.space_6') }) {
           Text('输入')
-            .width(32)
             .fontSize($r('app.float.font_caption'))
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.neu_text_secondary'));
           ToolbarTripleSelector({
             labels: ['关闭', '触控', '鼠标'],
             selectedIndex: this.selectedModeIndex,
-            controlWidth: this.selectorWidth(),
-            controlHeight: 36,
+            controlWidth: 0,
+            controlHeight: 44,
             accessibilityLabel: '输入模式',
             onChange: (index: number): void => this.selectMode(index),
-          });
+          })
+            .layoutWeight(1);
         }
+        .layoutWeight(1)
         .alignItems(VerticalAlign.Center);
 
-        Row({ space: $r('app.float.space_4') }) {
+        Row({ space: $r('app.float.space_6') }) {
           Text('右键')
-            .width(32)
             .fontSize($r('app.float.font_caption'))
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.neu_text_secondary'));
           ToolbarTripleSelector({
             labels: ['双击', '双指', '长按'],
             selectedIndex: this.selectedRightClickIndex,
-            controlWidth: this.selectorWidth(),
-            controlHeight: 36,
+            controlWidth: 0,
+            controlHeight: 44,
             accessibilityLabel: '右键映射',
             onChange: (index: number): void => this.selectRightClick(index),
-          });
+          })
+            .layoutWeight(1);
         }
-        .alignItems(VerticalAlign.Center);
-      }
-      .justifyContent(FlexAlign.Center)
-      .alignItems(VerticalAlign.Center);
-    } else {
-      Column({ space: $r('app.float.space_4') }) {
-        Row({ space: $r('app.float.space_4') }) {
-          Text('输入')
-            .width(38)
-            .fontSize($r('app.float.font_caption'))
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.neu_text_secondary'));
-          ToolbarTripleSelector({
-            labels: ['关闭', '触控', '鼠标'],
-            selectedIndex: this.selectedModeIndex,
-            controlWidth: this.selectorWidth(),
-            controlHeight: 36,
-            accessibilityLabel: '输入模式',
-            onChange: (index: number): void => this.selectMode(index),
-          });
-        }
-        .alignItems(VerticalAlign.Center);
-
-        Row({ space: $r('app.float.space_4') }) {
-          Text('右键')
-            .width(38)
-            .fontSize($r('app.float.font_caption'))
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.neu_text_secondary'));
-          ToolbarTripleSelector({
-            labels: ['双击', '双指', '长按'],
-            selectedIndex: this.selectedRightClickIndex,
-            controlWidth: this.selectorWidth(),
-            controlHeight: 36,
-            accessibilityLabel: '右键映射',
-            onChange: (index: number): void => this.selectRightClick(index),
-          });
-        }
+        .layoutWeight(1)
         .alignItems(VerticalAlign.Center);
       }
       .width('100%')
-      // The toolbar's own groups end at its right edge, and this block is one of
-      // them when it sits in the home body.
-      .alignItems(HorizontalAlign.End);
+      .padding({ left: 8, right: 8, top: 6, bottom: 6 })
+      .backgroundColor($r('app.color.mica_control'))
+      .border({ width: 1, color: $r('app.color.mica_border') })
+      .borderRadius($r('app.float.radius_14'))
+      .alignItems(VerticalAlign.Center);
+    } else {
+      Column({ space: $r('app.float.space_6') }) {
+        Row({ space: $r('app.float.space_6') }) {
+          Text('输入')
+            .width(32)
+            .fontSize($r('app.float.font_caption'))
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.neu_text_secondary'));
+          ToolbarTripleSelector({
+            labels: ['关闭', '触控', '鼠标'],
+            selectedIndex: this.selectedModeIndex,
+            controlWidth: 0,
+            controlHeight: 44,
+            accessibilityLabel: '输入模式',
+            onChange: (index: number): void => this.selectMode(index),
+          })
+            .layoutWeight(1);
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center);
+
+        Row({ space: $r('app.float.space_6') }) {
+          Text('右键')
+            .width(32)
+            .fontSize($r('app.float.font_caption'))
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.neu_text_secondary'));
+          ToolbarTripleSelector({
+            labels: ['双击', '双指', '长按'],
+            selectedIndex: this.selectedRightClickIndex,
+            controlWidth: 0,
+            controlHeight: 44,
+            accessibilityLabel: '右键映射',
+            onChange: (index: number): void => this.selectRightClick(index),
+          })
+            .layoutWeight(1);
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center);
+      }
+      .width('100%')
+      .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+      .backgroundColor($r('app.color.mica_control'))
+      .border({ width: 1, color: $r('app.color.mica_border') })
+      .borderRadius($r('app.float.radius_14'));
     }
   }
 }

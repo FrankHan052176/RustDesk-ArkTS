@@ -348,6 +348,7 @@ export class RustDeskViewportModel {
       remoteRect,
       this.rotation,
       presented,
+      new RustDeskRect(0, 0, this.viewportWidth, this.viewportHeight),
     );
     space.viewScale = this.viewScale;
     space.viewOffsetX = this.viewOffsetX;

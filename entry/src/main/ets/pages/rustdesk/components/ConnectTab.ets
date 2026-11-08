@@ -14,12 +14,10 @@ import { DirectorySnapshot, PeerProtocol, PeerRecord } from '../RustDeskDirector
 import { TargetFieldIssue, targetFieldIssue, targetFieldIssueText } from '../DirectWireCredentials';
 import { RustDeskLayoutTokens } from '../RustDeskLayoutTokens';
 import {
-  peerDisplaySubtitle,
   peerDisplayTitle,
-  peerOnlineState,
-  peerReachability,
   peerProtocolName,
   peerProtocolOf,
+  peerStatusKind,
 } from '../RustDeskPeerDirectoryModel';
 import { FloatingActionSurface } from './FloatingSurface';
 import { deviceConnectionTarget } from '../SavedDeviceModel';
@@ -90,28 +88,35 @@ export struct ConnectTab {
   }
 
   private wideWorkspaceLeftInset(): number {
-    return RustDeskLayoutTokens.WIDE_CONTENT_EDGE - (this.stageFrameWidth() - this.controlWidth()) / 2;
+    return RustDeskLayoutTokens.WIDE_CONTENT_EDGE;
   }
 
   private controlWidth(): number {
     if (this.isCompact()) {
-      return Math.max(280, Math.min(this.viewportWidth - 40, 520));
+      return Math.max(0, Math.min(this.viewportWidth - this.homeVisualPadding() * 2, 520));
     }
-    return 440;
+    // Both column frames include shadows; their sum plus the 36vp gap must
+    // fit the content pane, not the full display behind the navigation rail.
+    return Math.min(400, (this.viewportWidth - 36) / 2 - this.homeVisualPadding() * 2);
+  }
+
+  /**
+   * All home content shares one visual frame.  The largest home card is 72vp
+   * high, so its shadow safety area is the common horizontal frame; smaller
+   * controls remain centered inside it instead of needing a per-control nudge.
+   */
+  private homeVisualPadding(): number {
+    return LuminousNeoTokens.shadowPaddingFor(72);
   }
 
   private stageFrameWidth(): number {
-    return this.controlWidth() + 40;
+    return this.controlWidth() + this.homeVisualPadding() * 2;
   }
 
-  private compactControlVisualOffsetX(): number {
-    return this.isCompact() ? -6 : 0;
-  }
-
-  private secondaryMenuFrameOverhead(): number {
-    const mainPadding = LuminousNeoTokens.shadowPaddingFor(this.easyTierMenuHeight());
-    const handlePadding = LuminousNeoTokens.shadowPaddingFor(40);
-    return mainPadding + handlePadding + 50;
+  private secondaryMenuControlWidth(): number {
+    // LuminousSecondaryMenu places a 40vp handle 10vp after the main body.
+    // Reserve both within the same body width as the other home controls.
+    return this.controlWidth() - 10 - 40;
   }
 
   private recentFrameWidth(): number {
@@ -122,12 +127,21 @@ export struct ConnectTab {
     return this.controlWidth();
   }
 
-  private recentCardFrameWidth(): number {
-    return (this.recentContentWidth() - 8) / 2;
+  private recentColumnCount(): number {
+    return this.isCompact() ? 1 : 2;
+  }
+
+  private recentCardWidth(): number {
+    if (this.recentColumnCount() === 1) {
+      return this.controlWidth();
+    }
+    // Space the bodies, not their shadow frames. Adjacent shadows may overlap;
+    // only the whole row needs the outer safety padding in RecentCards.
+    return (this.recentContentWidth() - 16) / 2;
   }
 
   private recentCardContentWidth(): number {
-    return Math.max(120, this.recentCardFrameWidth() - 4);
+    return this.recentCardWidth();
   }
 
   /** The session kind the selected mode dials; the file workspace is a RustDesk target. */
@@ -191,19 +205,6 @@ export struct ConnectTab {
     return '建立远程控制';
   }
 
-  private modeDescription(): ResourceStr {
-    if (this.connectionMode === 1) {
-      return '用标准 RFB 协议连接路由器、开发板或虚拟机上的 VNC 服务端';
-    }
-    if (this.connectionMode === 2) {
-      return '用 RDP 协议连接 Windows 远程桌面，适合企业内网与服务器';
-    }
-    if (this.connectionMode === 3) {
-      return '在本机与远端之间浏览和传输文件';
-    }
-    return '使用 RustDesk 协议连接，支持触摸、键鼠与剪贴板';
-  }
-
   private primaryActionLabel(): ResourceStr {
     if (this.connectionMode === 1) {
       return this.canDisconnect ? '建立新 VNC 连接' : '连接 VNC';
@@ -260,8 +261,10 @@ export struct ConnectTab {
     return LuminousNeoTokens.REGULAR_HEIGHT;
   }
 
-  private easyTierMenuControlWidth(): number {
-    return Math.max(280, this.stageFrameWidth() - this.secondaryMenuFrameOverhead());
+  private easyTierMenuFrameX(): number {
+    // Align the complete body + handle span with the other control bodies;
+    // the component's own left shadow padding is already part of its root.
+    return this.homeVisualPadding() - LuminousNeoTokens.shadowPaddingFor(this.easyTierMenuHeight());
   }
 
   private easyTierMenuFrameHeight(): number {
@@ -323,7 +326,8 @@ export struct ConnectTab {
   private recentRowStarts(): number[] {
     const starts: number[] = [];
     const peers = this.recentPreview();
-    for (let index = 0; index < peers.length; index += 2) {
+    const step = this.recentColumnCount();
+    for (let index = 0; index < peers.length; index += step) {
       starts.push(index);
     }
     return starts;
@@ -364,25 +368,32 @@ export struct ConnectTab {
   }
 
   private recentPeerSubtitle(peer: PeerRecord): string {
-    return peerDisplaySubtitle(peer);
+    return peer.note.trim();
   }
 
+  /** The directory card's claim, in the words of the evidence behind it. */
   private recentPeerStatus(peer: PeerRecord): ResourceStr {
-    const state = peerOnlineState(peerReachability(peer));
-    if (state === 'unknown') {
+    const kind = peerStatusKind(peer);
+    if (kind === 'unknown') {
       return $r('app.string.device_status_checking');
     }
-    return state === 'online'
-      ? $r('app.string.device_status_online')
-      : $r('app.string.device_status_offline');
+    if (kind === 'online') {
+      return $r('app.string.device_status_online');
+    }
+    if (kind === 'offline') {
+      return $r('app.string.device_status_offline');
+    }
+    return kind === 'reachable'
+      ? $r('app.string.device_status_reachable')
+      : $r('app.string.device_status_unreachable');
   }
 
   private recentPeerStatusColor(peer: PeerRecord): ResourceColor {
-    const state = peerOnlineState(peerReachability(peer));
-    if (state === 'unknown') {
+    const kind = peerStatusKind(peer);
+    if (kind === 'unknown') {
       return $r('app.color.info');
     }
-    return state === 'online'
+    return kind === 'online' || kind === 'reachable'
       ? $r('app.color.success')
       : $r('app.color.neu_text_secondary');
   }
@@ -400,13 +411,6 @@ export struct ConnectTab {
           .fontSize(19)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.neu_text_primary'));
-        Text(this.modeDescription())
-          .width('100%')
-          .fontSize(12)
-          .lineHeight(18)
-          .fontColor($r('app.color.neu_text_secondary'))
-          .maxLines(2)
-          .textOverflow({ overflow: TextOverflow.Ellipsis });
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start);
@@ -430,8 +434,7 @@ export struct ConnectTab {
           this.onConnectionModeChange(index);
         },
       })
-        .margin({ top: -6 })
-        .translate({ x: this.compactControlVisualOffsetX() })
+        .margin({ top: -4 })
 
       LuminousTextField({
         value: this.target,
@@ -442,7 +445,6 @@ export struct ConnectTab {
         onChange: (value: string): void => this.onTargetChange(value),
       })
         .margin({ top: -26 })
-        .translate({ x: this.compactControlVisualOffsetX() })
 
       if (this.targetIssue() !== '') {
         Text(targetFieldIssueText(this.modeKind(), this.targetIssue()))
@@ -451,8 +453,7 @@ export struct ConnectTab {
           .fontSize(12)
           .lineHeight(18)
           .fontColor($r('app.color.error'))
-          .margin({ top: -20, bottom: 20 })
-          .translate({ x: this.compactControlVisualOffsetX() })
+          .margin({ top: -20, bottom: 20 });
       }
 
       LuminousButton({
@@ -465,32 +466,14 @@ export struct ConnectTab {
         motionEnabled: true,
         onAction: (): void => this.activatePrimaryAction(),
       })
-        .margin({ top: -28 })
-        .translate({ x: this.compactControlVisualOffsetX() })
+        .margin({ top: -26 })
 
       if (this.easyTierAvailable) {
-        Row({ space: 6 }) {
-          SymbolGlyph($r('sys.symbol.link'))
-            .fontSize(13)
-            .fontColor([$r('app.color.neu_accent')]);
-          Text('联动 EasyTier 预组网；实例未运行时将先请求启动')
-            .layoutWeight(1)
-            .fontSize(11)
-            .lineHeight(17)
-            .fontColor($r('app.color.neu_text_secondary'))
-            .maxLines(2)
-            .textOverflow({ overflow: TextOverflow.Ellipsis });
-        }
-        .width(this.controlWidth())
-        .padding({ left: 4, right: 4 })
-        .alignItems(VerticalAlign.Center)
-        .margin({ top: -16 })
-
-        Row() {
+        Stack({ alignContent: Alignment.TopStart }) {
           LuminousSecondaryMenu({
             items: this.easyTierMenuItems(),
             selectedIndex: this.easyTierMenuSelectedIndex(),
-            controlWidth: this.easyTierMenuControlWidth(),
+            controlWidth: this.secondaryMenuControlWidth(),
             mainHeight: this.easyTierMenuHeight(),
             itemHeight: 52,
             accessibilityLabel: 'EasyTier 预组网方式',
@@ -499,29 +482,27 @@ export struct ConnectTab {
             motionEnabled: true,
             onChange: (index: number): void => this.commitEasyTierMenuIndex(index),
           })
+            .position({ x: this.easyTierMenuFrameX(), y: 0 });
         }
         .width(this.stageFrameWidth())
         .height(this.easyTierMenuFrameHeight())
-        .justifyContent(FlexAlign.Start)
-        .alignItems(VerticalAlign.Center)
         .clip(false)
         .zIndex(200)
-        .margin({ top: -22 })
-        .translate({ x: this.compactControlVisualOffsetX() })
+        .margin({ top: -24 })
       }
 
       if (this.canDisconnect) {
         LuminousButton({
           label: '断开当前会话',
-          controlWidth: Math.min(180, this.controlWidth()),
+          controlWidth: Math.min(200, this.controlWidth()),
           controlSizeMode: LuminousControlSize.Compact,
           tone: LuminousTone.Danger,
           motionEnabled: true,
           onAction: (): void => this.onDisconnect(),
         })
-          .margin({ top: -22 })
-          .translate({ x: this.compactControlVisualOffsetX() })
+          .margin({ top: -22 });
       }
+
     }
     .width(this.stageFrameWidth())
     .flexShrink(0)
@@ -584,17 +565,6 @@ export struct ConnectTab {
           },
         }) {
           Stack({ alignContent: Alignment.TopStart }) {
-            Text(this.recentPeerStatus(peer))
-              .width('100%')
-              .fontSize(30)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(this.recentPeerStatusColor(peer))
-              .opacity(0.16)
-              .textAlign(TextAlign.End)
-              .maxLines(1)
-              .translate({ x: 10, y: -10 })
-              .zIndex(0);
-
             Column({ space: 3 }) {
               Text(this.recentPeerName(peer))
                 .width('100%')
@@ -604,10 +574,21 @@ export struct ConnectTab {
                 .maxLines(1)
                 .textOverflow({ overflow: TextOverflow.Ellipsis });
               Row({ space: 6 }) {
-                Text(this.recentPeerSubtitle(peer))
-                  .layoutWeight(1)
-                  .fontSize(12)
-                  .fontColor($r('app.color.neu_text_secondary'))
+                if (this.recentPeerSubtitle(peer).length > 0) {
+                  Text(this.recentPeerSubtitle(peer))
+                    .layoutWeight(1)
+                    .fontSize(12)
+                    .fontColor($r('app.color.neu_text_secondary'))
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis });
+                } else {
+                  Blank()
+                    .layoutWeight(1);
+                }
+                Text(this.recentPeerStatus(peer))
+                  .fontSize(11)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(this.recentPeerStatusColor(peer))
                   .maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis });
                 Text(peerProtocolName(peerProtocolOf(peer)))
@@ -636,9 +617,48 @@ export struct ConnectTab {
       .height(72)
       .clip(false);
     }
-    .width(this.recentCardFrameWidth())
+    .width(this.recentCardContentWidth())
     .height(80)
     .clip(false);
+  }
+
+  @Builder
+  private RecentCards() {
+    Column({ space: 6 }) {
+      if (this.recentPreview().length === 0) {
+        this.EmptyRecent();
+      } else {
+        ForEach(this.recentRowStarts(), (start: number) => {
+          if (this.recentColumnCount() === 1) {
+            Row() {
+              this.CompactRecentCard(this.recentPreview()[start]);
+            }
+            .width(this.recentFrameWidth())
+            .height(80)
+            .justifyContent(FlexAlign.Center)
+            .clip(false);
+          } else {
+            Row({ space: 16 }) {
+              this.CompactRecentCard(this.recentPreview()[start]);
+              if (start + 1 < this.recentPreview().length) {
+                this.CompactRecentCard(this.recentPreview()[start + 1]);
+              } else {
+                Blank()
+                  .width(this.recentCardContentWidth())
+                  .height(80);
+              }
+            }
+            .width(this.recentContentWidth())
+            .height(80)
+            .justifyContent(FlexAlign.Start)
+            .clip(false);
+          }
+        }, (start: number) => this.recentRowRenderKey(start));
+      }
+    }
+    .width(this.recentFrameWidth())
+    .padding({ top: 7 })
+    .alignItems(HorizontalAlign.Center);
   }
 
   @Builder
@@ -646,34 +666,11 @@ export struct ConnectTab {
     Column() {
       List({ scroller: this.scroller }) {
         ListItem() {
-          Column({ space: 6 }) {
-            if (this.recentPreview().length === 0) {
-              this.EmptyRecent();
-            } else {
-              ForEach(this.recentRowStarts(), (start: number) => {
-                Row({ space: 8 }) {
-                  this.CompactRecentCard(this.recentPreview()[start]);
-                  if (start + 1 < this.recentPreview().length) {
-                    this.CompactRecentCard(this.recentPreview()[start + 1]);
-                  } else {
-                    Blank()
-                      .width(this.recentCardFrameWidth())
-                      .height(80);
-                  }
-                }
-                .width(this.recentFrameWidth())
-                .height(80)
-                .justifyContent(FlexAlign.Center)
-                .clip(false);
-              }, (start: number) => this.recentRowRenderKey(start));
-            }
+          Column() {
+            this.RecentCards();
           }
           .width(this.recentFrameWidth())
-          .padding({
-            top: 7,
-            bottom: (this.wideLayout ? 52 : 132) + this.bottomAvoidInset,
-          })
-          .alignItems(HorizontalAlign.Center);
+          .padding({ bottom: (this.wideLayout ? 52 : 132) + this.bottomAvoidInset });
         }
       }
       .layoutWeight(1)
@@ -689,52 +686,67 @@ export struct ConnectTab {
   }
 
   @Builder
-  private Workspace() {
-    if (this.isCompact()) {
-      Column({ space: 4 }) {
-        this.ConnectionStage();
-        Stack() {
-          this.RecentWorkspace();
-        }
-        .layoutWeight(1)
-        .width(this.recentFrameWidth())
-        .clip(false)
-        .zIndex(0)
+  private WideWorkspace() {
+    Row({ space: 36 }) {
+      this.ConnectionStage();
+      Stack() {
+        this.RecentWorkspace();
       }
-      .layoutWeight(1)
-      .width('100%')
-      .padding({ left: this.useWideContentAnchor() ? this.wideWorkspaceLeftInset() : 0 })
-      .alignItems(this.useWideContentAnchor() ? HorizontalAlign.Start : HorizontalAlign.Center);
-    } else {
-      Row({ space: 44 }) {
-        this.ConnectionStage();
-        Stack() {
-          this.RecentWorkspace();
-        }
-        .width(this.recentFrameWidth())
-        .height('100%')
-        .clip(false)
-        .zIndex(0)
-      }
-      .layoutWeight(1)
-      .width('100%')
-      .padding({ left: this.useWideContentAnchor() ? this.wideWorkspaceLeftInset() : 0 })
-      .justifyContent(this.useWideContentAnchor() ? FlexAlign.Start : FlexAlign.Center)
-      .alignItems(VerticalAlign.Top);
+      .width(this.recentFrameWidth())
+      .height('100%')
+      .clip(false)
+      .zIndex(0);
     }
+    .layoutWeight(1)
+    .width('100%')
+    .justifyContent(FlexAlign.Center)
+    .alignItems(VerticalAlign.Top);
+  }
+
+  @Builder
+  private CompactWorkspace() {
+    Scroll(this.scroller) {
+      Column() {
+        Blank()
+          .width('100%')
+          .height(this.pageTopClearance());
+        Column({ space: 16 }) {
+          this.ConnectionStage();
+          this.RecentCards();
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Center);
+      }
+      .width('100%')
+      .padding({ bottom: (this.wideLayout ? 52 : 132) + this.bottomAvoidInset })
+      .alignItems(HorizontalAlign.Center);
+    }
+    .width('100%')
+    .height('100%')
+    .align(Alignment.Top)
+    .scrollable(ScrollDirection.Vertical)
+    .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true });
+  }
+
+  private pageTopClearance(): number {
+    return this.wideLayout ? Math.max(this.titleSpacerHeight + 36, 56) : Math.max(this.titleSpacerHeight, 40);
   }
 
   build() {
     Column() {
-      Blank()
-        .width('100%')
-        .height(this.titleSpacerHeight)
-        .flexShrink(0);
-      this.Workspace();
+      if (this.isCompact()) {
+        this.CompactWorkspace();
+      } else {
+        Blank()
+          .width('100%')
+          .height(this.pageTopClearance())
+          .flexShrink(0);
+        this.WideWorkspace();
+      }
     }
     .width('100%')
     .height('100%')
-    .padding({ top: RustDeskLayoutTokens.PAGE_CONTENT_TOP_PADDING })
     .alignItems(HorizontalAlign.Center)
     .backgroundColor($r('app.color.neu_base'))
     .onAreaChange((_oldArea: Area, newArea: Area) => {

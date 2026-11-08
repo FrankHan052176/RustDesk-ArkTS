@@ -1,10 +1,15 @@
 import { common, wantAgent, WantAgent } from '@kit.AbilityKit';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { notificationManager } from '@kit.NotificationKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const DOMAIN = 0xFF00;
 const TAG = 'RustDeskHostBg';
+// The host records this screen with OH_AVScreenCapture, which the continuous-task
+// documentation lists as `audioRecording` ("录音、录屏退后台"). EntryAbility must
+// declare the same item in module.json5 `backgroundModes`; the system refuses a
+// mode the UIAbility has not declared.
 const AUDIO_RECORDING_BACKGROUND_MODE = 'audioRecording';
 const CONTROLLED_HOST_REQUEST_CODE = 27;
 
@@ -22,12 +27,21 @@ export class ControlledHostBackgroundService {
     this.onCancelled = onCancelled;
   }
 
-  async start(): Promise<boolean> {
+  /**
+   * Starts the continuous task one host run needs behind it.
+   *
+   * The empty string means this instance owns a task id. Anything else is the
+   * reason the system really gave: a rejection carries a BusinessError code
+   * (a mode this UIAbility has not declared, a missing permission), and that
+   * code is the only thing that identifies it. Nothing is reported as started
+   * without a task id.
+   */
+  async start(): Promise<string> {
     if (this.taskId >= 0) {
-      return true;
+      return '';
     }
     if (this.startInFlight) {
-      return false;
+      return '上一个被看服务后台任务请求尚未结束';
     }
     const currentGeneration = this.generation;
     this.startInFlight = true;
@@ -40,19 +54,24 @@ export class ControlledHostBackgroundService {
         if (taskId !== undefined && taskId >= 0) {
           await backgroundTaskManager.stopBackgroundRunning(this.context, taskId).catch(() => {});
         }
-        return false;
+        return '被看服务启动已被取消';
       }
       if (taskId === undefined || taskId < 0) {
-        return false;
+        return '无法启动被看服务后台任务（系统未返回长时任务 ID）';
       }
       this.taskId = taskId;
       this.notificationId = notification.notificationId;
       this.registerCancellation();
       hilog.info(DOMAIN, TAG, 'View-only host background task started id=%{public}d', taskId);
-      return true;
+      return '';
     } catch (error) {
-      hilog.error(DOMAIN, TAG, 'View-only host background task failed: %{public}s', String(error));
-      return false;
+      const businessError = error as BusinessError;
+      const code: number = typeof businessError.code === 'number' ? businessError.code : -1;
+      const message: string = typeof businessError.message === 'string' && businessError.message.length > 0
+        ? businessError.message : String(error);
+      hilog.error(DOMAIN, TAG,
+        'View-only host background task failed code=%{public}d message=%{public}s', code, message);
+      return `无法启动被看服务后台任务（${code}：${message}）`;
     } finally {
       this.startInFlight = false;
     }

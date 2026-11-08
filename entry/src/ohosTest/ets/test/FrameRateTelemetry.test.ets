@@ -55,42 +55,38 @@ function plainTick(round: string, generation: string, display: number): string {
   });
 }
 
-/** The VNC/RDP wire before it has a frame-rate sample: nothing measured. */
-const VIEWER_TICK = '{"available":true,"source":"engine_viewer_snapshot","protocol":"vnc",'
-  + '"status":"connected","route":"direct","width":1920,"height":1080,"authenticated":true,'
-  + '"encrypted":true,"peerVerified":true,"keyboardAllowed":true,"inputGeneration":"3",'
-  + '"desiredFps":0,"framesAvailable":false,"receivedPackets":null,"decodedFrames":null,'
-  + '"submittedFrames":null,"nativeImporter":false,"codec":"","queuedUnits":null}';
-
-/** The fields of one direct-wire snapshot this suite varies. */
-interface DirectTick {
-  status: string;
-  framesAvailable: boolean;
+/** Fields of the real cumulative Viewer producer, not the obsolete rate fixture. */
+interface ViewerTick {
+  elapsedMs: number;
+  receivedPackets: number;
+  submittedFrames: number;
+  status?: string;
+  generation?: string;
+  intentRevision?: string;
   display?: number;
-  receivedFps: string | null;
-  submittedFps: string | null;
-  queuedUnits: string | null;
+  codec?: string;
+  queuedUnits?: number | null;
+  networkRttMs?: number | null;
 }
 
 /**
- * One direct VNC/RDP snapshot, in the shape `session_get_frame_rate_snapshot`
- * writes it: the phase and admission the wire publishes, the rates as decimal
- * strings or null, and the cumulative counters this build does not read.
+ * Current native fields plus the paired HAR's actual display/optional RTT.
+ * No framesAvailable or precomputed rates: the client must form its own window.
  */
-function directTick(fields: DirectTick): string {
-  const display = fields.display === undefined ? 0 : fields.display;
-  const rate = (value: string | null): string => value === null ? 'null' : '"' + value + '"';
-  return '{"available":true,"source":"engine_viewer_snapshot","protocol":"vnc"'
-    + ',"status":"' + fields.status + '"'
-    + ',"route":"direct","width":1280,"height":720,"authenticated":true,"encrypted":true'
-    + ',"peerVerified":true,"keyboardAllowed":true,"inputGeneration":"3","desiredFps":0'
-    + ',"display":' + display
-    + ',"framesAvailable":' + (fields.framesAvailable ? 'true' : 'false')
-    + ',"receivedUpdates":"1200","decodedFrames":null,"submittedFrames":"900"'
-    + ',"nativeImporter":false,"codec":"","queuedUnits":' + rate(fields.queuedUnits)
-    + ',"receivedFps":' + rate(fields.receivedFps)
-    + ',"submittedFps":' + rate(fields.submittedFps) + '}';
+function viewerTick(fields: ViewerTick): string {
+  const generation = fields.generation ?? '1';
+  const queued = fields.queuedUnits === undefined ? 0 : fields.queuedUnits;
+  return '{"available":true,"source":"engine_viewer_snapshot"'
+    + ',"generation":"' + generation + '","intentRevision":"' + (fields.intentRevision ?? generation) + '"'
+    + ',"desiredFps":120,"elapsedMs":' + fields.elapsedMs
+    + ',"status":"' + (fields.status ?? 'streaming') + '","display":' + (fields.display ?? 0)
+    + ',"receivedPackets":' + fields.receivedPackets + ',"submittedFrames":' + fields.submittedFrames
+    + ',"codec":"' + (fields.codec ?? 'H265') + '","queuedUnits":' + String(queued)
+    + ',"networkRttMs":' + String(fields.networkRttMs ?? null) + '}';
 }
+
+/** Observed runtime counters; display/RTT follow the paired native contract. */
+const VIEWER_TICK = viewerTick({ elapsedMs: 1223201, receivedPackets: 106399, submittedFrames: 106399 });
 
 /** A Core session with nothing published to read. */
 const NO_TICK = '{"available":false,"reason":"the connection has not published a status tick yet"}';
@@ -135,15 +131,16 @@ export default function frameRateTelemetryTest(): void {
       expect(parseFrameRateSnapshot('{"available":false,"reason":"unknown_session"}') !== undefined)
         .assertTrue();
 
-      // A direct wire before it has a sample counts no frames. Its null
-      // counters must not become 0.
+      // A cumulative Viewer reading is a baseline, not an instantaneous rate.
       const viewer = parseFrameRateSnapshot(VIEWER_TICK);
       expect(viewer !== undefined).assertTrue();
       expect((viewer as FrameRateSnapshot).kind).assertEqual('engine_viewer');
       expect((viewer as FrameRateSnapshot).measured()).assertFalse();
       expect((viewer as FrameRateSnapshot).receivedFps === null).assertTrue();
       expect((viewer as FrameRateSnapshot).submittedFps === null).assertTrue();
-      expect((viewer as FrameRateSnapshot).queuedUnits === null).assertTrue();
+      expect((viewer as FrameRateSnapshot).queuedUnits).assertEqual(0);
+      expect((viewer as FrameRateSnapshot).codec).assertEqual('H265');
+      expect((viewer as FrameRateSnapshot).networkRttMs === null).assertTrue();
 
       // A failed generation's rates do not describe the session's picture.
       const failed = parseFrameRateSnapshot(plainTick('12', '7', 0).replace('"failed":false', '"failed":true'));
@@ -167,131 +164,60 @@ export default function frameRateTelemetryTest(): void {
       }
     });
 
-    it('measures a direct wire only while it streams and admits a real sample', 0, () => {
-      const measured = parseFrameRateSnapshot(directTick({
-        status: 'streaming',
-        framesAvailable: true,
-        receivedFps: '58',
-        submittedFps: '44',
-        queuedUnits: null,
-      }));
-      expect(measured !== undefined).assertTrue();
-      const reading = measured as FrameRateSnapshot;
-      expect(reading.kind).assertEqual('measured');
-      expect(reading.measured()).assertTrue();
-      // The direct wire decodes one display and names no decoder round or
-      // generation, so the reading is bound to its session and display alone.
-      expect(reading.display).assertEqual(0);
-      expect(reading.round).assertEqual('');
-      expect(reading.generation).assertEqual('');
-      expect(reading.receivedFps).assertEqual(58);
-      expect(reading.submittedFps).assertEqual(44);
-      // A direct wire measures no queue depth: absent, never zero.
-      expect(reading.queuedUnits === null).assertTrue();
+    it('differences adjacent real Viewer counters over native elapsed time, including measured zero', 0, () => {
+      const telemetry = new FrameRateTelemetry();
+      expect(telemetry.shouldRead('viewer:epoch-1', 0)).assertTrue();
+      const first = telemetry.sample(VIEWER_TICK, 0) as FrameRateSnapshot;
+      expect(first.measured()).assertFalse();
+      expect(first.receivedFps === null).assertTrue();
+      expect(first.submittedFps === null).assertTrue();
+      expect(first.generation).assertEqual('1');
+      expect(first.intentRevision).assertEqual('1');
 
-      // A measured zero is still a measurement, and differs from "not measured".
-      const zero = parseFrameRateSnapshot(directTick({
-        status: 'streaming',
-        framesAvailable: true,
-        receivedFps: '0',
-        submittedFps: '0',
-        queuedUnits: null,
-      })) as FrameRateSnapshot;
-      expect(zero.kind).assertEqual('measured');
+      // The two runtime samples are 1018ms apart, not a fabricated 1s window.
+      expect(telemetry.shouldRead('viewer:epoch-1', 1019)).assertTrue();
+      const next = telemetry.sample(viewerTick({
+        elapsedMs: 1224219, receivedPackets: 106502, submittedFrames: 106501,
+      }), 0) as FrameRateSnapshot;
+      expect(next.measured()).assertTrue();
+      expect(next.receivedFps).assertEqual(103000 / 1018);
+      expect(next.submittedFps).assertEqual(102000 / 1018);
+      expect(telemetry.consumeFrameReset()).assertFalse();
+      const shown = applyFrameRateSnapshot(emptyQualityTelemetry(), next, '120');
+      expect(shown.receivedFps).assertEqual('101.2');
+      expect(shown.submittedFps).assertEqual('100.2');
+      expect(shown.requestedFps).assertEqual('120');
+
+      // Counters unchanged over positive native time really measure zero.
+      const zero = telemetry.sample(viewerTick({
+        elapsedMs: 1225219, receivedPackets: 106502, submittedFrames: 106501,
+      }), 0) as FrameRateSnapshot;
+      expect(zero.measured()).assertTrue();
       expect(zero.receivedFps).assertEqual(0);
       expect(zero.submittedFps).assertEqual(0);
-
-      // Half a sample is still a measurement: the rate the engine left out is
-      // unknown, not zero, and it does not blank the rate beside it.
-      const partial = parseFrameRateSnapshot(directTick({
-        status: 'streaming',
-        framesAvailable: true,
-        receivedFps: null,
-        submittedFps: '44',
-        queuedUnits: null,
-      })) as FrameRateSnapshot;
-      expect(partial.kind).assertEqual('measured');
-      expect(partial.receivedFps === null).assertTrue();
-      expect(partial.submittedFps).assertEqual(44);
-
-      // A wire that is not streaming, or that publishes no sample, measured
-      // nothing even though its counters are present.
-      const idleTicks = [
-        directTick({ status: 'opening_surface', framesAvailable: true, receivedFps: '58', submittedFps: '44', queuedUnits: null }),
-        directTick({ status: 'streaming', framesAvailable: false, receivedFps: null, submittedFps: null, queuedUnits: null }),
-        directTick({ status: 'connecting', framesAvailable: false, receivedFps: null, submittedFps: null, queuedUnits: null }),
-      ];
-      for (const idle of idleTicks) {
-        const viewer = parseFrameRateSnapshot(idle) as FrameRateSnapshot;
-        expect(viewer.kind).assertEqual('engine_viewer');
-        expect(viewer.measured()).assertFalse();
-        expect(viewer.receivedFps === null).assertTrue();
-        expect(viewer.submittedFps === null).assertTrue();
-      }
-
-      // A sample the wire wrote in a spelling this build cannot read is
-      // unknown, never zero.
-      const broken = parseFrameRateSnapshot(directTick({
-        status: 'streaming',
-        framesAvailable: true,
-        receivedFps: '59.5',
-        submittedFps: 'nope',
-        queuedUnits: null,
-      })) as FrameRateSnapshot;
-      expect(broken.measured()).assertTrue();
-      expect(broken.receivedFps === null).assertTrue();
-      expect(broken.submittedFps === null).assertTrue();
     });
 
-    it('rejects a direct sample with a missing or malformed display and keeps a declared one', 0, () => {
-      const streaming = directTick({
-        status: 'streaming',
-        framesAvailable: true,
-        receivedFps: '58',
-        submittedFps: '44',
-        queuedUnits: null,
-      });
-      // The contract always names the display, so a missing or malformed one is
-      // an unreadable packet, not a display to relabel as 0.
+    it('requires the Viewer dial/display identities and never relabels another display', 0, () => {
+      const streaming = VIEWER_TICK;
       const unreadable = [
         streaming.replace('"display":0,', ''),
         streaming.replace('"display":0,', '"display":-1,'),
         streaming.replace('"display":0,', '"display":"0",'),
         streaming.replace('"display":0,', '"display":1.5,'),
+        streaming.replace('"generation":"1",', ''),
+        streaming.replace('"intentRevision":"1",', ''),
       ];
       for (const packet of unreadable) {
         expect(parseFrameRateSnapshot(packet) === undefined).assertTrue();
       }
 
-      // A genuinely declared other display is retained, so a poll for display 0
-      // does not consume the reading that belongs to display 1.
-      const declared = parseFrameRateSnapshot(directTick({
-        status: 'streaming',
-        framesAvailable: true,
-        display: 1,
-        receivedFps: '58',
-        submittedFps: '44',
-        queuedUnits: null,
-      })) as FrameRateSnapshot;
+      const otherDisplay = viewerTick({ elapsedMs: 1000, receivedPackets: 60, submittedFrames: 50, display: 1 });
+      const declared = parseFrameRateSnapshot(otherDisplay) as FrameRateSnapshot;
       expect(declared.display).assertEqual(1);
       const telemetry = new FrameRateTelemetry();
-      expect(telemetry.shouldRead('direct:vnc', 0)).assertTrue();
-      expect(telemetry.sample(directTick({
-        status: 'streaming',
-        framesAvailable: true,
-        display: 1,
-        receivedFps: '58',
-        submittedFps: '44',
-        queuedUnits: null,
-      }), 0) === undefined).assertTrue();
-      expect(telemetry.sample(directTick({
-        status: 'streaming',
-        framesAvailable: true,
-        display: 1,
-        receivedFps: '58',
-        submittedFps: '44',
-        queuedUnits: null,
-      }), 1) !== undefined).assertTrue();
+      expect(telemetry.shouldRead('viewer:epoch-1', 0)).assertTrue();
+      expect(telemetry.sample(otherDisplay, 0) === undefined).assertTrue();
+      expect((telemetry.sample(otherDisplay, 1) as FrameRateSnapshot).submittedFps === null).assertTrue();
     });
 
     it('keeps a decimal string only inside the safe numeric bounds', 0, () => {
@@ -402,63 +328,99 @@ export default function frameRateTelemetryTest(): void {
       expect(telemetry.consumeFrameReset()).assertFalse();
     });
 
-    it('publishes a direct wire sample and drops it the moment the wire stops measuring', 0, () => {
+    it('rebuilds Viewer windows on dial, display and lifecycle changes', 0, () => {
       const telemetry = new FrameRateTelemetry();
-      expect(telemetry.shouldRead('direct:vnc', 0)).assertTrue();
+      expect(telemetry.shouldRead('session:core:epoch-1', 0)).assertTrue();
+      telemetry.sample(viewerTick({ elapsedMs: 1000, receivedPackets: 100, submittedFrames: 90 }), 0);
+      const measured = telemetry.sample(viewerTick({ elapsedMs: 2000, receivedPackets: 160, submittedFrames: 135 }), 0);
+      expect((measured as FrameRateSnapshot).submittedFps).assertEqual(45);
 
-      // A streaming direct wire publishes its own rates, with no round or
-      // generation to tell apart.
-      const first = telemetry.sample(directTick({
-        status: 'streaming',
-        framesAvailable: true,
-        receivedFps: '58',
-        submittedFps: '44',
-        queuedUnits: null,
-      }), 0);
-      expect(first !== undefined).assertTrue();
-      expect((first as FrameRateSnapshot).submittedFps).assertEqual(44);
-      expect(telemetry.consumeFrameReset()).assertFalse();
-      expect(telemetry.sample(directTick({
-        status: 'streaming',
-        framesAvailable: true,
-        receivedFps: '59',
-        submittedFps: '45',
-        queuedUnits: null,
-      }), 0) !== undefined).assertTrue();
-
-      // The wire stops measuring (opening a new surface, or it failed): the rows
-      // on screen must not outlive it, and the old rate must not be republished
-      // as if it were current.
-      expect(telemetry.sample(directTick({
-        status: 'opening_surface',
-        framesAvailable: false,
-        receivedFps: null,
-        submittedFps: null,
-        queuedUnits: null,
-      }), 0) === undefined).assertTrue();
+      const newDial = telemetry.sample(viewerTick({
+        generation: '2', elapsedMs: 50, receivedPackets: 3, submittedFrames: 2,
+      }), 0) as FrameRateSnapshot;
+      expect(newDial.measured()).assertFalse();
+      expect(newDial.submittedFps === null).assertTrue();
       expect(telemetry.consumeFrameReset()).assertTrue();
       expect(telemetry.consumeFrameReset()).assertFalse();
-      expect(telemetry.sample(directTick({
-        status: 'streaming',
-        framesAvailable: true,
-        receivedFps: '60',
-        submittedFps: '46',
-        queuedUnits: null,
-      }), 0) !== undefined).assertTrue();
+      const dialWindow = telemetry.sample(viewerTick({
+        generation: '2', elapsedMs: 1050, receivedPackets: 63, submittedFrames: 52,
+      }), 0) as FrameRateSnapshot;
+      expect(dialWindow.submittedFps).assertEqual(50);
 
-      // A different session cannot reuse the last one's rates: the binding
-      // resets, so the first sample of the new session is its own.
-      expect(telemetry.shouldRead('direct:rdp', 2000)).assertTrue();
-      const other = telemetry.sample(directTick({
-        status: 'streaming',
-        framesAvailable: true,
-        receivedFps: '30',
-        submittedFps: '20',
-        queuedUnits: null,
-      }), 0);
-      expect(other !== undefined).assertTrue();
-      expect((other as FrameRateSnapshot).receivedFps).assertEqual(30);
-      expect((other as FrameRateSnapshot).submittedFps).assertEqual(20);
+      const displayBaseline = telemetry.sample(viewerTick({
+        generation: '2', display: 1, elapsedMs: 2050, receivedPackets: 120, submittedFrames: 100,
+      }), 1) as FrameRateSnapshot;
+      expect(displayBaseline.measured()).assertFalse();
+      expect(displayBaseline.receivedFps === null).assertTrue();
+      expect(telemetry.consumeFrameReset()).assertTrue();
+      const displayWindow = viewerTick({
+        generation: '2', display: 1, elapsedMs: 3050, receivedPackets: 180, submittedFrames: 150,
+      });
+      expect((telemetry.sample(displayWindow, 1) as FrameRateSnapshot).submittedFps).assertEqual(50);
+
+      // Same session/core id, but another lifecycle must not reuse this window.
+      expect(telemetry.shouldRead('session:core:epoch-2', 4000)).assertTrue();
+      const nextLifecycle = telemetry.sample(displayWindow, 1) as FrameRateSnapshot;
+      expect(nextLifecycle.measured()).assertFalse();
+      expect(nextLifecycle.submittedFps === null).assertTrue();
+      expect(telemetry.consumeFrameReset()).assertTrue();
+      expect(telemetry.consumeFrameReset()).assertFalse();
+    });
+
+    it('clears Viewer FPS outside streaming and requires a fresh streaming baseline', 0, () => {
+      const telemetry = new FrameRateTelemetry();
+      telemetry.shouldRead('viewer:epoch-1', 0);
+      telemetry.sample(viewerTick({ elapsedMs: 1000, receivedPackets: 100, submittedFrames: 90 }), 0);
+      telemetry.sample(viewerTick({ elapsedMs: 2000, receivedPackets: 160, submittedFrames: 135 }), 0);
+      const idle = telemetry.sample(viewerTick({
+        status: 'opening_surface', elapsedMs: 3000, receivedPackets: 170, submittedFrames: 140,
+      }), 0) as FrameRateSnapshot;
+      expect(idle.measured()).assertFalse();
+      expect(idle.submittedFps === null).assertTrue();
+      expect(telemetry.consumeFrameReset()).assertTrue();
+      expect(telemetry.consumeFrameReset()).assertFalse();
+      const resumed = telemetry.sample(viewerTick({
+        elapsedMs: 4000, receivedPackets: 220, submittedFrames: 180,
+      }), 0) as FrameRateSnapshot;
+      expect(resumed.measured()).assertFalse();
+      expect(resumed.receivedFps === null).assertTrue();
+      const next = telemetry.sample(viewerTick({
+        elapsedMs: 5000, receivedPackets: 280, submittedFrames: 230,
+      }), 0) as FrameRateSnapshot;
+      expect(next.receivedFps).assertEqual(60);
+      expect(next.submittedFps).assertEqual(50);
+    });
+
+    it('does not turn stalled time, reversed time or counter rollback into a Viewer rate', 0, () => {
+      const telemetry = new FrameRateTelemetry();
+      telemetry.shouldRead('viewer:epoch-1', 0);
+      telemetry.sample(viewerTick({ elapsedMs: 1000, receivedPackets: 100, submittedFrames: 90 }), 0);
+      const stalled = telemetry.sample(viewerTick({
+        elapsedMs: 1000, receivedPackets: 100, submittedFrames: 90,
+      }), 0) as FrameRateSnapshot;
+      expect(stalled.measured()).assertFalse();
+      expect(stalled.submittedFps === null).assertTrue();
+      expect(telemetry.consumeFrameReset()).assertTrue();
+      const reversed = telemetry.sample(viewerTick({
+        elapsedMs: 900, receivedPackets: 100, submittedFrames: 90,
+      }), 0) as FrameRateSnapshot;
+      expect(reversed.measured()).assertFalse();
+      expect(reversed.receivedFps === null).assertTrue();
+      const forward = telemetry.sample(viewerTick({
+        elapsedMs: 1900, receivedPackets: 160, submittedFrames: 140,
+      }), 0) as FrameRateSnapshot;
+      expect(forward.submittedFps).assertEqual(50);
+      const rollback = telemetry.sample(viewerTick({
+        elapsedMs: 2900, receivedPackets: 10, submittedFrames: 145,
+      }), 0) as FrameRateSnapshot;
+      expect(rollback.measured()).assertFalse();
+      expect(rollback.receivedFps === null).assertTrue();
+      expect(rollback.submittedFps === null).assertTrue();
+      const rebuilt = telemetry.sample(viewerTick({
+        elapsedMs: 3900, receivedPackets: 70, submittedFrames: 195,
+      }), 0) as FrameRateSnapshot;
+      expect(rebuilt.receivedFps).assertEqual(60);
+      expect(rebuilt.submittedFps).assertEqual(50);
     });
   });
 
@@ -551,8 +513,8 @@ export default function frameRateTelemetryTest(): void {
 
       // A reading with no counters clears the frame rows rather than showing
       // zeros, and still keeps the session's own numbers.
-      const viewer = parseFrameRateSnapshot(VIEWER_TICK) as FrameRateSnapshot;
-      const cleared = applyFrameRateSnapshot(running, viewer, '90');
+      const unavailable = parseFrameRateSnapshot(NO_TICK) as FrameRateSnapshot;
+      const cleared = applyFrameRateSnapshot(running, unavailable, '90');
       expect(cleared.submittedFps).assertEqual('');
       expect(cleared.receivedFps).assertEqual('');
       expect(cleared.queuedUnits).assertEqual('');
@@ -584,60 +546,53 @@ export default function frameRateTelemetryTest(): void {
       expect(empty.targetBitrateKbps).assertEqual('');
     });
 
-    it('shows a direct wire\'s own rates and keeps an unmeasured queue row as dashes', 0, () => {
+    it('publishes Viewer codec, queue and RTT before FPS, and clears unknown facts without inventing values', 0, () => {
       const running = mergeQualityStatus(emptyQualityTelemetry(), {
         speed: '123.45kB/s',
         delay: '23',
         targetBitrate: '8000',
         codec: 'H265',
       });
-      const streaming = parseFrameRateSnapshot(directTick({
-        status: 'streaming',
-        framesAvailable: true,
-        receivedFps: '58',
-        submittedFps: '44',
-        queuedUnits: null,
-      })) as FrameRateSnapshot;
-      const applied = applyFrameRateSnapshot(running, streaming, '60');
-      expect(applied.submittedFps).assertEqual('44');
-      expect(applied.receivedFps).assertEqual('58');
-      // A direct wire measures no queue depth, so the row stays unmeasured --
-      // the panel's `--`, not a fabricated 0.
-      expect(applied.queuedUnits).assertEqual('');
+      const telemetry = new FrameRateTelemetry();
+      telemetry.shouldRead('viewer:epoch-1', 0);
+      const baseline = telemetry.sample(viewerTick({
+        elapsedMs: 1000, receivedPackets: 60, submittedFrames: 44,
+        codec: 'H264', queuedUnits: 2, networkRttMs: 31,
+      }), 0) as FrameRateSnapshot;
+      const applied = applyFrameRateSnapshot(running, baseline, '60');
+      expect(applied.submittedFps).assertEqual('');
+      expect(applied.receivedFps).assertEqual('');
+      expect(applied.queuedUnits).assertEqual('2');
       expect(applied.requestedFps).assertEqual('60');
-      // The session's own numbers survive a direct frame reading.
-      expect(applied.networkRttMs).assertEqual('23');
+      expect(applied.networkRttMs).assertEqual('31');
+      expect(applied.codec).assertEqual('H264');
       expect(applied.receiveBandwidthKBs).assertEqual('123.45');
       expect(applied.targetBitrateKbps).assertEqual('8000');
-      expect(applied.codec).assertEqual('H265');
 
-      // A measured zero from the wire is a reading and shows as 0, never `--`.
-      const zero = parseFrameRateSnapshot(directTick({
-        status: 'streaming',
-        framesAvailable: true,
-        receivedFps: '0',
-        submittedFps: '0',
-        queuedUnits: null,
-      })) as FrameRateSnapshot;
-      const zeroed = applyFrameRateSnapshot(running, zero, '60');
+      const zero = telemetry.sample(viewerTick({
+        elapsedMs: 2000, receivedPackets: 60, submittedFrames: 44, networkRttMs: 31,
+      }), 0) as FrameRateSnapshot;
+      const zeroed = applyFrameRateSnapshot(applied, zero, '60');
       expect(zeroed.submittedFps).assertEqual('0');
       expect(zeroed.receivedFps).assertEqual('0');
-      expect(zeroed.queuedUnits).assertEqual('');
+      expect(zeroed.queuedUnits).assertEqual('0');
 
-      // A wire that stopped measuring clears the frame rows and keeps the rest.
-      const idle = parseFrameRateSnapshot(directTick({
-        status: 'opening_surface',
-        framesAvailable: false,
-        receivedFps: null,
-        submittedFps: null,
-        queuedUnits: null,
-      })) as FrameRateSnapshot;
-      const cleared = applyFrameRateSnapshot(applied, idle, '60');
+      const idle = telemetry.sample(viewerTick({
+        status: 'closing', elapsedMs: 3000, receivedPackets: 60, submittedFrames: 44,
+        codec: '', queuedUnits: null, networkRttMs: null,
+      }), 0) as FrameRateSnapshot;
+      const cleared = applyFrameRateSnapshot(zeroed, idle, '60');
       expect(cleared.submittedFps).assertEqual('');
       expect(cleared.receivedFps).assertEqual('');
       expect(cleared.queuedUnits).assertEqual('');
-      expect(cleared.networkRttMs).assertEqual('23');
-      expect(cleared.codec).assertEqual('H265');
+      expect(cleared.networkRttMs).assertEqual('');
+      expect(cleared.codec).assertEqual('');
+
+      // Proto3 default 0 is not evidence of a measured RTT on this producer.
+      const noRtt = parseFrameRateSnapshot(viewerTick({
+        elapsedMs: 3000, receivedPackets: 60, submittedFrames: 44, networkRttMs: 0,
+      })) as FrameRateSnapshot;
+      expect(noRtt.networkRttMs === null).assertTrue();
     });
   });
 }

@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "top.frankhan.resk",
     "vendor": "rustdesk",
-    "versionCode": 343706824,
-    "versionName": "1.0.3.115",
+    "versionCode": 343706857,
+    "versionName": "1.0.3.148",
     "icon": "$media:resk",
     "label": "$string:app_name"
   }

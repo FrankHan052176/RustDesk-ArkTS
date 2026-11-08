@@ -419,7 +419,7 @@ export default function viewportModelTest(): void {
       }
     });
 
-    it('rejects a point the presented clip does not show', 0, () => {
+    it('uses the viewport clip for zoomed and panned canvas hit testing', 0, () => {
       const display: PeerDisplayInfo = { width: 1600, height: 1200, x: 0, y: 0 };
       const zoomedIn = presentedModel('fit', display);
       zoomedIn.setViewTransform(2, 0, 0, 0);
@@ -428,11 +428,19 @@ export default function viewportModelTest(): void {
       if (!zoomedSpace) {
         return;
       }
-      // The picture is scaled inside a clip that stays the fit rectangle, so the
-      // letterbox beside it is not part of the picture however the inverse transform
-      // maps that point.
+      // Enlarged content now fills the former letterbox. Only the full viewport
+      // clips the transformed canvas; input must follow the newly visible area.
       expect(isLocalPointInsidePaintRect(zoomedSpace, 500, 500)).assertTrue();
-      expect(isLocalPointInsidePaintRect(zoomedSpace, 500, 50)).assertFalse();
+      expect(isLocalPointInsidePaintRect(zoomedSpace, 500, 50)).assertTrue();
+      expect(isLocalPointInsidePaintRect(zoomedSpace, 500, -1)).assertFalse();
+
+      zoomedIn.setViewTransform(1, 0, -200, 0);
+      const pannedSpace = zoomedIn.getCoordinateSpace();
+      expect(pannedSpace !== undefined).assertTrue();
+      if (pannedSpace) {
+        expect(isLocalPointInsidePaintRect(pannedSpace, 500, 50)).assertTrue();
+        expect(isLocalPointInsidePaintRect(pannedSpace, 500, 900)).assertFalse();
+      }
 
       const zoomedOut = presentedModel('fit', display);
       zoomedOut.setViewTransform(0.5, 0, 0, 0);
@@ -441,7 +449,7 @@ export default function viewportModelTest(): void {
       if (!outSpace) {
         return;
       }
-      // A zoomed-out picture leaves an empty margin inside that same clip.
+      // A zoomed-out picture still leaves a non-interactive empty margin.
       expect(isLocalPointInsidePaintRect(outSpace, 500, 500)).assertTrue();
       expect(isLocalPointInsidePaintRect(outSpace, 500, 200)).assertFalse();
     });

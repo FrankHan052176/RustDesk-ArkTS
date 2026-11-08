@@ -41,7 +41,7 @@ import {
  * answered as such; nothing here defaults to "saved".
  *
  * The approved server profile comes only from `runtimeGetServerConfig`'s
- * explicit-save envelope; a host run never derives its server from a LAN scan,
+ * manual-edit envelope (legacy explicit-save is readable); a run never uses a LAN scan,
  * a target string or a mutable configuration.
  */
 export class NativeHostBridge {

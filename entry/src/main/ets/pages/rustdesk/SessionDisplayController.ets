@@ -27,6 +27,7 @@ export class SessionDisplayController {
   private platform: string = '';
   private refreshRate: number = DEFAULT_REFRESH_RATE;
   private awaitingAction: boolean = false;
+  private shareActive: boolean = false;
 
   constructor(
     viewport: RustDeskViewportModel,
@@ -55,7 +56,19 @@ export class SessionDisplayController {
     this.viewport.setPeerDisplays(displays, selection);
   }
 
+  setShareActive(active: boolean): void {
+    this.shareActive = active;
+  }
+
+  isShareActive(): boolean {
+    return this.shareActive;
+  }
+
   selectDisplay(sessionId: string, display: number): boolean {
+    if (this.shareActive) {
+      return false;
+    }
+    const previousDisplay = this.viewport.getCurrentDisplayIndex();
     if (!this.viewport.selectDisplay(display)) {
       return false;
     }
@@ -68,7 +81,10 @@ export class SessionDisplayController {
     const height = Math.max(Math.round(plan.videoSize.height), 1);
     this.awaitingAction = true;
     try {
-      if (!this.applyAction(this.bridge.switchDisplay(sessionId, selectedDisplay))) {
+      // peer_info already confirms the initial display. A same-display switch
+      // has no remote acknowledgement and must not create a pending switch.
+      if (selectedDisplay !== previousDisplay
+        && !this.applyAction(this.bridge.switchDisplay(sessionId, selectedDisplay))) {
         return false;
       }
       if (!this.applyAction(this.bridge.setSize(sessionId, selectedDisplay, width, height))) {
@@ -81,6 +97,9 @@ export class SessionDisplayController {
   }
 
   canChangeResolution(peerPlatform: string): boolean {
+    if (this.shareActive) {
+      return false;
+    }
     return peerPlatform.trim().toLowerCase() !== 'ohos';
   }
 
@@ -90,6 +109,9 @@ export class SessionDisplayController {
     resolution: ResolutionInfo,
     peerPlatform: string,
   ): boolean {
+    if (this.shareActive) {
+      return false;
+    }
     const selectedDisplay = this.viewport.getCurrentDisplayIndex();
     if (!this.canChangeResolution(peerPlatform)
       || !Number.isInteger(display)
@@ -114,7 +136,8 @@ export class SessionDisplayController {
   }
 
   /**
-   * Ask the peer for a capture rate.
+   * Queue a capture-rate request for the current session. Success confirms only
+   * queue admission, not that the peer applied this rate.
    *
    * The rate is the only picture control the operator sets. Encoding quality is
    * deliberately not offered: a quality level makes the app guess at a bandwidth
@@ -127,10 +150,20 @@ export class SessionDisplayController {
     }
     this.awaitingAction = true;
     try {
-      if (!this.applyAction(this.bridge.setCustomFps(sessionId, Math.round(refreshRate)))) {
+      const requestedFps = Math.round(refreshRate);
+      const response = this.bridge.setCustomFps(sessionId, requestedFps);
+      if (!this.applyAction(response)) {
         return false;
       }
-      this.refreshRate = Math.round(refreshRate);
+      if (response.scope !== 'session' || response.requested_fps !== requestedFps) {
+        this.reportActionError({
+          ok: false,
+          action: response.action,
+          message: '未收到本次会话的帧率请求排队回执',
+        });
+        return false;
+      }
+      this.refreshRate = requestedFps;
       return true;
     } finally {
       this.awaitingAction = false;

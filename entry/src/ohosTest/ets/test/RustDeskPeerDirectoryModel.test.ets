@@ -9,6 +9,9 @@ import {
   peerProjectionListsEqual,
   peerDisplaySubtitle,
   peerDisplayTitle,
+  peerLivenessSource,
+  peerReachability,
+  peerStatusKind,
   preservePeerOnlineStates,
 } from '../../../main/ets/pages/rustdesk/RustDeskPeerDirectoryModel';
 
@@ -92,6 +95,44 @@ export default function rustDeskPeerDirectoryModelTest(): void {
       expect(sameLan.online).assertTrue();
       expect(other.online).assertTrue();
       expect(vnc.online).assertUndefined();
+    });
+
+    it('reads a direct RustDesk endpoint from its own TCP result, never as hbbs', 0, () => {
+      const direct = makePeer('192.168.1.20:21118', 'recent');
+      direct.protocol = 'rustdesk';
+      direct.address = '192.168.1.20';
+      direct.port = 21118;
+
+      expect(peerLivenessSource(direct)).assertEqual('direct');
+      // A saved row nobody observed yet is unknown, and an hbbs answer it never
+      // asked for cannot fill it either.
+      expect(peerStatusKind(direct)).assertEqual('unknown');
+      direct.online = true;
+      expect(peerReachability(direct)).assertUndefined();
+      expect(peerStatusKind(direct)).assertEqual('unknown');
+
+      direct.directWireReachable = true;
+      expect(peerReachability(direct)).assertTrue();
+      expect(peerStatusKind(direct)).assertEqual('reachable');
+      direct.directWireReachable = false;
+      expect(peerStatusKind(direct)).assertEqual('unreachable');
+      // A direct endpoint is never submitted to the id server.
+      expect(collectPeerOnlineIds([[direct]]).length).assertEqual(0);
+    });
+
+    it('keeps an hbbs-answerable peer on the id server and off the socket', 0, () => {
+      const idPeer = makePeer('10001', 'lan');
+      idPeer.protocol = 'rustdesk';
+      idPeer.rustdeskIdOnly = true;
+      expect(peerLivenessSource(idPeer)).assertEqual('rendezvous');
+      // A TCP accept never stands in for the id server's answer.
+      idPeer.directWireReachable = true;
+      expect(peerReachability(idPeer)).assertUndefined();
+      expect(peerStatusKind(idPeer)).assertEqual('unknown');
+      idPeer.online = true;
+      expect(peerStatusKind(idPeer)).assertEqual('online');
+      idPeer.online = false;
+      expect(peerStatusKind(idPeer)).assertEqual('offline');
     });
 
 

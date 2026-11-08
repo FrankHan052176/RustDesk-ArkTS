@@ -197,11 +197,25 @@ function isRendezvousPeer(peer: PeerRecord): boolean {
   return !/^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(target) && !target.includes(':');
 }
 
+/**
+ * Which evidence may speak for a peer at all.
+ *
+ * A `rendezvous` peer is an account or ID that only the id server answers for; a
+ * `direct` peer is a wire endpoint this device dials itself. The ID collector,
+ * the state projection, the liveness probe and the card all read this one
+ * classification, so no row is filled from evidence never collected for its kind.
+ */
+export type PeerLivenessSource = 'rendezvous' | 'direct';
+
+export function peerLivenessSource(peer: PeerRecord): PeerLivenessSource {
+  return isRendezvousPeer(peer) ? 'rendezvous' : 'direct';
+}
+
 export function collectPeerOnlineIds(lists: PeerRecord[][]): string[] {
   const ids: string[] = [];
   for (let listIndex = 0; listIndex < lists.length; listIndex += 1) {
     for (let peerIndex = 0; peerIndex < lists[listIndex].length; peerIndex += 1) {
-      if (!isRendezvousPeer(lists[listIndex][peerIndex])) {
+      if (peerLivenessSource(lists[listIndex][peerIndex]) !== 'rendezvous') {
         continue;
       }
       const id = lists[listIndex][peerIndex].id.trim();
@@ -221,7 +235,7 @@ export function applyPeerOnlineStates(
   for (let listIndex = 0; listIndex < lists.length; listIndex += 1) {
     for (let peerIndex = 0; peerIndex < lists[listIndex].length; peerIndex += 1) {
       const peer = lists[listIndex][peerIndex];
-      if (!isRendezvousPeer(peer)) {
+      if (peerLivenessSource(peer) !== 'rendezvous') {
         continue;
       }
       if (onlines.indexOf(peer.id) >= 0) {
@@ -236,11 +250,32 @@ export function applyPeerOnlineStates(
 /**
  * What a card may show for this peer.
  *
- * A RustDesk peer reads only hbbs's `OnlineResponse`; an RDP/VNC peer reads only
- * its own direct TCP reachability. Neither source can fill the other's row.
+ * A rendezvous peer reads only hbbs's `OnlineResponse`; a direct peer reads only
+ * its own wire's TCP reachability. Neither source can fill the other's row, and
+ * an observation the chosen source never made stays undefined.
  */
 export function peerReachability(peer: PeerRecord): boolean | undefined {
-  return peerProtocolOf(peer) === 'rustdesk' ? peer.online : peer.directWireReachable;
+  return peerLivenessSource(peer) === 'rendezvous' ? peer.online : peer.directWireReachable;
+}
+
+/**
+ * The claim the collected evidence supports, apart from the words for it.
+ *
+ * hbbs answers `online`/`offline` for an ID. A direct wire's accepted socket
+ * answers `reachable`/`unreachable`: the port accepted, and nothing behind it was
+ * authenticated or identified. An observation neither source made is `unknown`.
+ */
+export type PeerStatusKind = 'online' | 'offline' | 'reachable' | 'unreachable' | 'unknown';
+
+export function peerStatusKind(peer: PeerRecord): PeerStatusKind {
+  const reachable = peerReachability(peer);
+  if (reachable === undefined) {
+    return 'unknown';
+  }
+  if (peerLivenessSource(peer) === 'rendezvous') {
+    return reachable ? 'online' : 'offline';
+  }
+  return reachable ? 'reachable' : 'unreachable';
 }
 
 export function peerProjectionListsEqual(left: PeerRecord[], right: PeerRecord[]): boolean {

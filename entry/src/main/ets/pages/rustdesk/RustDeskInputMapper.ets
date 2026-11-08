@@ -59,9 +59,9 @@ export class RustDeskCoordinateSpace {
    * The rectangle the current presentation clips the picture to, in pane
    * coordinates.
    *
-   * The native Surface's enclosing container is measured at the picture's own
-   * rectangle and clips the transformed picture to it. Hit testing follows that
-   * visible clip.
+   * The preview passes its full viewport here: the original picture bounds move
+   * with the user transform and must not crop the enlarged or panned canvas.
+   * Hit testing follows the same visible clip as presentation.
    */
   clipRect: RustDeskRect;
   viewScale: number;
@@ -465,13 +465,10 @@ export function resolveCoordinateSpace(
 /**
  * Whether a pane point is on the presented picture.
  *
- * Two things must hold. The picture is rendered inside a clip the presentation owns
- * — the mode's rectangle for the native Surface — and a point outside that clip
- * is not on the picture however the inverse
- * transform maps it: at a zoom-in the transformed picture reaches past the clip, and
- * a click on the letterbox beside it must not reach the peer. Inside the clip, the
- * point is mapped back through the user transform and must land on the picture
- * itself, which is what excludes the empty margin of a zoomed-out or panned picture.
+ * Two things must hold: the point is inside the presentation's viewport clip,
+ * and the inverse user transform lands on the original picture. This admits
+ * newly visible content after zooming or panning, but excludes empty margins
+ * and points beyond the viewport.
  */
 export function isLocalPointInsidePaintRect(space: RustDeskCoordinateSpace, localX: number, localY: number): boolean {
   if (!isPointInsideRect(space.clipRect, localX, localY)) {

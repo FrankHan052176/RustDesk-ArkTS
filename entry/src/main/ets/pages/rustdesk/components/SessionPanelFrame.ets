@@ -10,24 +10,20 @@ export struct SessionPanelFrame {
   private Empty() {}
 
   build() {
-    Column({ space: $r('app.float.space_8') }) {
+    Column({ space: $r('app.float.space_6') }) {
       Row({ space: $r('app.float.space_8') }) {
         Button({ type: ButtonType.Normal, stateEffect: true }) {
           SymbolGlyph($r('sys.symbol.chevron_left'))
-            .fontSize($r('app.float.icon_small'))
+            .fontSize(18)
             .fontColor([$r('app.color.neu_text_primary')]);
         }
-        .width($r('app.float.control_compact'))
-        .height($r('app.float.control_compact'))
+        .width(44)
+        .height(44)
         .padding(0)
         .backgroundColor($r('app.color.mica_control'))
-        .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
-          adaptiveColor: AdaptiveColor.DEFAULT,
-          scale: 0.56,
-        })
         .border({ width: 1, color: $r('app.color.mica_border') })
         .borderRadius($r('app.float.radius_10'))
-        .hoverEffect(HoverEffect.None)
+        .hoverEffect(HoverEffect.Auto)
         .accessibilityText('返回')
         .onClick((): void => {
           this.onBack();
@@ -35,7 +31,7 @@ export struct SessionPanelFrame {
 
         Text(this.title)
           .layoutWeight(1)
-          .fontSize($r('app.float.font_body_large'))
+          .fontSize($r('app.float.font_body'))
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.neu_text_primary'))
           .maxLines(1)
@@ -43,15 +39,11 @@ export struct SessionPanelFrame {
       }
       .width('100%')
       .height(44)
-      .padding({ left: $r('app.float.space_6'), right: $r('app.float.space_8') })
+      .padding({ left: 0, right: 8 })
       .alignItems(VerticalAlign.Center)
       .backgroundColor($r('app.color.mica_control'))
-      .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
-        adaptiveColor: AdaptiveColor.DEFAULT,
-        scale: 0.56,
-      })
       .border({ width: 1, color: $r('app.color.mica_border') })
-      .borderRadius($r('app.float.radius_14'))
+      .borderRadius($r('app.float.radius_10'))
       .clip(true)
       .flexShrink(0)
       .zIndex(2);
@@ -61,7 +53,7 @@ export struct SessionPanelFrame {
       }
       .width('100%')
       .layoutWeight(1)
-      .borderRadius($r('app.float.radius_14'))
+      .borderRadius($r('app.float.radius_10'))
       .clip(true)
       .zIndex(1);
     }

@@ -2,6 +2,11 @@ import { rustDeskNativeApi as native } from './RustDeskNativeApi';
 import { RemoteAudioState, SessionStartOptions } from './RustDeskSessionTypes';
 import { ActionResponse, NativeEvent } from './RustDeskTypes';
 
+interface SharedSessionOptions {
+  customFps?: number;
+  isViewOnly: boolean;
+}
+
 interface PresentationReceipt {
   generation: string;
   lifecycleEpoch: string;
@@ -92,6 +97,7 @@ export interface NativeSessionBridge {
   takeClipboard(sessionId: string): NativeClipboardResponse;
   takeClipboardImage(sessionId: string): Uint8Array;
   addSession(sessionId: string, target: string, options: SessionStartOptions): ActionResponse;
+  addSharedSession(sessionId: string, inviteCode: string, options: SessionStartOptions): ActionResponse;
   startSession(sessionId: string): ActionResponse;
   setViewOnly(sessionId: string, enabled: boolean): ActionResponse;
   /**
@@ -267,6 +273,11 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
 
   addSession(sessionId: string, target: string, options: SessionStartOptions): ActionResponse {
     return this.parseNativeResponse(() => native.sessionAdd(sessionId, target, JSON.stringify(options)));
+  }
+
+  addSharedSession(sessionId: string, inviteCode: string, options: SessionStartOptions): ActionResponse {
+    const sharedOptions: SharedSessionOptions = { customFps: options.customFps, isViewOnly: options.isViewOnly };
+    return this.parseNativeResponse(() => native.sessionAddShared(sessionId, inviteCode, JSON.stringify(sharedOptions)));
   }
 
   startSession(sessionId: string): ActionResponse {
