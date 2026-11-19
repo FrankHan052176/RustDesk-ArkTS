@@ -1,0 +1,66 @@
+# Resk compiles its Release packages locally: the rd-engine HAR and the app's private
+# luminous_neo dependency are not reachable from a public runner, and signing material must
+# never leave the operator's machine. AGCD injects rustdesk-ohrs.har and agcd-changelog.json,
+# runs the unsigned Release build, then signs the three-package suite. This workflow therefore
+# verifies only what a public checkout can prove and never handles secrets or publishes packages.
+name: Verify Resk repository
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  repository-check:
+    name: repository-check
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Verify repository configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Workflows stay parseable and secret-free: signing and publishing happen locally.
+          while IFS= read -r workflow; do
+            [[ -f "$workflow" ]] || continue
+            ruby -ryaml -e 'YAML.load_file(ARGV[0])' "$workflow"
+          done < <(git ls-files '.github/workflows/*.yml')
+          if grep -rn 'secrets\.' .github/workflows; then
+            echo 'CI must stay secret-free; signing and AGC publishing run locally through AGCD.' >&2
+            exit 1
+          fi
+
+          while IFS= read -r script; do
+            [[ -f "$script" ]] || continue
+            bash -n "$script"
+          done < <(git ls-files '*.sh')
+          python3 -m py_compile scripts/verify-native-har.py
+
+          # Injected release inputs and build packages never enter the repository.
+          git check-ignore -q agcd-changelog.json
+          git check-ignore -q rustdesk-ohrs.har
+          if git ls-files --error-unmatch agcd-changelog.json >/dev/null 2>&1; then
+            echo 'agcd-changelog.json is written by AGCD and must not be tracked.' >&2
+            exit 1
+          fi
+          if git ls-files | grep -nE '(^|/)(signingConfigs\.json|[^/]*\.(har|hap|app|hsp|p12|p7b|cer))$'; then
+            echo 'Signing material and build packages must not be tracked.' >&2
+            exit 1
+          fi
+
+          echo 'Repository checks passed.'
+          echo 'The unsigned Release build needs the private rd-engine HAR and luminous_neo; AGCD runs it locally.'

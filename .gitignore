@@ -30,6 +30,9 @@ signingConfigs.json
 *.p7b
 *.cer
 
+# AGCD writes the categorized release changelog beside the injected rd-engine HAR
+/agcd-changelog.json
+
 # Logs
 *.log
 
