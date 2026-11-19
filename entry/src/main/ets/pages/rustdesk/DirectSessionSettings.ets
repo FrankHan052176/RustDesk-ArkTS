@@ -57,6 +57,7 @@ export function copySessionDefaults(source: SessionDefaults): SessionDefaults {
   next.audioEnabled = source.audioEnabled;
   next.clipboardEnabled = source.clipboardEnabled;
   next.refreshRate = source.refreshRate;
+  next.imageQuality = source.imageQuality;
   next.preferredCodec = source.preferredCodec;
   next.gesturesEnabled = source.gesturesEnabled;
   next.toolbarExpanded = source.toolbarExpanded;

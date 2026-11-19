@@ -58,6 +58,12 @@ export interface SessionStartOptions {
   rdpScaleFactor?: number;
   rdpAudio?: boolean;
   vncQuality?: VncQuality;
+  /**
+   * Who is connecting, as the other side's approval prompt shows it: the
+   * signed-in account's name. Omitted when nobody is signed in, and the engine
+   * then names this device instead. A label only, never an identity.
+   */
+  localName?: string;
 }
 
 export interface RemoteFileEntry {

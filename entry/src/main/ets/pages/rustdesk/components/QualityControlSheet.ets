@@ -1,10 +1,13 @@
 import { FALLBACK_REFRESH_RATE } from '../RustDeskRefreshRate';
 import { QualityTelemetry } from '../RustDeskSessionTypes';
-import { PeerProtocol, SessionDefaults } from '../RustDeskDirectoryTypes';
+import { PeerProtocol, SessionDefaults, SessionImageQuality } from '../RustDeskDirectoryTypes';
 import { DirectSessionSettingsCard } from './DirectSessionSettingsCard';
 
 export interface QualityControlSheetProps {
   refreshRate: number;
+  /** The picture trade-off this session asked the other device for. */
+  imageQuality: SessionImageQuality;
+  onImageQualityChange: (quality: SessionImageQuality) => void;
   /** Rates this device can show, ascending. Comes from the panel, not a constant. */
   refreshRateChoices: number[];
   telemetry: QualityTelemetry;
@@ -50,6 +53,8 @@ struct TelemetryRow {
 @ComponentV2
 export struct QualityControlSheet {
   @Param refreshRate: number = 60;
+  @Param imageQuality: SessionImageQuality = 'balanced';
+  @Event onImageQualityChange: (quality: SessionImageQuality) => void = (_quality: SessionImageQuality) => {};
   @Param refreshRateChoices: number[] = [FALLBACK_REFRESH_RATE];
   /**
    * The rate the panel reports while the session runs, or 0 when unknown.
@@ -85,6 +90,43 @@ export struct QualityControlSheet {
    */
   private rateChoices(): number[] {
     return this.refreshRateChoices.length > 0 ? this.refreshRateChoices : [FALLBACK_REFRESH_RATE];
+  }
+
+  @Builder
+  private ImageQualityButton(quality: SessionImageQuality, label: string) {
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Text(label)
+        .fontSize($r('app.float.font_label'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.imageQuality === quality
+          ? $r('app.color.white')
+          : $r('app.color.neu_text_primary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis });
+    }
+    .layoutWeight(1)
+    .height(44)
+    .padding({ left: $r('app.float.space_6'), right: $r('app.float.space_6') })
+    .backgroundColor(this.imageQuality === quality
+      ? $r('app.color.brand_primary')
+      : $r('app.color.mica_control'))
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN, {
+      adaptiveColor: AdaptiveColor.DEFAULT,
+      scale: 0.56,
+    })
+    .border({
+      width: 1,
+      color: this.imageQuality === quality
+        ? $r('app.color.brand_primary')
+        : $r('app.color.mica_border'),
+    })
+    .borderRadius($r('app.float.radius_10'))
+    .hoverEffect(HoverEffect.None)
+    .accessibilityText(label)
+    .accessibilitySelected(this.imageQuality === quality)
+    .onClick((): void => {
+      this.onImageQualityChange(quality);
+    });
   }
 
   @Builder
@@ -160,6 +202,28 @@ export struct QualityControlSheet {
       Column({ space: $r('app.float.space_24') }) {
         if (this.protocol === 'rustdesk') {
         Column({ space: $r('app.float.space_8') }) {
+          Text('画面')
+            .fontSize($r('app.float.font_body_large'))
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'));
+
+          Row({ space: $r('app.float.space_6') }) {
+            this.ImageQualityButton('low', '流畅优先')
+            this.ImageQualityButton('balanced', '均衡')
+            this.ImageQualityButton('best', '清晰优先')
+          }
+          .width('100%')
+          .constraintSize({ maxWidth: 620 });
+
+          Text('网络较慢时选“流畅优先”，网络好时选“清晰优先”。')
+            .fontSize($r('app.float.font_caption'))
+            .fontColor($r('app.color.text_secondary'))
+            .maxLines(2);
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start);
+
+        Column({ space: $r('app.float.space_8') }) {
           Text('刷新率')
             .fontSize($r('app.float.font_body_large'))
             .fontWeight(FontWeight.Medium)
@@ -173,7 +237,7 @@ export struct QualityControlSheet {
           .width('100%')
           .constraintSize({ maxWidth: 620 });
 
-          Text('档位取自本机屏幕支持的刷新率。刷新率同时是远端采集上限；实际帧率取决于远端编码能力。')
+          Text('可选刷新率取自本机屏幕。它同时是对方画面帧率的上限；实际帧率取决于对方设备。')
             .fontSize($r('app.float.font_caption'))
             .fontColor($r('app.color.text_secondary'))
             .maxLines(3);
@@ -196,17 +260,16 @@ export struct QualityControlSheet {
         }
 
         Column({ space: 0 }) {
-          Text('连接遥测')
+          Text('连接信息')
             .fontSize($r('app.float.font_body_large'))
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'))
             .margin({ bottom: $r('app.float.space_4') });
 
-          // Only what the pipeline really reports: the Core's status tick gives
-          // the frame rates and the queue depth, the peer's quality events give
-          // the round trip, the bandwidth, the target bitrate and the codec.
-          // There is no source for a submission-path latency, a decode duration
-          // or an admission rate, so no row claims one.
+          // Only what the pipeline really reports: the engine's own counters give
+          // the frame rates, the queue depth and the codec, and the peer's delay
+          // probe gives the round trip. There is no source for a submission-path
+          // latency, a decode duration or an admission rate, so no row claims one.
           TelemetryRow({ label: $r('app.string.quality_submitted_fps'), value: this.rateText(this.telemetry.submittedFps) })
           TelemetryRow({ label: $r('app.string.quality_requested_fps'), value: this.rateText(this.telemetry.requestedFps) })
           TelemetryRow({ label: $r('app.string.quality_panel_refresh_rate'), value: this.panelRateText() })
@@ -214,8 +277,15 @@ export struct QualityControlSheet {
           TelemetryRow({ label: $r('app.string.quality_queued_units'), value: this.telemetry.queuedUnits })
           TelemetryRow({ label: $r('app.string.quality_codec'), value: this.telemetry.codec })
           TelemetryRow({ label: $r('app.string.quality_network_rtt'), value: this.rttText() })
-          TelemetryRow({ label: $r('app.string.quality_receive_bandwidth'), value: this.bandwidthText() })
-          TelemetryRow({ label: $r('app.string.quality_target_bitrate'), value: this.bitrateText() })
+          // Bandwidth and target bitrate come only from a peer's quality event,
+          // which this engine does not produce today. A row with no source is
+          // not shown as a permanent "--"; it appears when a value does.
+          if (this.bandwidthText().length > 0) {
+            TelemetryRow({ label: $r('app.string.quality_receive_bandwidth'), value: this.bandwidthText() })
+          }
+          if (this.bitrateText().length > 0) {
+            TelemetryRow({ label: $r('app.string.quality_target_bitrate'), value: this.bitrateText() })
+          }
         }
         .width('100%')
         .alignItems(HorizontalAlign.Start);

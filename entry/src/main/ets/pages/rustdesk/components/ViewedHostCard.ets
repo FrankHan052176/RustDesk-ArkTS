@@ -258,7 +258,7 @@ export struct ViewedHostCard {
   @Builder
   private IdentitySection() {
     Column({ space: 12 }) {
-      this.SectionHeading($r('sys.symbol.display'), '设备身份', '临时密码用于对方连接，可复制发给对方。');
+      this.SectionHeading($r('sys.symbol.display'), '本机 ID 与密码', '把 ID 和密码告诉对方，对方就能连接这台设备。');
       this.InsetValue('设备 ID', this.state.myId.length > 0 ? this.state.myId : '正在加载', true);
       this.PasswordInsetValue();
     }
@@ -303,7 +303,7 @@ export struct ViewedHostCard {
         }
       }
       LuminousButton({
-        label: this.running() ? '停止服务端' : '启动仅观看服务',
+        label: this.running() ? '停止共享' : '共享屏幕（对方只能观看）',
         controlWidth: this.fullActionWidth(),
         controlSizeMode: LuminousControlSize.Compact,
         tone: this.running() ? LuminousTone.Danger : LuminousTone.Accent,
@@ -312,7 +312,7 @@ export struct ViewedHostCard {
       if (!this.running()) {
         if (this.inputSimulatorSupported()) {
           LuminousButton({
-            label: '授权并启用远程控制',
+            label: '共享屏幕并允许对方操作',
             controlWidth: this.fullActionWidth(),
             controlSizeMode: LuminousControlSize.Compact,
             tone: LuminousTone.Accent,
@@ -321,7 +321,7 @@ export struct ViewedHostCard {
         }
       } else if (!this.state.inputEnabled && this.state.phase !== 'starting' && this.state.phase !== 'stopping' &&
         this.inputSimulatorSupported()) {
-        this.StatusNotice($r('sys.symbol.info_circle'), '仅观看；停止服务后可授权远程控制', false);
+        this.StatusNotice($r('sys.symbol.info_circle'), '对方现在只能观看。要允许对方操作，请先停止共享，再选择“共享屏幕并允许对方操作”。', false);
       }
       if (this.state.inputAuthorizationError.length > 0) {
         Row({ space: 10 }) {

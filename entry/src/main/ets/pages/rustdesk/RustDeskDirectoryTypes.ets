@@ -356,6 +356,17 @@ export class PeerOnlineStatusResult {
   message: string = '';
 }
 
+/**
+ * The picture trade-off asked of the other device, in the engine's own names:
+ * `low` favours responsiveness, `best` favours sharpness. `balanced` is what a
+ * RustDesk host does when nothing is asked.
+ */
+export type SessionImageQuality = 'low' | 'balanced' | 'best';
+
+export function isSessionImageQuality(value: string): boolean {
+  return value === 'low' || value === 'balanced' || value === 'best';
+}
+
 export class SessionDefaults {
   touchMode: boolean = true;
   relativeMouseMode: boolean = false;
@@ -366,6 +377,7 @@ export class SessionDefaults {
   clipboardEnabled: boolean = true;
   /** Requested RustDesk capture rate; direct protocols do not expose a frame-rate control. */
   refreshRate: number = 60;
+  imageQuality: SessionImageQuality = 'balanced';
   preferredCodec: string = 'auto';
   gesturesEnabled: boolean = true;
   toolbarExpanded: boolean = false;

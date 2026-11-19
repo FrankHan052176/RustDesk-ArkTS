@@ -37,7 +37,7 @@ export default function rustDeskServerProfileReplyTest(): void {
         return;
       }
       // This object is what sessionAdd options and peerQueryOnline carry.
-      const wire = JSON.parse(JSON.stringify(profile)) as ESObject;
+      const wire: ESObject = JSON.parse(JSON.stringify(profile));
       expect(wire.schemaVersion).assertEqual(2);
       expect(wire.approval).assertEqual('explicit-save');
       expect(wire.revision).assertEqual(7);
@@ -98,7 +98,7 @@ export default function rustDeskServerProfileReplyTest(): void {
       if (captured === undefined) {
         return;
       }
-      const capturedWire = JSON.parse(JSON.stringify(captured)) as ESObject;
+      const capturedWire: ESObject = JSON.parse(JSON.stringify(captured));
       expect(capturedWire.revision).assertEqual(7);
     });
 

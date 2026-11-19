@@ -9,6 +9,9 @@ import {
 import {
   LuminousButton,
   LuminousControlSize,
+  LuminousNeoTokens,
+  LuminousSegmentedControl,
+  LuminousSelectionItem,
   LuminousSurface,
   LuminousTone,
 } from 'luminous_neo';
@@ -21,21 +24,20 @@ import { ServerSettingsCard } from './ServerSettingsCard';
 import { SessionDefaultsCard } from './SessionDefaultsCard';
 import { DirectSessionSettingsCard } from './DirectSessionSettingsCard';
 import { copySessionDefaults } from '../DirectSessionSettings';
-import { HostSecuritySettingsCard } from './HostSecuritySettingsCard';
 import { RustDeskAccountController, rustDeskAccountController } from '../NativeAccountBridge';
-import {
-  ControlledHostState,
-  ControlledPasswordMode,
-  ControlledTrustedDevice,
-  ControlledTwoFactorState,
-} from '../../../services/controlled/ControlledHostTypes';
 
 const RUSTDESK_WEBSITE_URL: string = 'https://rustdesk.com';
 const RUSTDESK_PRIVACY_URL: string = 'https://rustdesk.com/privacy.html';
 
-type SettingsSection = 'tutorial' | 'server' | 'account'
-  | 'session_input' | 'session_quality' | 'session_security' | 'session_other'
-  | 'direct' | 'diagnostics';
+/**
+ * One entry per thing a person looks for. The defaults of a new session are one
+ * entry with its own parts, not four tiles, and this device's own access
+ * security lives on the page that shares this device.
+ */
+type SettingsSection = 'tutorial' | 'server' | 'account' | 'session' | 'diagnostics';
+
+/** Sections another page may ask this one to open (see `sectionRequest`). */
+export type SettingsSectionRequest = '' | 'server' | 'account' | 'session';
 
 export interface SettingsTabProps {
   decoderCapabilities: DecoderCapability[];
@@ -47,33 +49,25 @@ export interface SettingsTabProps {
   serverValidating: boolean;
   serverSaving: boolean;
   sessionDefaults: SessionDefaults;
-  controlledHostState: ControlledHostState;
-  controlledTwoFactorState: ControlledTwoFactorState;
   errorText: string;
   scroller: Scroller;
   wideLayout: boolean;
   titleSpacerHeight: number;
   bottomAvoidInset: number;
   tutorialLaunchToken: number;
+  /** A section to open now, e.g. the account page from "前往登录". */
+  sectionRequest: SettingsSectionRequest;
   accountController?: RustDeskAccountController;
   onServerConfigChange: (config: ServerConfig) => void;
   onValidateServerConfig: (config: ServerConfig) => void;
   serverProbeMessage: string;
   onFlushServerConfig: (retry?: boolean) => void;
   onSessionDefaultsChange: (defaults: SessionDefaults) => void;
-  onControlledRefresh: () => void;
-  onControlledPasswordModeChange: (mode: ControlledPasswordMode) => void;
-  onControlledSetPermanentPassword: (password: string, confirmation: string) => void;
-  onControlledRemovePermanentPassword: () => void;
-  onControlledBeginTwoFactor: () => void;
-  onControlledVerifyTwoFactor: (code: string) => void;
-  onControlledCancelTwoFactor: () => void;
-  onControlledDisableTwoFactor: () => void;
-  onControlledTrustedDevicesEnabledChange: (enabled: boolean) => void;
-  onControlledRemoveTrustedDevice: (device: ControlledTrustedDevice) => void;
-  onControlledClearTrustedDevices: () => void;
   onRefresh: () => void;
   onTutorialAutoOpened: () => void;
+  /** The guide this page opened by itself on first launch was closed. */
+  onTutorialDismissed: () => void;
+  onSectionRequestHandled: () => void;
 }
 
 @ComponentV2
@@ -85,18 +79,19 @@ export struct SettingsTab {
   @Param serverValidating: boolean = false;
   @Param serverSaving: boolean = false;
   @Param sessionDefaults: SessionDefaults = new SessionDefaults();
-  @Param controlledHostState: ControlledHostState = new ControlledHostState();
-  @Param controlledTwoFactorState: ControlledTwoFactorState = new ControlledTwoFactorState();
   @Param errorText: string = '';
   @Param wideLayout: boolean = false;
   @Param titleSpacerHeight: number = 56;
   @Param bottomAvoidInset: number = 0;
   @Param tutorialLaunchToken: number = 0;
+  @Param sectionRequest: SettingsSectionRequest = '';
   @Local viewportWidth: number = 390;
   @Local sheetViewportWidth: number = 390;
   @Local hubViewportHeight: number = 0;
   @Local sheetViewportHeight: number = 0;
   @Local selectedSection: SettingsSection = 'server';
+  /** Which part of the session defaults is shown: input, quality, other, VNC/RDP. */
+  @Local sessionSegment: number = 0;
   @Local settingsSheetVisible: boolean = false;
   @Local pressedSection: string = '';
   @Local appVersionName: string = '--';
@@ -105,31 +100,24 @@ export struct SettingsTab {
   @Param scroller: Scroller = new Scroller();
   private sheetScroller: Scroller = new Scroller();
   private handledTutorialLaunchToken: number = 0;
+  /** The guide on screen was opened by first launch, not by a tap on its tile. */
+  private tutorialAutoOpened: boolean = false;
   @Event onServerConfigChange: (config: ServerConfig) => void = (_config: ServerConfig) => {};
   @Event onValidateServerConfig: (config: ServerConfig) => void = (_config: ServerConfig) => {};
   @Param serverProbeMessage: string = '';
   @Event onFlushServerConfig: (retry?: boolean) => void = (_retry?: boolean) => {};
   @Event onSessionDefaultsChange: (defaults: SessionDefaults) => void = (_defaults: SessionDefaults) => {};
-  @Event onControlledRefresh: () => void = () => {};
-  @Event onControlledPasswordModeChange: (mode: ControlledPasswordMode) => void =
-    (_mode: ControlledPasswordMode) => {};
-  @Event onControlledSetPermanentPassword: (password: string, confirmation: string) => void =
-    (_password: string, _confirmation: string) => {};
-  @Event onControlledRemovePermanentPassword: () => void = () => {};
-  @Event onControlledBeginTwoFactor: () => void = () => {};
-  @Event onControlledVerifyTwoFactor: (code: string) => void = (_code: string) => {};
-  @Event onControlledCancelTwoFactor: () => void = () => {};
-  @Event onControlledDisableTwoFactor: () => void = () => {};
-  @Event onControlledTrustedDevicesEnabledChange: (enabled: boolean) => void = (_enabled: boolean) => {};
-  @Event onControlledRemoveTrustedDevice: (device: ControlledTrustedDevice) => void =
-    (_device: ControlledTrustedDevice) => {};
-  @Event onControlledClearTrustedDevices: () => void = () => {};
   @Event onRefresh: () => void = () => {};
   @Event onTutorialAutoOpened: () => void = () => {};
+  @Event onTutorialDismissed: () => void = () => {};
+  @Event onSectionRequestHandled: () => void = () => {};
 
   aboutToAppear(): void {
     void this.loadAppVersion();
-    setTimeout((): void => this.openRequestedTutorialIfNeeded(), 0);
+    setTimeout((): void => {
+      this.openRequestedTutorialIfNeeded();
+      this.openRequestedSectionIfNeeded();
+    }, 0);
   }
 
   private async loadAppVersion(): Promise<void> {
@@ -154,7 +142,41 @@ export struct SettingsTab {
     }
     this.handledTutorialLaunchToken = this.tutorialLaunchToken;
     this.selectSection('tutorial');
+    this.tutorialAutoOpened = true;
     this.onTutorialAutoOpened();
+  }
+
+  @Monitor('sectionRequest')
+  private onSectionRequestChanged(_monitor: IMonitor): void {
+    this.openRequestedSectionIfNeeded();
+  }
+
+  /**
+   * Opens the section another page asked for and reports it taken, so the
+   * request is spent once and does not reopen the sheet when this page is
+   * created again.
+   */
+  private openRequestedSectionIfNeeded(): void {
+    const requested: SettingsSectionRequest = this.sectionRequest;
+    if (requested === '') {
+      return;
+    }
+    this.selectSection(requested);
+    this.onSectionRequestHandled();
+  }
+
+  /**
+   * First launch brought the person to this page only to show the guide. When
+   * that guide goes away, however it is closed, they are taken back to where
+   * the app starts instead of being left on the settings list.
+   */
+  @Monitor('settingsSheetVisible')
+  private onSettingsSheetVisibilityChanged(_monitor: IMonitor): void {
+    if (this.settingsSheetVisible || !this.tutorialAutoOpened) {
+      return;
+    }
+    this.tutorialAutoOpened = false;
+    this.onTutorialDismissed();
   }
 
   private openExternalLink(url: string): void {
@@ -275,11 +297,12 @@ export struct SettingsTab {
   }
 
   private selectSection(section: SettingsSection): void {
-    if (section === 'session_input'
-      || section === 'session_quality'
-      || section === 'session_security'
-      || section === 'session_other' || section === 'direct') {
+    if (section === 'session') {
       this.sessionDefaultsDraft = this.copySessionDefaults(this.sessionDefaults);
+    }
+    if (section !== 'tutorial') {
+      // Any other section is the person's own choice; closing it stays here.
+      this.tutorialAutoOpened = false;
     }
     this.selectedSection = section;
     this.settingsSheetVisible = true;
@@ -293,9 +316,6 @@ export struct SettingsTab {
   }
 
   private sheetTitle(): ResourceStr {
-    if (this.selectedSection === 'direct') {
-      return $r('app.string.direct_settings_title');
-    }
     if (this.selectedSection === 'tutorial') {
       return $r('app.string.settings_tutorial_title');
     }
@@ -305,42 +325,21 @@ export struct SettingsTab {
     if (this.selectedSection === 'account') {
       return '账号';
     }
-    if (this.selectedSection === 'session_input') {
-      return '输入模式';
+    if (this.selectedSection === 'session') {
+      return '会话默认';
     }
-    if (this.selectedSection === 'session_quality') {
-      return '画质';
-    }
-    if (this.selectedSection === 'session_security') {
-      return '安全';
-    }
-    if (this.selectedSection === 'session_other') {
-      return '其他';
-    }
-    return '诊断与关于';
+    return '关于与诊断';
   }
 
   private sheetSubtitle(): ResourceStr {
-    if (this.selectedSection === 'direct') {
-      return $r('app.string.direct_settings_summary');
-    }
     if (this.selectedSection === 'tutorial') {
       return $r('app.string.settings_tutorial_subtitle');
     }
     if (this.selectedSection === 'server' || this.selectedSection === 'account') {
       return '';
     }
-    if (this.selectedSection === 'session_input') {
-      return '设置新远控会话的操作方式与右键手势';
-    }
-    if (this.selectedSection === 'session_quality') {
-      return '设置默认画质、帧率和编码器偏好';
-    }
-    if (this.selectedSection === 'session_security') {
-      return '管理服务端密码、双重认证和信任设备';
-    }
-    if (this.selectedSection === 'session_other') {
-      return '音频、剪贴板、手势和工具栏等默认行为';
+    if (this.selectedSection === 'session') {
+      return '新会话的操作方式、画质、常用开关，以及 VNC / RDP 选项';
     }
     return this.diagnosticSummary();
   }
@@ -367,34 +366,25 @@ export struct SettingsTab {
     return $r('app.string.settings_server_status_unconfigured');
   }
 
-  private sessionSummary(): ResourceStr {
-    if (this.sessionDefaults.touchMode) {
-      return $r('app.string.settings_pointer_touchpad');
-    }
-    return this.sessionDefaults.relativeMouseMode
-      ? $r('app.string.settings_pointer_relative')
-      : $r('app.string.settings_pointer_mouse');
+  private sessionSummary(): string {
+    const pointer: string = this.sessionDefaults.touchMode
+      ? '触控模式'
+      : (this.sessionDefaults.relativeMouseMode ? '相对鼠标' : '鼠标模式');
+    return `${pointer} · ${Math.round(this.sessionDefaults.refreshRate)} 帧`;
   }
 
-  private qualitySummary(): string {
-    return `${Math.round(this.sessionDefaults.refreshRate)} 帧 · 画质自动`;
-  }
-
-  private securitySummary(): string {
-    if (this.controlledTwoFactorState.enabled) {
-      return '2FA 已启用 · 密码仍为第一认证因素';
-    }
-    if (this.controlledHostState.permanentPasswordSet) {
-      return '固定密码已设置 · 可启用 2FA';
-    }
-    return '密码、2FA 与信任设备';
+  /** Width of the part selector inside the session-defaults sheet. */
+  private sessionSegmentWidth(): number {
+    return Math.max(240, this.sheetViewportWidth - LuminousNeoTokens.shadowPaddingFor(48) * 2);
   }
 
   private diagnosticSummary(): string {
     if (this.hasError()) {
       return '检测到需要处理的运行日志';
     }
-    return `版本与关于 · ${this.decoderCapabilities.length} 项视频能力`;
+    return this.decoderCapabilities.length > 0
+      ? `版本 · 硬件解码 ${this.decoderCapabilities.map((item: DecoderCapability): string => item.codec === 'H265' ? 'H.265' : 'H.264').join('、')}`
+      : '版本与关于';
   }
 
   private diagnosticPanelWidth(): number {
@@ -502,23 +492,12 @@ export struct SettingsTab {
       Column({ space: 16 }) {
         Row({ space: 14 }) {
           this.SettingsTile(
-            'tutorial',
-            $r('sys.symbol.book'),
-            $r('app.string.settings_tutorial_title'),
-            $r('app.string.settings_tutorial_summary'),
-            $r('app.color.neu_accent'),
-          )
-          this.SettingsTile(
             'server',
             $r('sys.symbol.wifi_router'),
             '服务器',
             this.serverSummary(),
             $r('app.color.neu_accent'),
           )
-        }
-        .width(this.hubFrameWidth());
-
-        Row({ space: 14 }) {
           this.SettingsTile(
             'account',
             $r('sys.symbol.person_crop_circle_fill'),
@@ -526,67 +505,41 @@ export struct SettingsTab {
             this.accountSummary(),
             $r('app.color.neu_accent'),
           )
+        }
+        .width(this.hubFrameWidth());
+
+        Row({ space: 14 }) {
           this.SettingsTile(
-            'session_input',
+            'session',
             $r('sys.symbol.slider_horizontal_2'),
-            '输入模式',
+            '会话默认',
             this.sessionSummary(),
             $r('app.color.success'),
           )
-        }
-        .width(this.hubFrameWidth());
-
-        Row({ space: 14 }) {
           this.SettingsTile(
-            'session_quality',
-            $r('sys.symbol.display'),
-            '画质',
-            this.qualitySummary(),
+            'tutorial',
+            $r('sys.symbol.book'),
+            $r('app.string.settings_tutorial_title'),
+            $r('app.string.settings_tutorial_summary'),
             $r('app.color.neu_accent'),
-          )
-          this.SettingsTile(
-            'session_security',
-            $r('sys.symbol.info_circle'),
-            '安全',
-            this.securitySummary(),
-            $r('app.color.warning'),
           )
         }
         .width(this.hubFrameWidth());
 
-        Row({ space: 14 }) {
-          this.SettingsTile(
-            'session_other',
-            $r('sys.symbol.gearshape'),
-            '其他',
-            '音频、剪贴板、手势与工具栏',
-            $r('app.color.neu_accent'),
-          )
+        Row() {
           this.SettingsTile(
             'diagnostics',
             $r('sys.symbol.info_circle'),
-            '诊断',
+            '关于与诊断',
             this.diagnosticSummary(),
             this.hasError() ? $r('app.color.error') : $r('app.color.warning'),
           )
-        }
-        .width(this.hubFrameWidth());
-        Row() {
-          this.SettingsTile('direct', $r('sys.symbol.display'), $r('app.string.direct_settings_title'),
-            $r('app.string.direct_settings_summary'), $r('app.color.neu_accent'))
         }
         .width(this.hubFrameWidth());
       }
       .width(this.hubFrameWidth());
     } else {
       Column({ space: 16 }) {
-        this.SettingsTile(
-          'tutorial',
-          $r('sys.symbol.book'),
-          $r('app.string.settings_tutorial_title'),
-          $r('app.string.settings_tutorial_summary'),
-          $r('app.color.neu_accent'),
-        )
         this.SettingsTile(
           'server',
           $r('sys.symbol.wifi_router'),
@@ -602,39 +555,23 @@ export struct SettingsTab {
           $r('app.color.neu_accent'),
         )
         this.SettingsTile(
-          'session_input',
+          'session',
           $r('sys.symbol.slider_horizontal_2'),
-          '输入模式',
+          '会话默认',
           this.sessionSummary(),
           $r('app.color.success'),
         )
         this.SettingsTile(
-          'session_quality',
-          $r('sys.symbol.display'),
-          '画质',
-          this.qualitySummary(),
+          'tutorial',
+          $r('sys.symbol.book'),
+          $r('app.string.settings_tutorial_title'),
+          $r('app.string.settings_tutorial_summary'),
           $r('app.color.neu_accent'),
         )
-        this.SettingsTile(
-          'session_security',
-          $r('sys.symbol.info_circle'),
-          '安全',
-          this.securitySummary(),
-          $r('app.color.warning'),
-        )
-        this.SettingsTile(
-          'session_other',
-          $r('sys.symbol.gearshape'),
-          '其他',
-          '音频、剪贴板、手势与工具栏',
-          $r('app.color.neu_accent'),
-        )
-        this.SettingsTile('direct', $r('sys.symbol.display'), $r('app.string.direct_settings_title'),
-          $r('app.string.direct_settings_summary'), $r('app.color.neu_accent'))
         this.SettingsTile(
           'diagnostics',
           $r('sys.symbol.info_circle'),
-          '诊断',
+          '关于与诊断',
           this.diagnosticSummary(),
           this.hasError() ? $r('app.color.error') : $r('app.color.warning'),
         )
@@ -849,7 +786,7 @@ export struct SettingsTab {
                   .fontSize(13)
                   .fontWeight(FontWeight.Medium)
                   .fontColor($r('app.color.neu_text_primary'));
-                Text('正在查询设备能力')
+                Text('未获取到')
                   .layoutWeight(1)
                   .fontSize(11)
                   .fontColor($r('app.color.neu_text_secondary'))
@@ -963,6 +900,64 @@ export struct SettingsTab {
     .alignItems(HorizontalAlign.Start);
   }
 
+  /**
+   * The defaults of a new session, one sheet with four parts. Switching part
+   * stays in the sheet; every part edits the same draft.
+   */
+  @Builder
+  private SessionDefaultsContent() {
+    Column({ space: 14 }) {
+      LuminousSegmentedControl({
+        items: [
+          new LuminousSelectionItem('input', '操作'),
+          new LuminousSelectionItem('quality', '画质'),
+          new LuminousSelectionItem('other', '常用'),
+          new LuminousSelectionItem('direct', 'VNC/RDP'),
+        ],
+        selectedIndex: this.sessionSegment,
+        controlWidth: this.sessionSegmentWidth(),
+        controlHeight: 48,
+        motionEnabled: true,
+        onChange: (index: number): void => {
+          this.sessionSegment = index;
+        },
+      })
+
+      if (this.sessionSegment === 0) {
+        SessionDefaultsCard({
+          showHeader: false,
+          section: 'input',
+          defaults: this.sessionDefaultsDraft,
+          refreshRateChoices: this.refreshRateChoices,
+          onDefaultsChange: (defaults: SessionDefaults) => this.updateSessionDefaultsDraft(defaults),
+        })
+      } else if (this.sessionSegment === 1) {
+        SessionDefaultsCard({
+          showHeader: false,
+          section: 'quality',
+          defaults: this.sessionDefaultsDraft,
+          refreshRateChoices: this.refreshRateChoices,
+          onDefaultsChange: (defaults: SessionDefaults) => this.updateSessionDefaultsDraft(defaults),
+        })
+      } else if (this.sessionSegment === 2) {
+        SessionDefaultsCard({
+          showHeader: false,
+          section: 'other',
+          defaults: this.sessionDefaultsDraft,
+          refreshRateChoices: this.refreshRateChoices,
+          onDefaultsChange: (defaults: SessionDefaults) => this.updateSessionDefaultsDraft(defaults),
+        })
+      } else {
+        DirectSessionSettingsCard({
+          defaults: this.sessionDefaultsDraft,
+          onDefaultsChange: (defaults: SessionDefaults): void => this.updateSessionDefaultsDraft(defaults),
+        })
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Center);
+  }
+
   @Builder
   private SelectedSettingsContent() {
     if (this.selectedSection === 'tutorial') {
@@ -984,53 +979,8 @@ export struct SettingsTab {
         showHeader: false,
         controller: this.accountController,
       })
-    } else if (this.selectedSection === 'session_input') {
-      SessionDefaultsCard({
-        showHeader: false,
-        section: 'input',
-        defaults: this.sessionDefaultsDraft,
-        refreshRateChoices: this.refreshRateChoices,
-        onDefaultsChange: (defaults: SessionDefaults) => this.updateSessionDefaultsDraft(defaults),
-      })
-    } else if (this.selectedSection === 'session_quality') {
-      SessionDefaultsCard({
-        showHeader: false,
-        section: 'quality',
-        defaults: this.sessionDefaultsDraft,
-        refreshRateChoices: this.refreshRateChoices,
-        onDefaultsChange: (defaults: SessionDefaults) => this.updateSessionDefaultsDraft(defaults),
-      })
-    } else if (this.selectedSection === 'session_security') {
-      HostSecuritySettingsCard({
-        hostState: this.controlledHostState,
-        twoFactor: this.controlledTwoFactorState,
-        onRefresh: () => this.onControlledRefresh(),
-        onPasswordModeChange: (mode: ControlledPasswordMode) => this.onControlledPasswordModeChange(mode),
-        onSetPermanentPassword: (password: string, confirmation: string) =>
-          this.onControlledSetPermanentPassword(password, confirmation),
-        onRemovePermanentPassword: () => this.onControlledRemovePermanentPassword(),
-        onBeginTwoFactor: () => this.onControlledBeginTwoFactor(),
-        onVerifyTwoFactor: (code: string) => this.onControlledVerifyTwoFactor(code),
-        onCancelTwoFactor: () => this.onControlledCancelTwoFactor(),
-        onDisableTwoFactor: () => this.onControlledDisableTwoFactor(),
-        onTrustedDevicesEnabledChange: (enabled: boolean) =>
-          this.onControlledTrustedDevicesEnabledChange(enabled),
-        onRemoveTrustedDevice: (device: ControlledTrustedDevice) => this.onControlledRemoveTrustedDevice(device),
-        onClearTrustedDevices: () => this.onControlledClearTrustedDevices(),
-      })
-    } else if (this.selectedSection === 'session_other') {
-      SessionDefaultsCard({
-        showHeader: false,
-        section: 'other',
-        defaults: this.sessionDefaultsDraft,
-        refreshRateChoices: this.refreshRateChoices,
-        onDefaultsChange: (defaults: SessionDefaults) => this.updateSessionDefaultsDraft(defaults),
-      })
-    } else if (this.selectedSection === 'direct') {
-      DirectSessionSettingsCard({
-        defaults: this.sessionDefaultsDraft,
-        onDefaultsChange: (defaults: SessionDefaults): void => this.updateSessionDefaultsDraft(defaults),
-      })
+    } else if (this.selectedSection === 'session') {
+      this.SessionDefaultsContent()
     } else {
       this.DiagnosticsPage()
     }

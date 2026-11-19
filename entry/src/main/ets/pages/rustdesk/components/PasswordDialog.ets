@@ -97,7 +97,7 @@ export struct PasswordDialog {
 
             Text(this.mode === '2fa'
               ? '请输入 Authenticator 或服务端生成的 6 位验证码。'
-              : '验证完成后自动进入远端会话。')
+              : '验证通过后自动进入远程会话。')
               .width('100%')
               .fontSize($r('app.float.font_body'))
               .fontColor($r('app.color.neu_text_secondary'))
@@ -151,7 +151,7 @@ export struct PasswordDialog {
             Row() {
               LuminousTextField({
                 value: this.password,
-                placeholder: 'Password',
+                placeholder: '密码',
                 fieldWidth: this.fieldWidth(),
                 fieldHeight: 52,
                 inputType: InputType.Password,

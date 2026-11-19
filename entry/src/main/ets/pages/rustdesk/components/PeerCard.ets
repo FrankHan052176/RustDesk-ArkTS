@@ -26,6 +26,7 @@ export interface PeerCardProps {
   onConnectVnc: (peerId: string) => void;
   onConnectRdp: (peerId: string) => void;
   onEditDevice: (peer: PeerRecord) => void;
+  onTransferFiles: (peerId: string, rustdeskIdOnly: boolean) => void;
 }
 
 @ComponentV2
@@ -50,6 +51,13 @@ export struct PeerCard {
   @Event onConnectVnc: (peerId: string) => void = (_peerId: string) => {};
   @Event onConnectRdp: (peerId: string) => void = (_peerId: string) => {};
   @Event onEditDevice: (peer: PeerRecord) => void = (_peer: PeerRecord): void => {};
+  @Event onTransferFiles: (peerId: string, rustdeskIdOnly: boolean) => void =
+    (_peerId: string, _rustdeskIdOnly: boolean) => {};
+
+  /** File transfer exists on the RustDesk wire only; VNC and RDP have none. */
+  private supportsFileTransfer(): boolean {
+    return peerProtocolOf(this.peer) === 'rustdesk';
+  }
 
   private displayName(): string {
     return peerDisplayTitle(this.peer);
@@ -509,6 +517,13 @@ export struct PeerCard {
               true,
               (): void => this.activateDefaultProtocol(),
             );
+            if (this.supportsFileTransfer()) {
+              this.SessionAction(
+                $r('app.string.device_action_files'),
+                false,
+                (): void => this.onTransferFiles(this.connectionTarget(), this.peer.rustdeskIdOnly),
+              );
+            }
           }
           .width('100%')
           .padding({ left: 12, right: 12 })

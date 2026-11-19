@@ -1,4 +1,5 @@
 import { rustDeskNativeApi as native } from './RustDeskNativeApi';
+import { rustDeskAccountController } from './NativeAccountBridge';
 import { RemoteAudioState, SessionStartOptions } from './RustDeskSessionTypes';
 import { ActionResponse, NativeEvent } from './RustDeskTypes';
 
@@ -272,6 +273,14 @@ export class RustDeskNativeSessionBridge implements NativeSessionBridge {
   }
 
   addSession(sessionId: string, target: string, options: SessionStartOptions): ActionResponse {
+    // Every session this device opens names its operator the same way the
+    // official client does: the signed-in account when there is one, otherwise
+    // (nothing sent) the device's own name, which the engine already holds.
+    const account = rustDeskAccountController.state;
+    const operator: string = account.loggedIn ? (account.displayName || account.name).trim() : '';
+    if (operator.length > 0) {
+      options.localName = operator;
+    }
     return this.parseNativeResponse(() => native.sessionAdd(sessionId, target, JSON.stringify(options)));
   }
 

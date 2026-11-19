@@ -121,6 +121,10 @@ class RecordingNativeSessionBridge implements NativeSessionBridge {
     return this.ok('add_session');
   }
 
+  addSharedSession(_sessionId: string, _inviteCode: string, _options: SessionStartOptions): ActionResponse {
+    return this.ok('add_shared_session');
+  }
+
   startSession(_sessionId: string): ActionResponse {
     return this.ok('start_session');
   }

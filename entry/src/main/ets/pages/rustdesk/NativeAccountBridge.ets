@@ -31,6 +31,27 @@ export interface OidcCancelResult {
   attemptReceipt: string;
 }
 
+/**
+ * One step of a username/password sign-in.
+ *
+ * `complete` carries the signed-in snapshot. `needs-code` means the server
+ * wants a second step: `kind` says which code (`email` or `tfa`, an
+ * authenticator app) and `challengeReceipt` names it for `loginVerify`. The
+ * token and the server's challenge secret stay in the native owner.
+ */
+export interface PasswordLoginResult {
+  state: string;
+  kind: string;
+  challengeReceipt: string;
+  snapshot?: AccountSnapshot;
+}
+
+/** `refreshed`, or `signed-out` when the server no longer accepts the sign-in. */
+export interface RefreshUserResult {
+  state: string;
+  snapshot: AccountSnapshot;
+}
+
 export interface NativeAccountBridge {
   bindServer(approvedProfileJson: string): Promise<NativeAccountResponse<AccountBindServerResult>>;
   snapshot(): Promise<NativeAccountResponse<AccountSnapshot>>;
@@ -38,6 +59,12 @@ export interface NativeAccountBridge {
   oidcStart(receipt: string, providerId: string, rememberMe: boolean): Promise<NativeAccountResponse<OidcStartResult>>;
   oidcResult(attemptReceipt: string): Promise<NativeAccountResponse<OidcPollResult>>;
   oidcCancel(attemptReceipt: string): Promise<NativeAccountResponse<OidcCancelResult>>;
+  loginPassword(receipt: string, username: string, password: string,
+    rememberMe: boolean): Promise<NativeAccountResponse<PasswordLoginResult>>;
+  loginVerify(challengeReceipt: string, code: string,
+    trustDevice: boolean): Promise<NativeAccountResponse<PasswordLoginResult>>;
+  loginCancel(challengeReceipt: string): Promise<NativeAccountResponse<void>>;
+  refreshUser(receipt: string): Promise<NativeAccountResponse<RefreshUserResult>>;
   logout(receipt: string): Promise<NativeAccountResponse<void>>;
   listAddressBooks(receipt: string): Promise<NativeAccountResponse<CloudAddressBook[]>>;
   loadAddressBook(receipt: string, bookId: string): Promise<NativeAccountResponse<CloudBookLoadResult>>;
@@ -222,6 +249,70 @@ export class RustDeskNativeAccountBridge implements NativeAccountBridge {
     }
   }
 
+  private loginStep(raw: string, action: string): NativeAccountResponse<PasswordLoginResult> {
+    const envelope: NativeAccountResponse<ESObject> = this.parseEnvelope<ESObject>(raw, action);
+    if (!envelope.ok || envelope.data === undefined) {
+      return { ok: false, code: envelope.code, error: envelope.error, sent: envelope.sent };
+    }
+    const state = String(envelope.data.state ?? '');
+    return {
+      ok: true,
+      data: {
+        state,
+        kind: String(envelope.data.kind ?? ''),
+        challengeReceipt: String(envelope.data.challengeReceipt ?? ''),
+        snapshot: state === 'complete' ? this.parseSnapshotData(envelope.data) : undefined,
+      },
+    };
+  }
+
+  async loginPassword(receipt: string, username: string, password: string,
+    rememberMe: boolean): Promise<NativeAccountResponse<PasswordLoginResult>> {
+    try {
+      return this.loginStep(await native.accountLoginPassword(receipt, username, password, rememberMe),
+        'accountLoginPassword');
+    } catch (err) {
+      return { ok: false, code: 'network', error: String(err) };
+    }
+  }
+
+  async loginVerify(challengeReceipt: string, code: string,
+    trustDevice: boolean): Promise<NativeAccountResponse<PasswordLoginResult>> {
+    try {
+      return this.loginStep(await native.accountLoginVerify(challengeReceipt, code, trustDevice),
+        'accountLoginVerify');
+    } catch (err) {
+      return { ok: false, code: 'network', error: String(err) };
+    }
+  }
+
+  async loginCancel(challengeReceipt: string): Promise<NativeAccountResponse<void>> {
+    try {
+      return this.parseEnvelope<void>(await native.accountLoginCancel(challengeReceipt), 'accountLoginCancel');
+    } catch (err) {
+      return { ok: false, code: 'network', error: String(err) };
+    }
+  }
+
+  async refreshUser(receipt: string): Promise<NativeAccountResponse<RefreshUserResult>> {
+    try {
+      const envelope: NativeAccountResponse<ESObject> =
+        this.parseEnvelope<ESObject>(await native.accountRefreshUser(receipt), 'accountRefreshUser');
+      if (!envelope.ok || envelope.data === undefined) {
+        return { ok: false, code: envelope.code, error: envelope.error, sent: envelope.sent };
+      }
+      return {
+        ok: true,
+        data: {
+          state: String(envelope.data.state ?? ''),
+          snapshot: this.parseSnapshotData(envelope.data),
+        },
+      };
+    } catch (err) {
+      return { ok: false, code: 'network', error: String(err) };
+    }
+  }
+
   async logout(receipt: string): Promise<NativeAccountResponse<void>> {
     try {
       const raw = await native.accountLogout(receipt);
@@ -392,6 +483,15 @@ export class RustDeskAccountController {
   @Trace mutationInFlight: boolean = false;
   @Trace mutationFeedback: string = '';
 
+  /** Username/password sign-in in flight (either step). */
+  @Trace passwordLoginBusy: boolean = false;
+  /** `''`, or which code the server asked for: `email` or `tfa`. */
+  @Trace loginChallengeKind: string = '';
+  /** Why the last username/password step did not sign in. */
+  @Trace passwordLoginError: string = '';
+
+  private loginChallengeReceipt: string = '';
+  private passwordLoginGeneration: number = 0;
   private activeAttemptReceipt: string = '';
   private oidcGeneration: number = 0;
   private pollTimer: number = -1;
@@ -429,6 +529,12 @@ export class RustDeskAccountController {
     const prevMode = this.state.serverBindingMode;
 
     await this.loadSnapshot();
+    // As the official client does on start: ask the server whether a remembered
+    // sign-in still stands, instead of showing an account every request for
+    // which would then be refused.
+    if (this.state.loggedIn) {
+      void this.refreshUser();
+    }
 
     // If server scope changed or session was not retained, clear old cloud cache
     if (bindResult.profileRevision !== prevRevision || bindResult.mode !== prevMode || !bindResult.sessionRetained) {
@@ -648,7 +754,184 @@ export class RustDeskAccountController {
     } else if (poll.state === 'cancelled') {
       this.endOidc('登录已取消', '');
     } else if (poll.state === 'needs-business') {
-      this.endOidc('', '该登录需要邮箱验证或二次验证，Resk 暂不支持，请改用其他登录方式');
+      this.endOidc('', '这种登录方式还需要邮箱验证或二次验证，请改用“用户名和密码”登录。');
+    }
+  }
+
+  /** What a refused or failed sign-in step says to the person signing in. */
+  private describeLoginFailure(code: string | undefined, error: string | undefined, fallback: string): string {
+    if (code === 'network') {
+      return '无法连接账号服务器，请检查网络和“设置 > 服务器”中的 API 服务器。';
+    }
+    if (code === 'server_unsupported') {
+      return '当前服务器不支持账号登录。自建服务器需要先在“设置 > 服务器”填写 https 的 API 服务器。';
+    }
+    if (code === 'unbound') {
+      return '账号服务还没有绑定到当前服务器。请到“设置 > 服务器”确认服务器后重试。';
+    }
+    if (code === 'busy') {
+      return '上一个账号操作还没有完成，请稍后重试。';
+    }
+    if (code === 'stale_receipt') {
+      return '登录步骤已失效，请重新登录。';
+    }
+    if (code === 'revoked' || code === 'not-ready') {
+      return '账号功能当前不可用，请确认已同意隐私协议后重试。';
+    }
+    if (code === 'rejected') {
+      // The server's own answer (wrong credentials, a disabled account, a wrong
+      // code); it is the only text that explains the refusal.
+      const text = error ?? '';
+      return text.length > 0 ? text : fallback;
+    }
+    // Anything else is this app's or the engine's own failure. Its wording is
+    // internal, so the person signing in gets the plain sentence.
+    return fallback;
+  }
+
+  private async finishPasswordStep(res: NativeAccountResponse<PasswordLoginResult>, fallback: string): Promise<void> {
+    if (!res.ok || res.data === undefined) {
+      if (res.code === 'stale_receipt') {
+        this.loginChallengeReceipt = '';
+        this.loginChallengeKind = '';
+      }
+      this.passwordLoginError = this.describeLoginFailure(res.code, res.error, fallback);
+      return;
+    }
+    if (res.data.state === 'needs-code' && res.data.challengeReceipt.length > 0) {
+      this.loginChallengeReceipt = res.data.challengeReceipt;
+      this.loginChallengeKind = res.data.kind === 'tfa' ? 'tfa' : 'email';
+      this.passwordLoginError = '';
+      return;
+    }
+    if (res.data.state === 'complete' && res.data.snapshot !== undefined) {
+      this.loginChallengeReceipt = '';
+      this.loginChallengeKind = '';
+      this.passwordLoginError = '';
+      this.applySnapshot(res.data.snapshot);
+      if (this.state.loggedIn) {
+        await this.loadAddressBooks();
+        return;
+      }
+    }
+    this.passwordLoginError = fallback;
+  }
+
+  /**
+   * Username/password sign-in. The password is handed to the native owner and
+   * not kept here; the caller clears its own field when this resolves.
+   */
+  async loginWithPassword(username: string, password: string): Promise<void> {
+    if (this.passwordLoginBusy || this.oidcInProgress) {
+      return;
+    }
+    const name = username.trim();
+    if (name.length === 0) {
+      this.passwordLoginError = '请输入用户名。';
+      return;
+    }
+    if (password.length === 0) {
+      this.passwordLoginError = '请输入密码。';
+      return;
+    }
+    const generation = ++this.passwordLoginGeneration;
+    this.passwordLoginBusy = true;
+    this.passwordLoginError = '';
+    this.state.busy = true;
+    try {
+      if (this.state.receipt.length === 0) {
+        // No account state has been read yet (the server binding did not finish
+        // or has not run): read it now rather than send an empty receipt.
+        await this.refreshReceipt();
+        if (generation !== this.passwordLoginGeneration) {
+          return;
+        }
+        if (this.state.receipt.length === 0) {
+          this.passwordLoginError =
+            '账号服务还没有准备好。请先到“设置 > 服务器”确认服务器；自建服务器还需要填写 https 的 API 服务器。';
+          return;
+        }
+      }
+      let res = await this.bridge.loginPassword(this.state.receipt, name, password, this.rememberMe);
+      if (!res.ok && res.code === 'stale_receipt' && generation === this.passwordLoginGeneration) {
+        await this.refreshReceipt();
+        if (generation === this.passwordLoginGeneration) {
+          res = await this.bridge.loginPassword(this.state.receipt, name, password, this.rememberMe);
+        }
+      }
+      if (generation !== this.passwordLoginGeneration) {
+        return;
+      }
+      await this.finishPasswordStep(res, '登录失败，请重试。');
+    } finally {
+      if (generation === this.passwordLoginGeneration) {
+        this.passwordLoginBusy = false;
+        this.state.busy = false;
+      }
+    }
+  }
+
+  /** Answers the e-mail or authenticator code the server asked for. */
+  async submitLoginCode(code: string, trustDevice: boolean): Promise<void> {
+    if (this.passwordLoginBusy || this.loginChallengeReceipt.length === 0) {
+      return;
+    }
+    const value = code.trim();
+    if (value.length === 0) {
+      this.passwordLoginError = '请输入验证码。';
+      return;
+    }
+    const generation = ++this.passwordLoginGeneration;
+    this.passwordLoginBusy = true;
+    this.passwordLoginError = '';
+    this.state.busy = true;
+    try {
+      const res = await this.bridge.loginVerify(this.loginChallengeReceipt, value, trustDevice);
+      if (generation !== this.passwordLoginGeneration) {
+        return;
+      }
+      await this.finishPasswordStep(res, '验证失败，请重试。');
+    } finally {
+      if (generation === this.passwordLoginGeneration) {
+        this.passwordLoginBusy = false;
+        this.state.busy = false;
+      }
+    }
+  }
+
+  /** Leaves the code step; an account that is already signed in is untouched. */
+  async cancelLoginChallenge(): Promise<void> {
+    const receipt = this.loginChallengeReceipt;
+    ++this.passwordLoginGeneration;
+    this.loginChallengeReceipt = '';
+    this.loginChallengeKind = '';
+    this.passwordLoginError = '';
+    this.passwordLoginBusy = false;
+    this.state.busy = false;
+    if (receipt.length > 0) {
+      await this.bridge.loginCancel(receipt);
+    }
+  }
+
+  /**
+   * Asks the server whether this sign-in is still valid and refreshes the
+   * profile. A sign-in the server has ended is removed locally, so the UI does
+   * not go on showing an account that every request would be refused for.
+   */
+  async refreshUser(): Promise<void> {
+    if (!this.state.loggedIn || this.state.receipt.length === 0) {
+      return;
+    }
+    const res = await this.bridge.refreshUser(this.state.receipt);
+    if (!res.ok || res.data === undefined) {
+      // Unreachable or momentarily refused: what is shown stays as it was.
+      return;
+    }
+    this.applySnapshot(res.data.snapshot);
+    if (res.data.state === 'signed-out' || !this.state.loggedIn) {
+      this.clearCloudCache();
+      this.state.message = '登录已失效，请重新登录。';
+      await this.loadProviders();
     }
   }
 
@@ -662,6 +945,7 @@ export class RustDeskAccountController {
   }
 
   async logout(): Promise<void> {
+    await this.cancelLoginChallenge();
     if (this.state.receipt.length > 0) {
       await this.bridge.logout(this.state.receipt);
     }
@@ -777,6 +1061,7 @@ export class RustDeskAccountController {
   }
 
   destroy(): void {
+    void this.cancelLoginChallenge();
     const receipt = this.activeAttemptReceipt;
     ++this.oidcGeneration;
     this.endOidc('', '');

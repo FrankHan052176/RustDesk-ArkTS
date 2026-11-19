@@ -3,9 +3,15 @@ export interface ConnectionAttemptOverlayProps {
   phase: string;
   target: string;
   message: string;
+  /** The direct route is what failed: offer one retry through the relay. */
+  relayHint: boolean;
+  /** No server profile is confirmed yet: `official` or `custom`, `''` for none. */
+  serverHint: string;
   bottomAvoidInset: number;
   onCancel: () => void;
   onRetry: () => void;
+  onRetryViaRelay: () => void;
+  onConfirmServer: () => void;
   onDismiss: () => void;
 }
 
@@ -15,9 +21,13 @@ export struct ConnectionAttemptOverlay {
   @Param phase: string = 'idle';
   @Param target: string = '';
   @Param message: string = '';
+  @Param relayHint: boolean = false;
+  @Param serverHint: string = '';
   @Param bottomAvoidInset: number = 0;
   @Event onCancel: () => void = () => {};
   @Event onRetry: () => void = () => {};
+  @Event onRetryViaRelay: () => void = () => {};
+  @Event onConfirmServer: () => void = () => {};
   @Event onDismiss: () => void = () => {};
 
   private isFailed(): boolean {
@@ -38,10 +48,13 @@ export struct ConnectionAttemptOverlay {
       return '正在验证密码';
     }
     if (this.phase === 'rendering') {
-      return '正在显示远端画面';
+      return '正在显示对方画面';
     }
     if (this.phase === 'connected') {
       return '连接成功';
+    }
+    if (this.offersServer()) {
+      return '需要确认服务器';
     }
     if (this.isFailed()) {
       return '连接未完成';
@@ -65,7 +78,7 @@ export struct ConnectionAttemptOverlay {
       return '请检查设备状态、网络或密码后重试。';
     }
     if (this.phase === 'waiting_for_easytier') {
-      return 'RustDesk 尚未创建会话；EasyTier 确认实例运行后才会继续。';
+      return '正在等待 EasyTier 网络就绪，就绪后会自动继续连接。';
     }
     if (this.phase === 'awaiting_approval') {
       return $r('app.string.resk_status_approval');
@@ -73,14 +86,28 @@ export struct ConnectionAttemptOverlay {
     if (this.phase === 'rendering') {
       return '连接已建立，正在等待首帧画面。';
     }
-    return '仍停留在当前页面，连接成功后再进入会话。';
+    return '连接成功后会自动显示远程画面。';
   }
 
   private isConnected(): boolean {
     return this.phase === 'connected';
   }
 
+  private offersRelay(): boolean {
+    return this.isFailed() && this.relayHint && !this.offersServer();
+  }
+
+  private offersServer(): boolean {
+    return this.isFailed() && this.serverHint.length > 0;
+  }
+
   private panelHeight(): number {
+    if (this.offersServer()) {
+      return 300;
+    }
+    if (this.offersRelay()) {
+      return 284;
+    }
     return this.isFailed() ? 228 : 216;
   }
 
@@ -89,6 +116,9 @@ export struct ConnectionAttemptOverlay {
   }
 
   private messageSlotHeight(): number {
+    if (this.offersServer()) {
+      return 66;
+    }
     return this.isFailed() ? 44 : 40;
   }
 
@@ -146,8 +176,10 @@ export struct ConnectionAttemptOverlay {
         .width('100%')
         .fontSize($r('app.float.font_body'))
         .lineHeight(21)
-        .fontColor(this.isFailed() ? $r('app.color.error') : $r('app.color.neu_text_secondary'))
-        .maxLines(this.isFailed() ? 3 : 2)
+        // A missing confirmation is a step to take, not an error.
+        .fontColor(this.isFailed() && !this.offersServer()
+          ? $r('app.color.error') : $r('app.color.neu_text_secondary'))
+        .maxLines(this.offersServer() ? 4 : (this.isFailed() ? 3 : 2))
         .textOverflow({ overflow: TextOverflow.Ellipsis });
     }
     .width('100%')
@@ -178,7 +210,36 @@ export struct ConnectionAttemptOverlay {
 
   @Builder
   private ActionRow() {
-    if (this.isFailed()) {
+    if (this.offersServer()) {
+      // Nothing failed here: one confirmation is missing, so it is the action.
+      Column({ space: $r('app.float.space_12') }) {
+        Row() {
+          this.DialogButton(this.serverHint === 'official' ? '使用官方服务器并连接' : '保存并连接', true,
+            (): void => this.onConfirmServer())
+        }
+        .width('100%');
+        Row() {
+          this.DialogButton('关闭', false, (): void => this.onDismiss())
+        }
+        .width('100%');
+      }
+      .width('100%');
+    } else if (this.offersRelay()) {
+      // The relayed route is the one that can still work, so it is the primary
+      // action; a plain retry of the same direct route stays available.
+      Column({ space: $r('app.float.space_12') }) {
+        Row() {
+          this.DialogButton('通过中继重试', true, (): void => this.onRetryViaRelay())
+        }
+        .width('100%');
+        Row({ space: $r('app.float.space_12') }) {
+          this.DialogButton('关闭', false, (): void => this.onDismiss())
+          this.DialogButton('重试', false, (): void => this.onRetry())
+        }
+        .width('100%');
+      }
+      .width('100%');
+    } else if (this.isFailed()) {
       Row({ space: $r('app.float.space_12') }) {
         this.DialogButton('关闭', false, (): void => this.onDismiss())
         this.DialogButton('重试', true, (): void => this.onRetry())
@@ -211,7 +272,7 @@ export struct ConnectionAttemptOverlay {
                 .fontWeight(FontWeight.Bold)
                 .fontColor($r('app.color.text_primary'));
 
-              Text(this.target.length > 0 ? this.target : '远端设备')
+              Text(this.target.length > 0 ? this.target : '对方设备')
                 .width('100%')
                 .fontSize($r('app.float.font_label'))
                 .fontColor($r('app.color.text_secondary'))

@@ -520,7 +520,7 @@ export struct TransferDrawer {
       .layoutWeight(1)
 
       if (this.compactLayout) {
-        this.FloatingAction('show-remote', '远端', false, (): void => this.switchPrimaryPane('remote'))
+        this.FloatingAction('show-remote', '对方', false, (): void => this.switchPrimaryPane('remote'))
       }
       this.FloatingAction('upload', '上传', true, () => this.onUpload())
     }
@@ -581,7 +581,7 @@ export struct TransferDrawer {
       }, (entry: RemoteFileEntry) => `${entry.entry_type}-${entry.name}`)
       if (this.remoteEntries.length === 0) {
         ListItem() {
-          Text('远端目录为空或正在加载')
+          Text('对方的文件夹是空的，或还在加载')
             .width('100%')
             .fontSize($r('app.float.font_body'))
             .fontColor($r('app.color.text_secondary'))
@@ -607,7 +607,7 @@ export struct TransferDrawer {
   @Builder
   private RemotePaneContent(fillAvailable: boolean) {
     Row({ space: $r('app.float.space_8') }) {
-      Text('远端文件')
+      Text('对方文件')
         .fontSize($r('app.float.font_body_large'))
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'))

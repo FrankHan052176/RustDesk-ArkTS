@@ -42,6 +42,7 @@ export interface DeviceDirectoryPanelProps {
   onConnectRemote: (peerId: string, rustdeskIdOnly: boolean) => void;
   onConnectVnc: (peerId: string) => void;
   onConnectRdp: (peerId: string) => void;
+  onTransferFiles: (peerId: string, rustdeskIdOnly: boolean) => void;
   onSaveDevice: (original: PeerRecord, peer: PeerRecord) => ResourceStr;
   onOpenAccountSettings?: () => void;
 }
@@ -91,6 +92,8 @@ export struct DeviceDirectoryPanel {
     (_peerId: string, _rustdeskIdOnly: boolean) => {};
   @Event onConnectVnc: (peerId: string) => void = (_peerId: string) => {};
   @Event onConnectRdp: (peerId: string) => void = (_peerId: string) => {};
+  @Event onTransferFiles: (peerId: string, rustdeskIdOnly: boolean) => void =
+    (_peerId: string, _rustdeskIdOnly: boolean) => {};
   @Event onSaveDevice: (original: PeerRecord, peer: PeerRecord) => ResourceStr =
     (_original: PeerRecord, _peer: PeerRecord): ResourceStr => $r('app.string.device_editor_save_unavailable');
   @Event onOpenAccountSettings: () => void = () => {};
@@ -819,6 +822,7 @@ export struct DeviceDirectoryPanel {
             onConnectRemote: (peerId: string, idOnly: boolean) => this.onConnectRemote(peerId, idOnly),
             onConnectVnc: (peerId: string) => this.onConnectVnc(peerId),
             onConnectRdp: (peerId: string) => this.onConnectRdp(peerId),
+            onTransferFiles: (peerId: string, idOnly: boolean) => this.onTransferFiles(peerId, idOnly),
             onEditDevice: (peer: PeerRecord): void => this.editDevice(peer),
           });
         }, (peer: PeerRecord) => this.peerRenderKey(source, peer));
@@ -853,6 +857,7 @@ export struct DeviceDirectoryPanel {
             onConnectRemote: (peerId: string, idOnly: boolean) => this.onConnectRemote(peerId, idOnly),
             onConnectVnc: (peerId: string) => this.onConnectVnc(peerId),
             onConnectRdp: (peerId: string) => this.onConnectRdp(peerId),
+            onTransferFiles: (peerId: string, idOnly: boolean) => this.onTransferFiles(peerId, idOnly),
             onEditDevice: (peer: PeerRecord): void => this.editDevice(peer),
           })
             .width(this.cardWidth())

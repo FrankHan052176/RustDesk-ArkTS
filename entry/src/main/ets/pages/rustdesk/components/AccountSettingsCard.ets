@@ -5,6 +5,7 @@ import {
   LuminousSegmentedControl,
   LuminousSelectionItem,
   LuminousSwitch,
+  LuminousTextField,
   LuminousTone,
 } from 'luminous_neo';
 import { AccountProvider } from '../RustDeskDirectoryTypes';
@@ -20,9 +21,39 @@ export struct AccountSettingsCard {
   @Param showHeader: boolean = false;
   @Param controller: RustDeskAccountController = rustDeskAccountController;
   @Local viewportWidth: number = 390;
+  // Typed here and nowhere else: the password and the code are handed to the
+  // native owner on submit and cleared from these fields as soon as it answers.
+  @Local usernameDraft: string = '';
+  @Local passwordDraft: string = '';
+  @Local codeDraft: string = '';
+  @Local trustDevice: boolean = true;
 
   private isBusy(): boolean {
-    return this.controller.oidcInProgress;
+    return this.controller.oidcInProgress || this.controller.passwordLoginBusy;
+  }
+
+  private handlePasswordLogin(): void {
+    const username = this.usernameDraft;
+    const password = this.passwordDraft;
+    this.passwordDraft = '';
+    void this.controller.loginWithPassword(username, password);
+  }
+
+  private handleSubmitCode(): void {
+    const code = this.codeDraft;
+    this.codeDraft = '';
+    void this.controller.submitLoginCode(code, this.trustDevice);
+  }
+
+  private handleCancelCode(): void {
+    this.codeDraft = '';
+    void this.controller.cancelLoginChallenge();
+  }
+
+  private codePrompt(): string {
+    return this.controller.loginChallengeKind === 'tfa'
+      ? '请输入身份验证器 App 中的 6 位验证码。'
+      : '服务器已向你的邮箱发送验证码，请输入邮件中的验证码。';
   }
 
   private contentWidth(): number {
@@ -146,12 +177,164 @@ export struct AccountSettingsCard {
   }
 
   @Builder
+  private LoginErrorNotice() {
+    if (this.controller.passwordLoginError.length > 0) {
+      Text(this.controller.passwordLoginError)
+        .width('100%')
+        .padding(12)
+        .fontSize(12)
+        .lineHeight(16)
+        .fontColor($r('app.color.error'))
+        .backgroundColor($r('app.color.error_soft'))
+        .borderRadius(10);
+    }
+  }
+
+  /** The second step: the e-mail or authenticator code the server asked for. */
+  @Builder
+  private CodeStepView() {
+    Column({ space: 14 }) {
+      Text(this.controller.loginChallengeKind === 'tfa' ? '二次验证' : '邮箱验证')
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.neu_text_primary'));
+      Text(this.codePrompt())
+        .width('100%')
+        .fontSize(12)
+        .lineHeight(18)
+        .fontColor($r('app.color.neu_text_secondary'));
+
+      LuminousTextField({
+        value: this.codeDraft,
+        placeholder: '验证码',
+        fieldWidth: this.contentWidth(),
+        fieldHeight: 52,
+        inputType: InputType.Number,
+        motionEnabled: true,
+        onChange: (value: string): void => {
+          this.codeDraft = value;
+        },
+      })
+
+      Row() {
+        Text('信任这台设备')
+          .fontSize(14)
+          .fontColor($r('app.color.neu_text_primary'));
+        Blank();
+        LuminousSwitch({
+          isOn: this.trustDevice,
+          isEnabled: !this.isBusy(),
+          onChange: (isOn: boolean): void => {
+            this.trustDevice = isOn;
+          },
+        });
+      }
+      .width('100%')
+      .padding({ top: 4, bottom: 4 });
+
+      this.LoginErrorNotice();
+
+      LuminousButton({
+        label: this.controller.passwordLoginBusy ? '正在验证…' : '验证并登录',
+        controlWidth: this.contentWidth(),
+        controlSizeMode: LuminousControlSize.Regular,
+        tone: LuminousTone.Accent,
+        isEnabled: !this.isBusy() && this.codeDraft.trim().length > 0,
+        motionEnabled: true,
+        onAction: (): void => this.handleSubmitCode(),
+      });
+      LuminousButton({
+        label: '返回',
+        controlWidth: this.contentWidth(),
+        controlSizeMode: LuminousControlSize.Regular,
+        tone: LuminousTone.Neutral,
+        isEnabled: !this.controller.passwordLoginBusy,
+        motionEnabled: true,
+        onAction: (): void => this.handleCancelCode(),
+      });
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start);
+  }
+
+  /** Username and password: the sign-in every server offers. */
+  @Builder
+  private PasswordLoginView() {
+    Column({ space: 14 }) {
+      Text('用户名和密码')
+        .fontSize(12)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.neu_text_secondary'));
+
+      LuminousTextField({
+        value: this.usernameDraft,
+        placeholder: '用户名',
+        fieldWidth: this.contentWidth(),
+        fieldHeight: 52,
+        inputType: InputType.Normal,
+        motionEnabled: true,
+        onChange: (value: string): void => {
+          this.usernameDraft = value;
+        },
+      })
+      LuminousTextField({
+        value: this.passwordDraft,
+        placeholder: '密码',
+        fieldWidth: this.contentWidth(),
+        fieldHeight: 52,
+        inputType: InputType.Password,
+        motionEnabled: true,
+        onChange: (value: string): void => {
+          this.passwordDraft = value;
+        },
+      })
+
+      Row() {
+        Text('保持登录状态')
+          .fontSize(14)
+          .fontColor($r('app.color.neu_text_primary'));
+        Blank();
+        LuminousSwitch({
+          isOn: this.controller.rememberMe,
+          isEnabled: !this.isBusy(),
+          onChange: (isOn: boolean): void => {
+            this.controller.rememberMe = isOn;
+          },
+        });
+      }
+      .width('100%')
+      .padding({ top: 4, bottom: 4 });
+
+      this.LoginErrorNotice();
+
+      LuminousButton({
+        label: this.controller.passwordLoginBusy ? '正在登录…' : '登录',
+        controlWidth: this.contentWidth(),
+        controlSizeMode: LuminousControlSize.Regular,
+        tone: LuminousTone.Accent,
+        isEnabled: !this.isBusy() && this.usernameDraft.trim().length > 0 && this.passwordDraft.length > 0,
+        motionEnabled: true,
+        onAction: (): void => this.handlePasswordLogin(),
+      });
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start);
+  }
+
+  @Builder
   private LoginView() {
     Column({ space: 16 }) {
       if (this.controller.state.serverBindingMode === 'custom') {
         Text('服务：自建服务')
           .fontSize(12)
           .fontColor($r('app.color.neu_text_secondary'));
+      }
+
+      // Username and password work on every server, so they are offered first
+      // and do not depend on the server listing any browser sign-in.
+      if (!this.controller.oidcInProgress) {
+        this.PasswordLoginView();
+        Divider().width('100%').color($r('app.color.outline'));
       }
 
       if (this.controller.providersLoading) {
@@ -165,11 +348,11 @@ export struct AccountSettingsCard {
         .padding(16);
       } else if (this.controller.providers.length === 0) {
         Column({ space: 10 }) {
-          Text('当前服务器未返回可用登录方式')
+          Text('这台服务器没有提供浏览器登录方式')
             .fontSize(14)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.neu_text_primary'));
-          Text('若使用自建服务，请在“服务器”设置中配置 API Server；若已配置，请检查服务连通性。')
+          Text('可以直接用上面的用户名和密码登录。若使用自建服务，请在“服务器”设置中确认 API 服务器地址。')
             .fontSize(12)
             .lineHeight(18)
             .fontColor($r('app.color.neu_text_secondary'));
@@ -190,7 +373,7 @@ export struct AccountSettingsCard {
         .borderRadius(14);
       } else {
         Column({ space: 14 }) {
-          Text('登录方式')
+          Text('或使用浏览器登录')
             .fontSize(12)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.neu_text_secondary'));
@@ -222,22 +405,6 @@ export struct AccountSettingsCard {
             .borderRadius(12);
           }
 
-          Row() {
-            Text('保持登录状态')
-              .fontSize(14)
-              .fontColor($r('app.color.neu_text_primary'));
-            Blank();
-            LuminousSwitch({
-              isOn: this.controller.rememberMe,
-              isEnabled: !this.isBusy(),
-              onChange: (isOn: boolean): void => {
-                this.controller.rememberMe = isOn;
-              },
-            });
-          }
-          .width('100%')
-          .padding({ top: 4, bottom: 4 });
-
           if (this.controller.oidcInProgress) {
             Column({ space: 10 }) {
               Row({ space: 10 }) {
@@ -266,7 +433,7 @@ export struct AccountSettingsCard {
               label: '前往浏览器登录',
               controlWidth: this.contentWidth(),
               controlSizeMode: LuminousControlSize.Regular,
-              tone: LuminousTone.Accent,
+              tone: LuminousTone.Neutral,
               isEnabled: !this.isBusy(),
               motionEnabled: true,
               onAction: (): void => this.handleLogin(),
@@ -330,6 +497,8 @@ export struct AccountSettingsCard {
 
       if (this.controller.state.loggedIn) {
         this.LoggedInView();
+      } else if (this.controller.loginChallengeKind.length > 0) {
+        this.CodeStepView();
       } else {
         this.LoginView();
       }

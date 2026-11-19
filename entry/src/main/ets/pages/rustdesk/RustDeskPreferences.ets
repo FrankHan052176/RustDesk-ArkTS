@@ -34,6 +34,7 @@ const DEFAULT_QUALITY_PRESET_KEY = 'default_quality_preset';
 const DEFAULT_CUSTOM_QUALITY_KEY = 'default_custom_quality';
 const DEFAULT_CUSTOM_FPS_KEY = 'default_custom_fps';
 const DEFAULT_PREFERRED_CODEC_KEY = 'default_preferred_codec';
+const DEFAULT_IMAGE_QUALITY_KEY = 'default_image_quality_v2';
 const DEFAULT_CODEC_PRIORITY_VERSION_KEY = 'default_codec_priority_version';
 const DEFAULT_CODEC_PRIORITY_VERSION = 1;
 const DEFAULT_GESTURES_ENABLED_KEY = 'default_gestures_enabled';
@@ -419,6 +420,10 @@ export class RustDeskPreferences {
       // rather than deleted, because a downgrade still reads them.
       const storedRate = store.getSync(DEFAULT_CUSTOM_FPS_KEY, defaults.refreshRate) as number;
       defaults.refreshRate = storedRate;
+      const storedQuality = store.getSync(DEFAULT_IMAGE_QUALITY_KEY, defaults.imageQuality) as string;
+      if (storedQuality === 'low' || storedQuality === 'balanced' || storedQuality === 'best') {
+        defaults.imageQuality = storedQuality;
+      }
       const preferredCodec = (store.getSync(DEFAULT_PREFERRED_CODEC_KEY, defaults.preferredCodec) as string).trim();
       defaults.preferredCodec = preferredCodec.length > 0 ? preferredCodec : defaults.preferredCodec;
       const codecPriorityVersion = store.getSync(DEFAULT_CODEC_PRIORITY_VERSION_KEY, 0) as number;
@@ -481,6 +486,7 @@ export class RustDeskPreferences {
       store.putSync(DEFAULT_AUDIO_ENABLED_KEY, defaults.audioEnabled);
       store.putSync(DEFAULT_CLIPBOARD_ENABLED_KEY, defaults.clipboardEnabled);
       store.putSync(DEFAULT_CUSTOM_FPS_KEY, defaults.refreshRate);
+      store.putSync(DEFAULT_IMAGE_QUALITY_KEY, defaults.imageQuality);
       store.putSync(DEFAULT_PREFERRED_CODEC_KEY, defaults.preferredCodec.trim());
       store.putSync(DEFAULT_GESTURES_ENABLED_KEY, defaults.gesturesEnabled);
       store.putSync(DEFAULT_TOOLBAR_EXPANDED_KEY, defaults.toolbarExpanded);

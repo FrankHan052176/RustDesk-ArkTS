@@ -65,6 +65,15 @@ class RecordingTransferBridge implements NativeSessionBridge {
     return this.ok('set_view_only');
   }
 
+  /** A transfer never joins a shared session; the fixture refuses rather than pretends. */
+  addSharedSession(_sessionId: string, _inviteCode: string, _options: SessionStartOptions): ActionResponse {
+    return { ok: false, action: 'add_shared_session', message: 'Test fixture has no shared sessions' };
+  }
+
+  setUnverifiedInputAccepted(_sessionId: string, _accepted: boolean): ActionResponse {
+    return { ok: false, action: 'set_unverified_input_accepted', message: 'Test fixture sends no input' };
+  }
+
   pollEvents(sessionId: string, limit: number): ActionResponse {
     this.calls.push(`poll:${sessionId}:${limit}`);
     return { ok: true, action: 'poll_events', events: this.events };
@@ -315,7 +324,7 @@ export default function transferManagerTest(): void {
         err: 'Access is denied',
       })).assertTrue();
       expect(manager.snapshot().length).assertEqual(0);
-      expect(manager.consumeTransferError()).assertContain('远端目录无法创建文件或文件夹');
+      expect(manager.consumeTransferError()).assertContain('对方文件夹无法创建文件或文件夹');
       expect(manager.consumeTransferError()).assertUndefined();
     });
 

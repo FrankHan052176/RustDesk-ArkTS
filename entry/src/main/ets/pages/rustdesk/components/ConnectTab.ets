@@ -44,6 +44,8 @@ export interface ConnectTabProps {
   bottomAvoidInset: number;
   directorySnapshot: DirectorySnapshot;
   onEasyTierModeChange: (instanceId: string) => void;
+  /** A recent device was tapped: connect to it with its own protocol. */
+  onConnectPeer: (target: string, protocol: PeerProtocol, rustdeskIdOnly: boolean) => void;
 }
 
 @ComponentV2
@@ -74,6 +76,8 @@ export struct ConnectTab {
   @Event onOpenTransfer: () => void = () => {};
   @Event onDisconnect: () => void = () => {};
   @Event onEasyTierModeChange: (instanceId: string) => void = (_instanceId: string) => {};
+  @Event onConnectPeer: (target: string, protocol: PeerProtocol, rustdeskIdOnly: boolean) => void =
+    (_target: string, _protocol: PeerProtocol, _rustdeskIdOnly: boolean) => {};
 
   private useTwoColumnWorkspace(): boolean {
     return this.wideLayout && this.viewportWidth >= RustDeskLayoutTokens.HOME_TWO_COLUMN_MIN_WIDTH;
@@ -172,8 +176,8 @@ export struct ConnectTab {
 
   private modeItems(): LuminousSelectionItem[] {
     return [
-      new LuminousSelectionItem('control', '远控', '使用 RustDesk 协议完整控制远端'),
-      new LuminousSelectionItem('vnc', 'VNC', '连接标准 VNC 服务端'),
+      new LuminousSelectionItem('control', '远控', '查看并操作对方设备'),
+      new LuminousSelectionItem('vnc', 'VNC', '连接开启了 VNC 的设备'),
       new LuminousSelectionItem('rdp', 'RDP', '连接 Windows 远程桌面'),
       new LuminousSelectionItem('files', '文件', '浏览并传输文件'),
     ];
@@ -238,13 +242,13 @@ export struct ConnectTab {
       state = '启动中';
     }
     return instance.peerCount > 0
-      ? `${instance.instanceName} · ${state} · ${instance.peerCount} 个对端`
+      ? `${instance.instanceName} · ${state} · ${instance.peerCount} 个节点`
       : `${instance.instanceName} · ${state}`;
   }
 
   private easyTierMenuItems(): LuminousSelectionItem[] {
     const items: LuminousSelectionItem[] = [
-      new LuminousSelectionItem('direct', '不组网（RustDesk 直连）', '不使用 EasyTier，直接连接远端设备'),
+      new LuminousSelectionItem('direct', '不组网（RustDesk 直连）', '不使用 EasyTier，直接连接对方设备'),
     ];
     for (let index = 0; index < this.easyTierInstances.length; index += 1) {
       const instance = this.easyTierInstances[index];
@@ -558,10 +562,13 @@ export struct ConnectTab {
         FloatingActionSurface({
           subtleDepth: true,
           actionEnabled: this.recentPeerTarget(peer).length > 0,
-          accessibilityLabel: `选择设备 ${this.recentPeerName(peer)}，填入 ${this.recentPeerTarget(peer)}`,
+          accessibilityLabel: `连接 ${this.recentPeerName(peer)}`,
           onActivate: (): void => {
+            // The same tap on the devices page connects; it does here too. The
+            // field and the mode still show what was connected to.
             this.onConnectionModeChange(this.connectionModeForProtocol(peerProtocolOf(peer)));
             this.onTargetChange(this.recentPeerTarget(peer));
+            this.onConnectPeer(this.recentPeerTarget(peer), peerProtocolOf(peer), peer.rustdeskIdOnly);
           },
         }) {
           Stack({ alignContent: Alignment.TopStart }) {

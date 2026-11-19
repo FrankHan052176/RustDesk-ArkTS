@@ -5,7 +5,7 @@ import {
   LuminousSwitch,
 } from 'luminous_neo';
 import { FALLBACK_REFRESH_RATE } from '../RustDeskRefreshRate';
-import { RustDeskRightClickGesture, SessionDefaults } from '../RustDeskDirectoryTypes';
+import { RustDeskRightClickGesture, SessionDefaults, SessionImageQuality } from '../RustDeskDirectoryTypes';
 import { copySessionDefaults } from '../DirectSessionSettings';
 import { RemoteSessionOrientationPolicy } from '../RemoteSessionOrientationPolicy';
 import { deviceInfo } from '@kit.BasicServicesKit';
@@ -101,6 +101,20 @@ export struct SessionDefaultsCard {
     return this.defaults.rightClickGesture === 'two_finger_tap' ? 1 : 2;
   }
 
+  private imageQualityIndex(): number {
+    if (this.defaults.imageQuality === 'low') {
+      return 0;
+    }
+    return this.defaults.imageQuality === 'best' ? 2 : 1;
+  }
+
+  private updateImageQualityIndex(index: number): void {
+    const quality: SessionImageQuality = index === 0 ? 'low' : (index === 2 ? 'best' : 'balanced');
+    const next = this.copyDefaults();
+    next.imageQuality = quality;
+    this.emit(next);
+  }
+
   private updateAudio(enabled: boolean): void {
     this.displayedAudioEnabled = enabled;
     const next = this.copyDefaults();
@@ -185,15 +199,8 @@ export struct SessionDefaultsCard {
     if (this.defaults.preferredCodec === 'h264') {
       return 2;
     }
-    if (this.defaults.preferredCodec === 'av1') {
-      return 3;
-    }
-    if (this.defaults.preferredCodec === 'vp9') {
-      return 4;
-    }
-    if (this.defaults.preferredCodec === 'vp8') {
-      return 5;
-    }
+    // A stored AV1/VP9/VP8 choice from an older version cannot be decoded on
+    // this device and was never honoured; it reads as automatic.
     return 0;
   }
 
@@ -202,12 +209,6 @@ export struct SessionDefaultsCard {
       this.updateCodec('h265');
     } else if (index === 2) {
       this.updateCodec('h264');
-    } else if (index === 3) {
-      this.updateCodec('av1');
-    } else if (index === 4) {
-      this.updateCodec('vp9');
-    } else if (index === 5) {
-      this.updateCodec('vp8');
     } else {
       this.updateCodec('auto');
     }
@@ -246,7 +247,7 @@ export struct SessionDefaultsCard {
   @Builder
   private AudioToggleRow() {
     LuminousSwitch({
-      label: '播放远端音频',
+      label: '播放对方设备的声音',
       description: '',
       isOn: this.displayedAudioEnabled,
       rowWidth: this.toggleRowWidth(),
@@ -453,24 +454,56 @@ export struct SessionDefaultsCard {
       this.InputModeHelpCard(
         1,
         '鼠标模式',
-        '把屏幕当作触控板，通过虚拟光标精确操作远端。',
-        '单指移动光标 · 单击左键 · 双击时第二次按住约 300 ms 后移动可拖拽 · 双指移动或捏合调整画面 · 三指纵向滑动滚轮（Android 远端除外）',
+        '把屏幕当作触控板，用屏幕上的光标精确操作。',
+        '单指移动光标 · 单击左键 · 双击时第二次按住约 300 ms 后移动可拖拽 · 双指移动或捏合调整画面 · 三指纵向滑动滚轮（对方是 Android 时除外）',
       )
       this.InputModeHelpCard(
         0,
         '触控模式',
-        '触点直接对应远端位置，适合窗口、列表和普通桌面操作。',
-        '单击左键 · 单指拖动直接拖拽 · 双指移动或捏合调整画面 · 三指纵向滑动滚轮（Android 远端除外）',
+        '手指点到哪里，就操作对方画面的哪里；适合窗口、列表和一般桌面操作。',
+        '单击左键 · 单指拖动直接拖拽 · 双指移动或捏合调整画面 · 三指纵向滑动滚轮（对方是 Android 时除外）',
       )
       this.InputModeHelpCard(
         2,
         '相对鼠标',
         '只发送位移增量，适合游戏、3D 软件和需要无限移动的场景。',
-        '单指相对移动 · 单击左键 · 双击时第二次按住约 300 ms 后移动可拖拽 · 三指纵向滑动滚轮（Android 远端除外）',
+        '单指相对移动 · 单击左键 · 双击时第二次按住约 300 ms 后移动可拖拽 · 三指纵向滑动滚轮（对方是 Android 时除外）',
       )
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start);
+  }
+
+  @Builder
+  private ImageQualitySelector() {
+    Column({ space: 2 }) {
+      Text('画面')
+        .width('100%')
+        .fontSize($r('app.float.font_label'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.neu_text_secondary'));
+
+      LuminousSegmentedControl({
+        items: [
+          new LuminousSelectionItem('low', '流畅优先'),
+          new LuminousSelectionItem('balanced', '均衡'),
+          new LuminousSelectionItem('best', '清晰优先'),
+        ],
+        selectedIndex: this.imageQualityIndex(),
+        controlWidth: this.selectorWidth(620),
+        controlHeight: 50,
+        motionEnabled: true,
+        onChange: (index: number) => this.updateImageQualityIndex(index),
+      })
+        .margin({ top: -10 })
+
+      Text('网络较慢时选“流畅优先”，画面会更跟手但更模糊；网络好时选“清晰优先”。连接后也可以在悬浮栏的“画质”里随时切换。')
+        .width('100%')
+        .fontSize($r('app.float.font_caption'))
+        .lineHeight(17)
+        .fontColor($r('app.color.neu_text_secondary'));
+    }
+    .width('100%');
   }
 
   @Builder
@@ -493,7 +526,7 @@ export struct SessionDefaultsCard {
       })
         .margin({ top: -10 })
 
-      Text('刷新率取自本机屏幕支持档位，决定远端采集上限。')
+      Text('可选刷新率取自本机屏幕；它同时是对方画面帧率的上限。')
         .width('100%')
         .fontSize($r('app.float.font_caption'))
         .fontColor($r('app.color.neu_text_secondary'));
@@ -547,12 +580,9 @@ export struct SessionDefaultsCard {
             new LuminousSelectionItem('auto', $r('app.string.settings_codec_auto')),
             new LuminousSelectionItem('h265', 'H.265'),
             new LuminousSelectionItem('h264', 'H.264'),
-            new LuminousSelectionItem('av1', 'AV1'),
-            new LuminousSelectionItem('vp9', 'VP9'),
-            new LuminousSelectionItem('vp8', 'VP8'),
           ],
           selectedIndex: this.codecIndex(),
-          controlWidth: this.fullSelectorWidth(720),
+          controlWidth: this.selectorWidth(620),
           controlHeight: 50,
           motionEnabled: true,
           onChange: (index: number) => this.updateCodecIndex(index),
@@ -564,13 +594,6 @@ export struct SessionDefaultsCard {
             this.CodecOption('自动', 0)
             this.CodecOption('H.265', 1)
             this.CodecOption('H.264', 2)
-          }
-          .width(this.fullSelectorWidth(620));
-
-          Row({ space: 8 }) {
-            this.CodecOption('AV1', 3)
-            this.CodecOption('VP9', 4)
-            this.CodecOption('VP8', 5)
           }
           .width(this.fullSelectorWidth(620));
         }
@@ -682,6 +705,7 @@ export struct SessionDefaultsCard {
         .width('100%');
       } else if (this.section === 'quality') {
         Column({ space: 2 }) {
+          this.ImageQualitySelector()
           this.QualitySelector()
           this.CodecSelector()
         }

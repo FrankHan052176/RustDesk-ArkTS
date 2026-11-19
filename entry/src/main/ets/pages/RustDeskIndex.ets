@@ -25,12 +25,13 @@ import { DeviceDirectoryPanel } from './rustdesk/components/DeviceDirectoryPanel
 import { AuthDialogMode, PasswordDialog } from './rustdesk/components/PasswordDialog';
 import { DirectCredentialsDialog } from './rustdesk/components/DirectCredentialsDialog';
 import { ConnectionAttemptOverlay } from './rustdesk/components/ConnectionAttemptOverlay';
+import { IncomingRequestDialog } from './rustdesk/components/IncomingRequestDialog';
 import { InsecureConnectionDialog } from './rustdesk/components/InsecureConnectionDialog';
 import { nearbyShareService } from '../services/share/NearbyShareService';
 import { shareCoordinator } from '../services/share/ShareCoordinator';
 import { SCREEN_SHARE_INVITE_EVENT, ScreenShareInviteService } from '../services/share/ScreenShareInviteService';
 import { shareReasonText } from '../services/share/ShareTypes';
-import { SettingsTab } from './rustdesk/components/SettingsTab';
+import { SettingsSectionRequest, SettingsTab } from './rustdesk/components/SettingsTab';
 import { ViewedHostPage } from './rustdesk/components/ViewedHostPage';
 import { SessionToolbar } from './rustdesk/components/SessionToolbar';
 import { readSessionPhysicalOrientation } from './rustdesk/RemoteSessionRotation';
@@ -95,6 +96,7 @@ import {
   ServerProfileReply,
   ServerProfileState,
   SessionDefaults,
+  SessionImageQuality,
 } from './rustdesk/RustDeskDirectoryTypes';
 import {
   applyPeerOnlineStates,
@@ -160,7 +162,15 @@ import {
 } from './rustdesk/components/FloatingSurface';
 import { DEFAULT_REFRESH_RATE, matchesResolutionRefusal, SessionDisplayController } from './rustdesk/SessionDisplayController';
 import { FrameRateTelemetry } from '../services/FrameRateTelemetry';
+import { decoderCapabilitiesFromReport, resolveCodecPreference } from './rustdesk/DecoderCapabilityReport';
 import { SessionOverlayPanel, SessionOverlayState } from './rustdesk/SessionOverlayState';
+import {
+  SESSION_ENDED_TEXT,
+  SessionFailureFacts,
+  describeSessionFailure,
+  hasSessionFailureFacts,
+  sessionFailureFactsFromEnvelope,
+} from './rustdesk/SessionFailureText';
 import { formatSessionToolbarMetrics, SessionToolbarMetrics } from './rustdesk/SessionToolbarMetrics';
 import {
   applyFrameRateSnapshot,
@@ -191,10 +201,6 @@ import {
   RemoteSessionShareController,
   RemoteSessionShareSnapshot,
 } from '../services/RemoteSessionHandoffService';
-import {
-  ControlledPasswordMode,
-  ControlledTrustedDevice,
-} from '../services/controlled/ControlledHostTypes';
 import { controlledHostCoordinator } from '../services/controlled/ControlledHostCoordinator';
 import {
   EASYTIER_API_RESULT_EVENT,
@@ -232,6 +238,16 @@ const SYSTEM_IME_INPUT_FOCUS_ID = 'rustdesk-system-ime-input';
 const SESSION_OVERLAY_TRANSITION_DISPLAY = 'rustdesk-session-overlay-display';
 const SESSION_OVERLAY_TRANSITION_QUALITY = 'rustdesk-session-overlay-quality';
 const MAIN_PAGE_TRANSITION_DURATION_MS = 280;
+// The same failure text is not shown again while its first notice is still fresh.
+const FAILURE_NOTICE_QUIET_MS = 4500;
+// The four main destinations, in the order the navigation shows them. Settings
+// comes last, after the three things the app is used for.
+const MAIN_TAB_HOME: number = 0;
+const MAIN_TAB_DEVICES: number = 1;
+const MAIN_TAB_HOST: number = 2;
+const MAIN_TAB_SETTINGS: number = 3;
+// A settings sheet is opened this long after the switch to the settings page.
+const SETTINGS_SECTION_OPEN_DELAY_MS = 420;
 const MAIN_PAGE_TRANSITION_DISTANCE_VP = 20;
 const FREE_WINDOW_TITLE_BAR_HEIGHT_VP = 42;
 const WIDE_RAIL_EDGE_INSET_VP = 33;
@@ -308,7 +324,7 @@ type PrimarySessionKind = 'remote_control' | 'vnc' | 'rdp';
 type PasswordSessionKind = 'primary' | 'file_transfer';
 type PeerLaunchKind = EasyTierConnectionKind;
 type ConnectionUiPhase = 'idle' | 'waiting_for_easytier' | 'connecting'
-  | 'awaiting_password' | 'authenticating' | 'connected' | 'failed';
+  | 'awaiting_password' | 'awaiting_approval' | 'authenticating' | 'connected' | 'failed';
 
 interface PendingSessionClose {
   sessionId: string;
@@ -438,6 +454,8 @@ struct RustDeskIndex {
   @Local currentTabIndex: number = 0;
   @Local firstLaunchTutorialPending: boolean = false;
   @Local firstLaunchTutorialRequest: number = 0;
+  /** A settings section another page asked to open; cleared when it is opened. */
+  @Local settingsSectionRequest: SettingsSectionRequest = '';
   @Local mainTabTransitionDirection: number = 1;
   @Local mainViewportWidth: number = 390;
   @Local mainViewportHeight: number = 844;
@@ -480,6 +498,13 @@ struct RustDeskIndex {
   @Local connectionUiPhase: ConnectionUiPhase = 'idle';
   @Local connectionUiTarget: string = '';
   @Local connectionUiMessage: string = '';
+  /** The failed attempt's direct route is what failed; a relayed retry is offered. */
+  @Local connectionRelayHint: boolean = false;
+  /**
+   * The attempt stopped because no server profile has been confirmed yet. The
+   * value is the action offered: `official` or `custom`, `''` for none.
+   */
+  @Local connectionServerHint: string = '';
   @Local isPolling: boolean = false;
   @Local frameStatus: string = 'Surface not ready';
   @Local frameWidth: number = 0;
@@ -654,7 +679,7 @@ struct RustDeskIndex {
         this.previewComponentId = componentId;
         this.previewSurfaceBindFailure = '';
       } else {
-        this.previewSurfaceBindFailure = String(response.error ?? '原生 XComponent holder 接管未成功');
+        this.previewSurfaceBindFailure = String(response.error ?? '画面窗口没有准备好');
       }
       if (!adopted && controller.adoptedComponentId.length > 0) {
         hilog.warn(DOMAIN, TAG, 'panel_holder_attach retained component=%{public}s for detach',
@@ -671,7 +696,7 @@ struct RustDeskIndex {
         Number(response.result ?? -1),
       );
     } catch (error) {
-      this.previewSurfaceBindFailure = `原生 XComponent holder 接管失败：${String(error)}`;
+      this.previewSurfaceBindFailure = `画面窗口没有准备好（${String(error)}）`;
       hilog.warn(DOMAIN, TAG, 'panel native attach failed: %{public}s', String(error));
     }
     this.declarePanelFrameRate();
@@ -781,6 +806,7 @@ struct RustDeskIndex {
    */
   private frameRateTelemetry: FrameRateTelemetry = new FrameRateTelemetry();
   private codecPreferenceApplied: boolean = false;
+  private imageQualityApplied: boolean = false;
   @Local passwordDialogVisible: boolean = false;
   @Local authDialogMode: AuthDialogMode = 'password';
   private authChallengeMode: AuthDialogMode = 'password';
@@ -850,6 +876,25 @@ struct RustDeskIndex {
    * transition finishes instead of being dropped.
    */
   private pendingConnectionRetry: string = '';
+  /**
+   * The engine's own classification of why a session ended, per session, read
+   * from the poll answer that carried its close. Taken once when the reason is
+   * shown.
+   */
+  private readonly sessionFailureFacts: Map<string, SessionFailureFacts> = new Map<string, SessionFailureFacts>();
+  /** One retry of this target asked for a relayed route; consumed by that dial. */
+  private forceRelayRetryTarget: string = '';
+  private forceRelayRetryAt: number = 0;
+  /** The file-session dial last asked for, so its retry dials the same kind of route. */
+  private transferAttemptTarget: string = '';
+  private transferAttemptRustdeskIdOnly: boolean = false;
+  /** The LAN scan whose failure has already been said on screen. */
+  private lanScanFailureNoticedGeneration: number = -1;
+  /** Waits for the server profile the operator just confirmed to be approved. */
+  private serverConfirmTimer: number = -1;
+  /** The failure text last shown on screen and when (see `notifyFailure`). */
+  private lastFailureNotice: string = '';
+  private lastFailureNoticeAt: number = 0;
   private sessionFullscreenApplied: boolean = false;
   private sessionOrientationMode: RemoteSessionOrientationMode = RemoteSessionOrientationMode.FOLLOW_DESKTOP;
   private sessionInitialOrientationApplied: boolean = false;
@@ -937,6 +982,8 @@ struct RustDeskIndex {
   // The capture rate is the only picture control. Encoding quality is the
   // encoder's business: it spends whatever bandwidth the path can carry.
   @Local selectedRefreshRate: number = DEFAULT_REFRESH_RATE;
+  /** The picture trade-off the session in front asked the other device for. */
+  @Local selectedImageQuality: SessionImageQuality = 'balanced';
   @Local refreshRateChoices: number[] = [DEFAULT_REFRESH_RATE];
   @Local transferRootPath: string = '';
   @Local transferRootStatus: string = '选择下载位置后可传输';
@@ -1107,6 +1154,7 @@ struct RustDeskIndex {
     this.unregisterRemoteSessionHandoffListener();
     this.connectionGeneration += 1;
     this.clearConnectionTimeout();
+    this.clearServerConfirmTimer();
     this.clearPasswordTimeout();
     this.clearPreviewKeyboardBlurTimer();
     this.clearRdpFollowResize();
@@ -1584,7 +1632,7 @@ struct RustDeskIndex {
       // EntryAbility owns appInit and the native lifecycle. The host follows
       // that same admission state; this page only observes it.
     } catch (error) {
-      this.errorText = `Runtime init failed: ${String(error)}`;
+      this.notifyFailure('应用没有完成初始化，请关闭后重新打开。', String(error));
       hilog.error(DOMAIN, TAG, 'initializeRuntime failed: %{public}s', this.errorText);
     }
   }
@@ -1743,26 +1791,6 @@ struct RustDeskIndex {
     }
   }
 
-  private copyDecoderCapabilities(source: ESObject): DecoderCapability[] {
-    const capabilities: DecoderCapability[] = [];
-    for (let index = 0; index < source.length; index += 1) {
-      let sourceCapability: ESObject = source[index];
-      const capability = new DecoderCapability();
-      capability.codec = String(sourceCapability.codec ?? '').trim();
-      capability.mime = String(sourceCapability.mime ?? '').trim();
-      capability.recommendedAvailable = Boolean(sourceCapability.recommendedAvailable);
-      capability.mimeAvailable = Boolean(sourceCapability.mimeAvailable ?? sourceCapability.recommendedAvailable);
-      capability.recommendedName = String(sourceCapability.recommendedName ?? '').trim();
-      capability.recommendedIsHardware = Boolean(sourceCapability.recommendedIsHardware);
-      capability.hardwareAvailable = Boolean(sourceCapability.hardwareAvailable);
-      capability.hardwareName = String(sourceCapability.hardwareName ?? '').trim();
-      capability.softwareAvailable = Boolean(sourceCapability.softwareAvailable);
-      capability.softwareName = String(sourceCapability.softwareName ?? '').trim();
-      capabilities.push(capability);
-    }
-    return capabilities;
-  }
-
   private markFirstLaunchTutorialShown(): void {
     if (!this.firstLaunchTutorialPending) {
       return;
@@ -1770,6 +1798,11 @@ struct RustDeskIndex {
     this.firstLaunchTutorialPending = false;
     this.firstLaunchTutorialRequest = 0;
     this.preferences?.markBeginnerGuideShown();
+  }
+
+  /** This main page is the one in front: no session or file workspace covers it. */
+  private mainTabInFront(index: number): boolean {
+    return this.currentTabIndex === index && !this.showPreviewModal && !this.showTransferWorkspace;
   }
 
   private scheduleFirstLaunchTutorial(): void {
@@ -1780,15 +1813,22 @@ struct RustDeskIndex {
     this.firstLaunchTutorialSchedulePending = true;
     setTimeout((): void => {
       this.firstLaunchTutorialSchedulePending = false;
-      if (!this.firstLaunchTutorialPending || !this.pageVisible || !this.appForeground) {
+      // Only from the page the app opened on: someone who has already gone
+      // elsewhere is not pulled away to the guide. It stays pending and is
+      // offered the next time this page comes to the front.
+      if (!this.firstLaunchTutorialPending || !this.pageVisible || !this.appForeground
+        || !this.mainTabInFront(MAIN_TAB_HOME)) {
         return;
       }
-      this.openMainTab(2);
+      this.openMainTab(MAIN_TAB_SETTINGS);
       setTimeout((): void => {
-        if (this.firstLaunchTutorialPending && this.pageVisible && this.appForeground) {
+        // Asked only of a settings page that is really in front: a request left
+        // unspent would open the guide on a later, unrelated visit.
+        if (this.firstLaunchTutorialPending && this.pageVisible && this.appForeground
+          && this.mainTabInFront(MAIN_TAB_SETTINGS)) {
           this.firstLaunchTutorialRequest += 1;
         }
-      }, 420);
+      }, SETTINGS_SECTION_OPEN_DELAY_MS);
     }, 400);
   }
 
@@ -2010,24 +2050,7 @@ struct RustDeskIndex {
   }
 
   private resolvePreferredCodec(requested: string, capabilities: DecoderCapability[]): string {
-    const normalized = requested.trim().toLowerCase();
-    if (normalized === 'auto') {
-      return this.selectPreferredCodec(capabilities);
-    }
-    const supported = ['h264', 'h265', 'vp8', 'vp9', 'av1'];
-    if (!supported.includes(normalized)) {
-      return this.selectPreferredCodec(capabilities);
-    }
-    for (let index = 0; index < capabilities.length; index += 1) {
-      const capability = capabilities[index];
-      if (capability.codec.toLowerCase() !== normalized) {
-        continue;
-      }
-      if (capability.mimeAvailable || capability.recommendedAvailable || capability.hardwareAvailable || capability.softwareAvailable) {
-        return normalized;
-      }
-    }
-    return this.selectPreferredCodec(capabilities);
+    return resolveCodecPreference(requested, capabilities);
   }
 
   /**
@@ -2049,6 +2072,7 @@ struct RustDeskIndex {
     this.rightClickGesture = this.sessionDefaults.rightClickGesture;
     this.clipboardSyncEnabled = this.sessionDefaults.clipboardEnabled;
     this.selectedRefreshRate = this.defaultRefreshRate(this.sessionDefaults);
+    this.selectedImageQuality = this.sessionDefaults.imageQuality;
     this.preferredCodec = this.resolvePreferredCodec(this.sessionDefaults.preferredCodec, capabilities);
     this.isMiniBarExpanded = this.sessionDefaults.toolbarExpanded;
   }
@@ -2077,8 +2101,8 @@ struct RustDeskIndex {
       const result = await this.mainBridge.testServerConfig(config);
       if (generation === this.serverTestGeneration && !this.serverEditorDisposed) {
         this.serverProbeMessage = result.remoteReachable
-          ? '配置的 ID / Relay 端口接受了 TCP 连接；尚未验证服务器身份。'
-          : `TCP 连接未通过：${result.message}`;
+          ? '服务器可以连通。（这只说明端口能连上，不代表 Key 正确。）'
+          : `连不上服务器：${result.message}`;
       }
     } finally {
       if (generation === this.serverTestGeneration) { this.serverValidating = false; }
@@ -2100,6 +2124,18 @@ struct RustDeskIndex {
       this.serverAutoSaveTimer = -1;
       this.flushServerConfiguration();
     }, 800) as number;
+  }
+
+  /**
+   * Says how the last save ended. The editor's config is replaced, not written
+   * in place: it is a plain object, so only a new one reaches the pages that
+   * show it.
+   */
+  private setServerResult(state: string, message: string): void {
+    const next = this.copyDraftServerConfig(this.serverConfig);
+    next.resultState = state;
+    next.message = message;
+    this.serverConfig = next;
   }
 
   private clearServerTestTimer(): void {
@@ -2125,20 +2161,17 @@ struct RustDeskIndex {
     if (!this.serverDraftDirty || this.serverEditorDisposed) { return; }
     const draft = this.copyDraftServerConfig(this.serverConfig);
     if (this.preferences?.saveServerDraft(draft) !== true) {
-      this.serverConfig.resultState = 'error';
-      this.serverConfig.message = '草稿存储失败，尚未确认保存。';
+      this.setServerResult('error', '没有保存成功，请重试。');
       return;
     }
     if (this.serverSaveInFlight) { return; }
     if (draft.keyNeedsEntry) {
-      this.serverConfig.resultState = 'error';
-      this.serverConfig.message = '地址草稿已保留；未保存的 Key 需要重新输入。';
+      this.setServerResult('error', '地址已保留。请重新输入 Key 后再保存。');
       return;
     }
     const runtime = rustDeskRuntimeController.state();
     if (!runtime.privacyAccepted || !runtime.ready || !runtime.foreground) {
-      this.serverConfig.resultState = 'error';
-      this.serverConfig.message = '地址草稿已保留；应用恢复且获得授权后可重试。';
+      this.setServerResult('error', '现在无法保存，输入的内容已保留；回到应用后请重试。');
       return;
     }
     const owner = runtime.ownerGeneration;
@@ -2154,8 +2187,7 @@ struct RustDeskIndex {
       if (attempt !== this.serverWriteAttempt || this.serverEditorDisposed) { return; }
       this.serverSaveInFlight = false;
       this.serverSaving = false;
-      this.serverConfig.resultState = 'unknown';
-      this.serverConfig.message = '自动保存未返回，结果未知；正在核对生效配置，可重试。';
+      this.setServerResult('unknown', '保存没有返回结果，正在核对是否生效；也可以重试。');
       // No blind replay. Another edit or explicit retry may queue a new commit.
       void this.readBackSavedServerProfile();
     }, this.serverSaveWaitMs) as number;
@@ -2172,8 +2204,8 @@ struct RustDeskIndex {
         owner !== admitted.ownerGeneration || !admitted.privacyAccepted) { return; }
       if (!stored.ok || !stored.committed) {
         if (generation === this.serverDraftGeneration) {
-          this.serverConfig.resultState = stored.committed ? 'unknown' : 'error';
-          this.serverConfig.message = `草稿未确认保存：${stored.error || '引擎未返回完整草稿回执'}`;
+          this.setServerResult(stored.committed ? 'unknown' : 'error',
+            `没有保存成功：${stored.error || '未收到保存结果'}`);
         }
         return;
       }
@@ -2229,15 +2261,13 @@ struct RustDeskIndex {
           current.message = reply.cleanupWarning || stored.cleanupWarning;
           this.serverConfig = current;
           if (this.preferences?.saveServerDraft(current) !== true) {
-            this.serverConfig.resultState = 'error';
-            this.serverConfig.message = '配置已生效，但地址草稿存储失败。';
+            this.setServerResult('error', '服务器设置已生效，但这里填写的内容没有保存，下次打开需要重新填写。');
           }
         }
       } else if (generation === this.serverDraftGeneration) {
-        this.serverConfig.resultState = reply.committed ? 'unknown' : 'error';
-        this.serverConfig.message = reply.committed
-          ? '配置已写入，但回执未通过校验，正在核对生效配置。'
-          : `草稿已保留，尚未生效：${reply.error || '引擎未确认保存'}`;
+        this.setServerResult(reply.committed ? 'unknown' : 'error', reply.committed
+          ? '已提交保存，正在核对是否生效。'
+          : `服务器设置没有生效：${reply.error || '未收到保存结果'}`);
         if (reply.committed) { void this.readBackSavedServerProfile(); }
       }
     } finally {
@@ -2316,16 +2346,16 @@ struct RustDeskIndex {
           config.keyNeedsEntry = raw.keyNeedsEntry;
           config.resultState = raw.keyNeedsEntry ? 'error' : 'unknown';
           config.message = raw.keyNeedsEntry
-            ? '地址草稿已保留；未确认保存的 Key 需要重新输入。'
-            : '已恢复最近的地址草稿；引擎存储结果未确认，可重试。';
+            ? '已恢复上次填写的地址。请重新输入 Key 后再保存。'
+            : '已恢复上次填写的地址，但不确定它是否已生效，可重试保存。';
         }
       } catch (_) {
         config.resultState = 'error';
-        config.message = '无法读取最近的服务器地址草稿。';
+        config.message = '无法读取上次填写的服务器地址。';
       }
       if (reply.draftError.length > 0) {
         config.resultState = 'error';
-        config.message = `无法读取受保护的服务器草稿：${reply.draftError}`;
+        config.message = `无法读取上次填写的服务器设置：${reply.draftError}`;
       }
     }
     return config;
@@ -2509,7 +2539,13 @@ struct RustDeskIndex {
       // result is retired/pending work, never a successful empty query.
     } catch (error) {
       if (this.pageVisible && scanGeneration === this.lanScanGeneration) {
-        this.errorText = String(error);
+        // The poll repeats while the scan runs; its failure is said once per scan.
+        if (this.lanScanFailureNoticedGeneration !== scanGeneration) {
+          this.lanScanFailureNoticedGeneration = scanGeneration;
+          this.notifyFailure('局域网扫描没有完成，请稍后重试。', String(error));
+        } else {
+          this.errorText = `局域网扫描没有完成，请稍后重试。（${String(error)}）`;
+        }
       }
     }
     if (this.pageVisible && this.runtimeInitialized && this.lanScanActive &&
@@ -2540,7 +2576,7 @@ struct RustDeskIndex {
       // Only subsequent native state/terminal receipts end the spinner.
     } catch (error) {
       if (this.pageVisible && scanGeneration === this.lanScanGeneration) {
-        this.errorText = String(error);
+        this.notifyFailure('局域网扫描没有完成，请稍后重试。', String(error));
       }
     }
   }
@@ -2550,7 +2586,7 @@ struct RustDeskIndex {
     this.clearLanScanPollTimer();
     void this.mainBridge.stopLan().catch((error: Error): void => {
       if (this.pageVisible && scanGeneration === this.lanScanGeneration) {
-        this.errorText = String(error);
+        this.notifyFailure('无法停止局域网扫描。', String(error));
       }
     });
     // Do not claim stopped before the exact native stop receipt settles.
@@ -2562,7 +2598,7 @@ struct RustDeskIndex {
     updated.favorite = favorite;
     const error = this.saveLocalDevice(peer, updated);
     if (error !== '') {
-      this.errorText = String(error);
+      this.notifyFailure(String(error));
       return;
     }
     this.mirrorDirectoryWrite(() => this.mainBridge.setFavorite(updated, favorite), '收藏设备');
@@ -2573,7 +2609,7 @@ struct RustDeskIndex {
     const key = savedDeviceKey(peer);
     const next = (this.savedDevices ?? []).filter((row: PeerRecord): boolean => savedDeviceKey(row) !== key);
     if (!this.preferences?.saveSavedPeers(next)) {
-      this.errorText = '无法删除本机设备记录';
+      this.notifyFailure('无法删除这条设备记录，请重试。');
       return;
     }
     this.savedDevices = next;
@@ -2590,13 +2626,13 @@ struct RustDeskIndex {
         return;
       }
       if (!receipt.ok) {
-        this.errorText = receipt.error ?? '无法移除局域网设备';
+        this.notifyFailure('无法移除这台局域网设备。', receipt.error ?? '');
       }
       // Rows come from the acknowledged native snapshot, not a local deletion
       // or a fabricated `removed`/durable-storage flag.
     } catch (error) {
       if (this.pageVisible && scanGeneration === this.lanScanGeneration) {
-        this.errorText = String(error);
+        this.notifyFailure('无法移除这台局域网设备。', String(error));
       }
     }
   }
@@ -2607,7 +2643,7 @@ struct RustDeskIndex {
     updated.note = note;
     const error = this.saveLocalDevice(peer, updated);
     if (error !== '') {
-      this.errorText = String(error);
+      this.notifyFailure(String(error));
     }
   }
 
@@ -2766,19 +2802,28 @@ struct RustDeskIndex {
   }
 
   private async preparePeerLaunch(targetValue: string, kind: PeerLaunchKind,
-    rustdeskIdOnly: boolean = false): Promise<void> {
+    rustdeskIdOnly: boolean = false, relayRetry: boolean = false): Promise<void> {
+    if (!relayRetry || this.sessionCloseInFlight) {
+      // "Retry via relay" belongs to the one dial it was asked for. Any other
+      // dial, and a retry that cannot start, leaves nothing for a later one.
+      this.forceRelayRetryTarget = '';
+    }
     if (this.sessionCloseInFlight) {
       return;
     }
     const target = targetValue.trim();
     if (target.length === 0) {
-      this.errorText = '请输入目标地址';
+      this.notifyFailure('请先输入要连接的设备 ID 或地址。');
       return;
     }
     // A file session carries the same claimed-ID intent as a control session:
     // its route is the ID route too, and dropping the flag here would silently
     // turn the file session into an address dial.
     rustdeskIdOnly = (kind === 'remote_control' || kind === 'file_transfer') && rustdeskIdOnly;
+    if (kind === 'file_transfer') {
+      this.transferAttemptTarget = target;
+      this.transferAttemptRustdeskIdOnly = rustdeskIdOnly;
+    }
     this.captureSessionReturnTab();
     this.updatePeerTarget(target);
     this.connectPageMode = this.connectPageModeForKind(kind);
@@ -2788,6 +2833,7 @@ struct RustDeskIndex {
       return;
     }
     if (this.easyTierRequestPending) {
+      this.forceRelayRetryTarget = '';
       this.showEasyTierToast('已有 EasyTier 请求正在处理，请稍候或取消当前请求');
       return;
     }
@@ -2839,6 +2885,7 @@ struct RustDeskIndex {
   private beginEasyTierPreconnect(target: string, kind: PeerLaunchKind, message: string,
     rustdeskIdOnly: boolean = false): void {
     this.clearConnectionTimeout();
+    this.clearConnectionHints();
     this.connectionAttemptKind = kind === 'file_transfer' ? 'file_transfer' : 'primary';
     if (kind !== 'file_transfer') {
       this.lastConnectionKind = kind as PrimarySessionKind;
@@ -2855,6 +2902,8 @@ struct RustDeskIndex {
   private failEasyTierPreconnect(target: string, kind: PeerLaunchKind, message: string): void {
     const normalizedMessage = message.trim().length > 0 ? message.trim() : 'EasyTier 预组网未完成';
     EasyTierApiService.clearConnectionIntent(this.abilityContext());
+    this.clearConnectionHints();
+    this.forceRelayRetryTarget = '';
     this.connectionAttemptKind = kind === 'file_transfer' ? 'file_transfer' : 'primary';
     if (kind !== 'file_transfer') {
       this.lastConnectionKind = kind as PrimarySessionKind;
@@ -3017,7 +3066,7 @@ struct RustDeskIndex {
     }
     if (instance.state === EASYTIER_STATE_RUNNING) {
       return instance.peerCount > 0
-        ? `${instance.instanceName} 正在运行 · ${instance.peerCount} 个对端`
+        ? `${instance.instanceName} 正在运行 · ${instance.peerCount} 个节点`
         : `${instance.instanceName} 正在运行`;
     }
     if (instance.state === 'starting') {
@@ -3029,6 +3078,8 @@ struct RustDeskIndex {
   private cancelEasyTierRequest(): void {
     EasyTierApiService.cancelPending(this.abilityContext());
     this.easyTierRequestPending = false;
+    this.clearConnectionHints();
+    this.forceRelayRetryTarget = '';
     this.connectionUiPhase = 'idle';
     this.connectionUiMessage = '';
     this.easyTierStatusText = '已取消 EasyTier 预组网';
@@ -3039,6 +3090,35 @@ struct RustDeskIndex {
       this.getUIContext().getPromptAction().showToast({ message, duration: 5000 });
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'Failed to show EasyTier feedback: %{public}s', String(error));
+    }
+  }
+
+  /**
+   * Tells the operator that something they just did failed.
+   *
+   * `errorText` alone is rendered only on the diagnostics page, so a tap that
+   * failed used to look like a tap that did nothing. This keeps the record there
+   * (with the technical detail, when there is one) and also says it on screen.
+   * A text already on screen is not stacked again: a cause that repeats within
+   * the quiet period is said once.
+   */
+  private notifyFailure(message: string, detail: string = ''): void {
+    const text = message.trim();
+    if (text.length === 0) {
+      return;
+    }
+    const cause = detail.trim();
+    this.errorText = cause.length > 0 && cause !== text ? `${text}（${cause}）` : text;
+    const now = Date.now();
+    if (text === this.lastFailureNotice && now - this.lastFailureNoticeAt < FAILURE_NOTICE_QUIET_MS) {
+      return;
+    }
+    this.lastFailureNotice = text;
+    this.lastFailureNoticeAt = now;
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: text, duration: 4000 });
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'Failed to show failure notice: %{public}s', String(error));
     }
   }
 
@@ -3070,7 +3150,14 @@ struct RustDeskIndex {
       this.decoderCapabilityReport = report;
       // The real HAR returns advertised_metadata with h264_decoder/hevc_decoder
       // and not_measured throughput/HDR. It has no old recommendation rows.
-      // Do not overwrite selected codec, FPS, Surface path or measured UI state.
+      // The rows only say which decoders exist: they are what the diagnostics
+      // page lists and what an explicit codec choice is checked against. They
+      // never choose a codec for `auto`, and never touch FPS, the Surface path
+      // or measured state.
+      this.decoderCapabilities = decoderCapabilitiesFromReport(report);
+      if (!this.activeSessionId) {
+        this.preferredCodec = resolveCodecPreference(this.sessionDefaults.preferredCodec, this.decoderCapabilities);
+      }
       const serverGeneration = this.serverTestGeneration;
       const serverReply = await this.mainBridge.loadServerConfig();
       if (!this.pageVisible || serverGeneration !== this.serverTestGeneration ||
@@ -3116,23 +3203,32 @@ struct RustDeskIndex {
     }
   }
 
+  /** What a failed attempt offered (a relay, a server confirmation) belongs to that attempt only. */
+  private clearConnectionHints(): void {
+    this.connectionRelayHint = false;
+    this.connectionServerHint = '';
+    this.clearServerConfirmTimer();
+  }
+
   private beginConnectionAttempt(kind: PrimarySessionKind, target: string): void {
     this.clearConnectionTimeout();
     this.connectionAttemptKind = 'primary';
     this.lastConnectionKind = kind;
     this.connectionUiTarget = target;
+    this.clearConnectionHints();
     this.connectionUiPhase = 'connecting';
     this.connectionUiMessage = kind === 'vnc'
-      ? '正在按 RFB 协议连接 VNC 服务端。'
+      ? '正在连接 VNC 设备。'
       : (kind === 'rdp'
-        ? '正在协商 RDP 连接与安全通道。'
-        : '正在建立安全连接，成功后再进入远控。');
+        ? '正在连接远程桌面并建立安全通道。'
+        : '正在连接对方设备。');
   }
 
   private beginTransferConnectionAttempt(target: string): void {
     this.clearConnectionTimeout();
     this.connectionAttemptKind = 'file_transfer';
     this.connectionUiTarget = target;
+    this.clearConnectionHints();
     this.connectionUiPhase = 'connecting';
     this.connectionUiMessage = this.transferManager.getStatusMessage();
     this.transferConnectionPending = true;
@@ -3151,7 +3247,7 @@ struct RustDeskIndex {
     this.connectionTimeoutId = setTimeout(() => {
       this.connectionTimeoutId = -1;
       if (this.connectionUiPhase === 'connecting' || this.connectionUiPhase === 'authenticating') {
-        this.failConnectionAttempt('连接超时。请确认远端在线、网络可用后重试。');
+        this.failConnectionAttempt('连接超时。请确认对方设备在线、网络可用后重试。');
       }
     }, CONNECTION_TIMEOUT_MS) as number;
   }
@@ -3162,6 +3258,15 @@ struct RustDeskIndex {
     }
     const normalizedMessage = message.trim().length > 0 ? message.trim() : '连接未完成';
     this.clearConnectionTimeout();
+    // Offered only where the engine said the direct route is what failed, for an
+    // ID connection that had not already asked for a relay.
+    const failureFacts = this.sessionFailureFacts.get(this.activeSessionId);
+    this.connectionRelayHint = failureFacts !== undefined
+      && describeSessionFailure(failureFacts, '').relayMayHelp
+      && this.connectionAttemptKind !== 'file_transfer'
+      && this.lastConnectionKind === 'remote_control'
+      && !this.activeSessionForceRelay;
+    this.sessionFailureFacts.delete(this.activeSessionId);
     this.connectionUiPhase = 'failed';
     this.connectionUiMessage = normalizedMessage;
     this.errorText = normalizedMessage;
@@ -3169,6 +3274,13 @@ struct RustDeskIndex {
       this.transferConnectionPending = false;
       this.closeTransferSession(true, true);
       return;
+    }
+    const others = this.remoteSessionTabsController.count()
+      - (this.remoteSessionTabsController.get(this.activeSessionId) !== undefined ? 1 : 0);
+    if (others > 0) {
+      // Closing this attempt brings another session's pane to the front, which
+      // replaces this card: the reason is said as a notice instead of being lost.
+      this.notifyFailure(normalizedMessage);
     }
     void this.closeSession(normalizedMessage, true);
   }
@@ -3180,6 +3292,8 @@ struct RustDeskIndex {
     }
     const attemptKind = this.connectionAttemptKind;
     this.clearConnectionTimeout();
+    this.clearConnectionHints();
+    this.forceRelayRetryTarget = '';
     this.connectionUiPhase = 'idle';
     this.connectionUiMessage = '';
     if (attemptKind === 'file_transfer') {
@@ -3190,15 +3304,19 @@ struct RustDeskIndex {
     void this.closeSession('已取消连接');
   }
 
-  private retryConnectionAttempt(): void {
+  private retryConnectionAttempt(viaRelay: boolean = false): void {
     const target = this.connectionUiTarget.trim();
     if (target.length === 0) {
       this.dismissConnectionAttempt();
       return;
     }
+    this.forceRelayRetryTarget = viaRelay ? target : '';
+    this.forceRelayRetryAt = viaRelay ? Date.now() : 0;
     this.peerTarget = target;
     if (this.connectionAttemptKind === 'file_transfer') {
-      void this.openTransferWorkspace();
+      // The retry dials what failed: an ID that was dialled as an ID stays one.
+      void this.preparePeerLaunch(target, 'file_transfer',
+        this.transferAttemptTarget === target && this.transferAttemptRustdeskIdOnly);
       return;
     }
     if (this.sessionTransitionBusy()) {
@@ -3209,11 +3327,104 @@ struct RustDeskIndex {
       hilog.info(DOMAIN, TAG, 'retry deferred until the failed attempt finished releasing');
       return;
     }
-    void this.preparePeerLaunch(target, this.lastConnectionKind, this.lastConnectionRustdeskIdOnly);
+    void this.preparePeerLaunch(target, this.lastConnectionKind, this.lastConnectionRustdeskIdOnly, viaRelay);
+  }
+
+  /**
+   * An ID is routed only through a server profile the operator has confirmed.
+   * Ends the attempt saying so and offers the one confirmation that is missing.
+   */
+  private failForUnconfirmedServer(): void {
+    const usesOfficial = this.serverConfig.mode === 'official';
+    this.failConnectionAttempt(usesOfficial
+      ? '第一次连接前需要确认使用的服务器。可以直接使用 RustDesk 官方服务器；如果你有自建服务器，请到“设置 > 服务器”填写。'
+      : '服务器设置还没有保存生效。确认后将使用“设置 > 服务器”里填写的服务器连接。');
+    this.connectionServerHint = usesOfficial ? 'official' : 'custom';
+  }
+
+  private clearServerConfirmTimer(): void {
+    if (this.serverConfirmTimer >= 0) {
+      clearInterval(this.serverConfirmTimer);
+      this.serverConfirmTimer = -1;
+    }
+  }
+
+  /**
+   * The operator's own confirmation of the server profile the server page
+   * shows (the official server unless they edited it), followed by the
+   * connection they asked for.
+   *
+   * It goes through the same save an edit on that page uses, so the engine
+   * records the same explicit approval; nothing is approved without this tap.
+   * The connection is retried only once the engine reports the profile approved.
+   */
+  private confirmServerAndRetry(): void {
+    this.clearServerConfirmTimer();
+    const offered = this.connectionServerHint;
+    this.connectionServerHint = '';
+    this.connectionUiPhase = 'connecting';
+    this.connectionUiMessage = '正在保存服务器设置…';
+    this.flushServerConfiguration(true);
+    let waitedMs = 0;
+    this.serverConfirmTimer = setInterval((): void => {
+      waitedMs += 250;
+      if (this.connectionUiPhase !== 'connecting') {
+        // Cancelled or replaced while waiting.
+        this.clearServerConfirmTimer();
+        return;
+      }
+      if (this.serverProfile.captureApproved() !== undefined) {
+        this.clearServerConfirmTimer();
+        this.retryConnectionAttempt();
+        return;
+      }
+      const refused = !this.serverSaveInFlight && this.serverConfig.resultState === 'error';
+      if (refused || waitedMs >= 10000) {
+        this.clearServerConfirmTimer();
+        this.connectionUiPhase = 'failed';
+        // The save's own sentence already says what did not happen.
+        this.connectionUiMessage = refused && this.serverConfig.message.length > 0
+          ? this.serverConfig.message
+          : '服务器设置没有保存成功。请到“设置 > 服务器”检查后重试。';
+        // Still unconfirmed, so the same confirmation is what is offered again.
+        this.connectionServerHint = offered;
+      }
+    }, 250) as number;
+  }
+
+  /**
+   * Whether the connection progress card is shown.
+   *
+   * The session pane has to exist before the engine starts (its Surface is
+   * bound first), so it is already in front while the connection is still
+   * being made. Until the peer has authorized the session that pane is only a
+   * black rectangle, so the card stays over it and says what is happening and
+   * offers Cancel. Once connected, the pane is the session and nothing covers it.
+   */
+  private connectionAttemptOverlayVisible(): boolean {
+    if (this.connectionUiPhase === 'idle' || this.passwordDialogVisible || this.insecureConnectionDialogVisible
+      || this.directCredentialsVisible || this.rdpCertificateDialogVisible) {
+      return false;
+    }
+    if (!this.showPreviewModal) {
+      return true;
+    }
+    // Never over a session that is already authorized: if the pane in front
+    // belongs to a connected session, it is that session, whatever an attempt
+    // elsewhere is doing.
+    if (this.sessionPhase === 'connected') {
+      return false;
+    }
+    return this.connectionUiPhase === 'connecting' || this.connectionUiPhase === 'authenticating'
+      || this.connectionUiPhase === 'awaiting_approval';
   }
 
   private dismissConnectionAttempt(): void {
     this.clearConnectionTimeout();
+    this.clearServerConfirmTimer();
+    this.connectionServerHint = '';
+    this.forceRelayRetryTarget = '';
+    this.connectionRelayHint = false;
     this.connectionUiPhase = 'idle';
     this.connectionUiMessage = '';
     this.connectionAttemptKind = 'primary';
@@ -3323,7 +3534,7 @@ struct RustDeskIndex {
   }
 
   private async connectRemoteSessionHandoff(envelope: RemoteSessionHandoffEnvelope): Promise<void> {
-    this.sessionReturnTabIndex = 0;
+    this.sessionReturnTabIndex = MAIN_TAB_HOME;
     try {
       await this.connectSessionDirect('remote_control', envelope);
     } finally {
@@ -3374,7 +3585,7 @@ struct RustDeskIndex {
       (handoff?.targetKind === 'target' && this.handoffTargetKind(displayTarget) === 'ip'));
     this.lastConnectionRustdeskIdOnly = idOnly;
     if (connectionTarget.length === 0 || displayTarget.length === 0) {
-      this.errorText = '请输入目标地址';
+      this.notifyFailure('请先输入要连接的设备 ID 或地址。');
       return;
     }
     if (handoff === undefined) {
@@ -3382,7 +3593,7 @@ struct RustDeskIndex {
       // typed scheme is refused rather than allowed to override the chosen mode.
       const issue = targetFieldIssue(kind, connectionTarget);
       if (issue !== '') {
-        this.errorText = targetFieldIssueText(kind, issue);
+        this.notifyFailure(targetFieldIssueText(kind, issue));
         return;
       }
     }
@@ -3402,7 +3613,7 @@ struct RustDeskIndex {
       return;
     }
     if (!this.remoteSessionTabsController.canAdd()) {
-      this.errorText = '最多可同时保留 6 个远控会话，请先关闭一个标签页';
+      this.notifyFailure('最多同时保留 6 个远程会话。请先断开一个，再连接新的设备。');
       return;
     }
     // A direct VNC/RDP viewer consumes its password when it dials and its endpoint
@@ -3457,7 +3668,12 @@ struct RustDeskIndex {
         String((handoff.connToken ?? '').length > 0),
       );
     }
-    this.activeSessionForceRelay = targetKind === 'target' ? (handoff?.forceRelay ?? false) : false;
+    // A "retry via relay" names this one target and is spent by this dial; an
+    // old request that never reached a dial is not honoured later.
+    const relayRetry = this.forceRelayRetryTarget.length > 0 && this.forceRelayRetryTarget === displayTarget
+      && Date.now() - this.forceRelayRetryAt < 120000;
+    this.forceRelayRetryTarget = '';
+    this.activeSessionForceRelay = targetKind === 'target' ? ((handoff?.forceRelay ?? false) || relayRetry) : false;
     await this.applySessionFullscreen(false, true);
     if (directWire === 'rdp' && (credentialGeneration !== this.rdpCredentialGeneration ||
       !this.pageVisible || !this.appForeground)) {
@@ -3483,7 +3699,7 @@ struct RustDeskIndex {
       : (sessionKind === 'rdp' ? '正在连接远程桌面...' : '正在建立远控连接...');
     this.sessionMessage = sessionKind === 'vnc'
       ? '正在连接 VNC'
-      : (sessionKind === 'rdp' ? '正在连接远程桌面' : '正在连接远端');
+      : (sessionKind === 'rdp' ? '正在连接远程桌面' : '正在连接对方设备');
     hilog.info(DOMAIN, TAG, 'connectSession kind=%{public}s target=%{public}s', sessionKind, displayTarget);
     this.showTransferWorkspace = false;
     this.showPreviewModal = false;
@@ -3491,6 +3707,16 @@ struct RustDeskIndex {
     this.resetPreviewState();
     const connectionGeneration = this.connectionGeneration + 1;
     this.connectionGeneration = connectionGeneration;
+    if (sessionKind === 'remote_control' && targetKind !== 'ip' && handoff === undefined
+      && this.activeSessionApprovedProfile === undefined) {
+      // The engine routes an ID only through a server profile its operator has
+      // confirmed, and none has been yet (a fresh install). Say so and offer the
+      // one confirmation that is missing, instead of creating a session the
+      // engine can only refuse.
+      this.activeSessionPassword = '';
+      this.failForUnconfirmedServer();
+      return;
+    }
     if (sessionKind === 'rdp') {
       const measured = await this.measureRdpPaneBeforeAdd(connectionGeneration);
       if (!measured || connectionGeneration !== this.connectionGeneration ||
@@ -3593,7 +3819,7 @@ struct RustDeskIndex {
     if (!surfaceBound) {
       // Without a real Surface the session is refused with its reason instead of
       // being started into a degraded path nobody chose.
-      this.failConnectionAttempt(this.errorText || '视频 Surface 未能在连接前绑定，已取消连接');
+      this.failConnectionAttempt(this.errorText || '画面窗口没有准备好，连接已取消。请重试。');
       return;
     }
     // The operator's codec preference is applied before the session starts, so the
@@ -3603,6 +3829,7 @@ struct RustDeskIndex {
     // pre-start refusal is a bridge defect to be fixed there, not a reason to
     // reorder this call.
     this.applyCodecPreference();
+    this.applyImageQualityPreference();
     const sessionStarted = await this.startSession();
     if (connectionGeneration !== this.connectionGeneration || !sessionStarted) {
       if (connectionGeneration === this.connectionGeneration) {
@@ -3615,7 +3842,7 @@ struct RustDeskIndex {
       return;
     }
     this.connectionUiPhase = 'connecting';
-    this.connectionUiMessage = '正在等待远端响应；可随时取消。';
+    this.connectionUiMessage = '正在等待对方设备响应；可随时取消。';
     this.scheduleConnectionTimeout();
     this.publishDataTransferChanged();
     this.applyRemoteAudioPollingForKind(sessionKind);
@@ -3641,7 +3868,7 @@ struct RustDeskIndex {
         // out has no native text and uses this client's own wording.
         this.errorText = this.previewSurfaceBindFailure.length > 0
           ? this.previewSurfaceBindFailure
-          : `视频 Surface 未能在连接前就绪：${String(error)}`;
+          : `画面窗口没有准备好（${String(error)}）`;
         hilog.error(DOMAIN, TAG, 'bindPreviewSurfaceBeforeStart failed: %{public}s', this.errorText);
       }
       return false;
@@ -3720,7 +3947,7 @@ struct RustDeskIndex {
       if (shareCoordinator.state.shareEpoch === epoch) {
         shareCoordinator.hideInviteDialog();
         shareCoordinator.refreshStatus();
-        this.showSessionNotice('近场连接失败，请检查分布式权限及对端协同状态');
+        this.showSessionNotice('近场连接失败，请检查两台设备的多设备协同权限');
       }
       return false;
     } finally {
@@ -3851,10 +4078,11 @@ struct RustDeskIndex {
       return false;
     }
     if (!surfaceBound) {
-      this.failConnectionAttempt(this.errorText || '视频 Surface 未能在连接前绑定，已取消连接');
+      this.failConnectionAttempt(this.errorText || '画面窗口没有准备好，连接已取消。请重试。');
       return false;
     }
     this.applyCodecPreference();
+    this.applyImageQualityPreference();
     const sessionStarted = await this.startSession();
     if (connectionGeneration !== this.connectionGeneration || !sessionStarted) {
       if (connectionGeneration === this.connectionGeneration) {
@@ -3863,7 +4091,7 @@ struct RustDeskIndex {
       return false;
     }
     this.connectionUiPhase = 'connecting';
-    this.connectionUiMessage = '正在等待远端响应；可随时取消。';
+    this.connectionUiMessage = '正在等待对方设备响应；可随时取消。';
     this.scheduleConnectionTimeout();
     this.publishDataTransferChanged();
     this.startPolling();
@@ -4007,7 +4235,7 @@ struct RustDeskIndex {
     } else {
       this.clearConnectionTimeout();
       this.connectionUiPhase = 'awaiting_password';
-      this.connectionUiMessage = message.length > 0 ? message : '请输入远端设备密码，或等待对方设备点击“接受”。';
+      this.connectionUiMessage = message.length > 0 ? message : '请输入对方设备的密码，或等待对方点击“接受”。';
       this.sessionPhase = 'awaiting_password';
       this.sessionMessage = '等待输入密码';
       this.connectionSummary = '等待密码验证';
@@ -4122,7 +4350,7 @@ struct RustDeskIndex {
     if (this.authDialogMode === '2fa') {
       const code = this.code2faDraft.trim();
       if (this.authChallengeMode !== '2fa') {
-        this.authErrorMessage = '远端尚未请求 2FA。RustDesk 必须先完成密码验证，再提交第二因素验证码。';
+        this.authErrorMessage = '对方还没有要求验证码。需要先通过密码验证，再输入验证码。';
         this.errorText = this.authErrorMessage;
         hilog.warn(
           DOMAIN,
@@ -4142,7 +4370,7 @@ struct RustDeskIndex {
       this.authErrorMessage = '';
       this.clearPasswordTimeout();
       this.connectionUiPhase = 'authenticating';
-      this.connectionUiMessage = '2FA 验证码已提交，正在等待远端验证。';
+      this.connectionUiMessage = '验证码已提交，正在等待对方设备验证。';
       this.scheduleConnectionTimeout();
       try {
         if (this.passwordSessionKind === 'file_transfer') {
@@ -4173,7 +4401,7 @@ struct RustDeskIndex {
           // decides it. Nothing here reports the file session as ready --
           // `peer_info` does, and only the peer sends it.
           this.code2faDraft = '';
-          this.transferRootStatus = '2FA 验证码已提交，正在等待远端验证';
+          this.transferRootStatus = '验证码已提交，正在等待对方设备验证';
           this.connectionUiMessage = this.transferRootStatus;
           return;
         }
@@ -4248,7 +4476,7 @@ struct RustDeskIndex {
         // A locally refused answer cannot end a live authentication. Preserve
         // its draft and wait for this session's own next peer event.
         this.errorText = response.action === 'native_response' ? '密码提交失败，请重试'
-          : (response.message?.trim() || '未收到密码入队确认，请重试');
+          : (response.message?.trim() || '密码没有提交成功，请重试');
         this.authErrorMessage = this.errorText;
         this.passwordDialogVisible = true;
         return;
@@ -4261,7 +4489,7 @@ struct RustDeskIndex {
       this.passwordDialogVisible = false;
       this.clearPasswordTimeout();
       this.connectionUiPhase = 'authenticating';
-      this.connectionUiMessage = '密码已提交，正在等待远端验证。';
+      this.connectionUiMessage = '密码已提交，正在等待对方设备验证。';
       this.scheduleConnectionTimeout();
       this.updateSessionState(response);
     } catch (_) {
@@ -4309,7 +4537,7 @@ struct RustDeskIndex {
     if (refusal.includes('SecondFactorNotAwaiting')) {
       // The peer stopped asking for a code, so this step is not this client's to
       // reopen: the password step comes first.
-      const message = '远端尚未请求 2FA，请先完成密码验证。';
+      const message = '对方还没有要求验证码，请先完成密码验证。';
       this.connectionUiMessage = message;
       this.openPasswordDialog(kind, message, 'password');
       return;
@@ -4709,11 +4937,16 @@ struct RustDeskIndex {
       ? nextTab.connectionSummary
       : `${nextTab.target} · ${nextTab.phase}`;
     this.connectionUiTarget = nextTab.target;
+    this.clearConnectionHints();
     this.connectionUiPhase = nextTab.connected ? 'connected' : 'connecting';
     this.connectionUiMessage = nextTab.connected ? '已切换到此设备' : '会话仍在连接';
     this.errorText = '';
     this.activeSessionDefaults = this.copySessionDefaults(nextTab.sessionDefaults);
     this.clipboardSyncEnabled = this.activeSessionDefaults.clipboardEnabled;
+    this.preferredCodec = this.resolvePreferredCodec(
+      this.activeSessionDefaults.preferredCodec,
+      this.decoderCapabilities,
+    );
     this.performanceTuningApplied = false;
     this.remoteInteractionReady = false;
     this.clipboardFileRootQueuedSessionId = '';
@@ -4795,10 +5028,10 @@ struct RustDeskIndex {
       this.connectionAttemptKind = 'primary';
       this.errorText = '';
       this.peerTarget = '';
-      this.sessionReturnTabIndex = 0;
-      this.currentTabIndex = 0;
+      this.sessionReturnTabIndex = MAIN_TAB_HOME;
+      this.currentTabIndex = MAIN_TAB_HOME;
       if (!this.isWideMainLayout()) {
-        this.hdsTabsController.changeIndex(0);
+        this.hdsTabsController.changeIndex(MAIN_TAB_HOME);
       }
     } finally {
       this.finishRemoteSessionSwitch();
@@ -4866,7 +5099,8 @@ struct RustDeskIndex {
     if (retryTarget.length > 0) {
       // The failed attempt has finished releasing its wire, so the retry dials a
       // fresh viewer and asks for the credential again.
-      void this.preparePeerLaunch(retryTarget, this.lastConnectionKind, this.lastConnectionRustdeskIdOnly);
+      void this.preparePeerLaunch(retryTarget, this.lastConnectionKind, this.lastConnectionRustdeskIdOnly,
+        this.forceRelayRetryTarget === retryTarget);
       return;
     }
     const pendingSessionId = this.pendingSessionSwitchId;
@@ -5003,7 +5237,7 @@ struct RustDeskIndex {
       if (!released) {
         hilog.warn(DOMAIN, TAG, 'closeSession kept session=%{public}s: a destination is still held', sessionId);
         this.sessionPhase = preserveConnectionFailure ? this.sessionPhase : 'connected';
-        this.sessionMessage = '远端仍在释放画面连接，暂时保留会话';
+        this.sessionMessage = '正在结束与对方的连接，会话暂时保留';
         this.connectionSummary = `${this.activeSessionShareTarget} · 正在关闭`;
         return;
       }
@@ -5025,7 +5259,7 @@ struct RustDeskIndex {
       if (holdsOwedBeforeClose.length > 0 && holdsOwedBeforeClose !== '0') {
         // The connection attempted releases the peer refused: the session is not
         // reported as cleanly stopped while that count is outstanding.
-        this.sessionMessage = `${this.sessionMessage}；仍有 ${holdsOwedBeforeClose} 个按键释放未获远端确认`;
+        this.sessionMessage = `${this.sessionMessage}；对方设备上还有 ${holdsOwedBeforeClose} 个按键未确认松开`;
       }
       if (!sessionId) {
         const fallbackSessionId = this.remoteSessionTabsController.activeId();
@@ -5048,6 +5282,7 @@ struct RustDeskIndex {
       this.activeCoreSessionId = '';
       this.activeSessionLifecycleEpoch = '';
       const nextSessionId = this.remoteSessionTabsController.remove(sessionId);
+      this.sessionFailureFacts.delete(sessionId);
       if (!preserveRdpCertificateDecision) {
         this.rdpCertificateRejectedSessions.delete(sessionId);
       }
@@ -5227,6 +5462,8 @@ struct RustDeskIndex {
     this.pendingPreviewPeerInfo = undefined;
     this.qualityTelemetry = emptyQualityTelemetry();
     this.codecPreferenceApplied = false;
+    this.imageQualityApplied = false;
+    this.selectedImageQuality = this.activeSessionDefaults.imageQuality;
     this.touchMode = this.activeSessionDefaults.touchMode;
     this.relativeMouseMode = !this.touchMode && !this.isDirectWireSession() && this.activeSessionDefaults.relativeMouseMode;
     this.inputEnabled = this.activeSessionDefaults.inputEnabled;
@@ -5769,7 +6006,7 @@ struct RustDeskIndex {
           controller.discardRemoteClipboardFiles(sessionId, fact.paths);
         }
       } else if (fact.kind === 'failed') {
-        const reason = fact.error ?? fact.reason ?? '对端未完成文件剪贴板操作';
+        const reason = fact.error ?? fact.reason ?? '对方没有完成文件剪贴板操作';
         this.logRelativeDebug('clipboard_files', `failed reason=${String(fact.reason ?? '')}`);
         this.showSessionNotice(`文件剪贴板未完成：${reason}`);
       } else if (fact.kind === 'offered') {
@@ -5828,7 +6065,7 @@ struct RustDeskIndex {
     const message = String(event.message ?? '');
     this.logRelativeDebug('clipboard_write', `ok=false message=${message}`);
     if (this.isClipboardTextSyncAllowed()) {
-      this.showSessionNotice(`剪贴板未同步到远端：${message.length > 0 ? message : '对端拒绝了此操作'}`);
+      this.showSessionNotice(`剪贴板没有同步到对方设备：${message.length > 0 ? message : '对方拒绝了这次操作'}`);
     }
   }
 
@@ -5870,6 +6107,8 @@ struct RustDeskIndex {
       && this.isInteractiveSessionActive() && this.showPreviewModal
       && !this.showTransferWorkspace && !this.passwordDialogVisible
       && !this.directCredentialsVisible && !this.rdpCertificateDialogVisible
+      // A request to connect to this device is being answered over the session.
+      && controlledHostCoordinator.state.incoming === undefined
       && !this.sessionTransitionBusy() && this.overlayState.getActivePanel() === 'home';
   }
 
@@ -5974,7 +6213,7 @@ struct RustDeskIndex {
       return;
     }
     if (!this.nativeSessionBridge.setRemoteAudioMuted(this.activeSessionId, !enabled)) {
-      this.errorText = '无法切换远端音频状态';
+      this.notifyFailure('无法切换声音，请重试。');
       return;
     }
     this.refreshRemoteAudioState();
@@ -6028,7 +6267,7 @@ struct RustDeskIndex {
     this.pendingResolutionDisplay = 0;
     this.pendingResolutionWidth = size.width;
     this.pendingResolutionHeight = size.height;
-    this.sessionMessage = `已请求 RDP 桌面 ${size.width}×${size.height}，等待远端确认`;
+    this.sessionMessage = `已请求 RDP 桌面 ${size.width}×${size.height}，等待对方确认`;
     return true;
   }
 
@@ -6119,7 +6358,7 @@ struct RustDeskIndex {
       // still be held as connected; the status names the real close failure.
       this.transferSessionReady = false;
       this.transferConnectionStatus = this.transferManager.getStatusMessage();
-      this.errorText = this.transferConnectionStatus;
+      this.notifyFailure(this.transferConnectionStatus);
       return;
     }
     if (!this.runtimeInitialized) {
@@ -6127,7 +6366,7 @@ struct RustDeskIndex {
     }
     const target = this.peerTarget.trim();
     if (target.length === 0) {
-      this.errorText = '请输入目标地址';
+      this.notifyFailure('请先输入要连接的设备 ID 或地址。');
       return;
     }
     this.peerTarget = target;
@@ -6135,7 +6374,7 @@ struct RustDeskIndex {
     if (this.transferManager.isReady()
       && this.transferSessionTarget.length > 0
       && this.transferSessionTarget !== target) {
-      this.errorText = `已有 ${this.transferSessionTarget} 的文件传输会话，请先结束该会话再切换设备`;
+      this.notifyFailure(`正在和 ${this.transferSessionTarget} 传文件。请先结束那次传输，再换设备。`);
       if (this.transferManager.canTransfer()) {
         this.hideSystemIme(false);
         this.hideSoftKeyboard();
@@ -6148,8 +6387,8 @@ struct RustDeskIndex {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
       const root = await this.downloadRootManager.acquire(context);
       if (!root) {
-        this.transferRootStatus = '未能获得 DOWNLOAD 目录';
-        this.errorText = this.transferRootStatus;
+        this.transferRootStatus = '没有获得“下载”文件夹的访问权限，无法传输文件。';
+        this.notifyFailure(this.transferRootStatus);
         return;
       }
       if (!this.verifyTransferRoot(root)) {
@@ -6184,8 +6423,14 @@ struct RustDeskIndex {
     // value-owned copy for this add -- not the draft the settings card may still
     // be editing, and not the profile of a desktop session that may be open. A
     // direct address names no server route, so none is attached for it.
-    const approvedRoute = rustdeskIdOnly || this.handoffTargetKind(target) !== 'ip'
-      ? this.serverProfile.captureApproved() : undefined;
+    const needsRoute = rustdeskIdOnly || this.handoffTargetKind(target) !== 'ip';
+    const approvedRoute = needsRoute ? this.serverProfile.captureApproved() : undefined;
+    if (needsRoute && approvedRoute === undefined) {
+      // As for a desktop session to an ID: nothing is dialled until a server is
+      // confirmed, and the confirmation is offered instead of an engine refusal.
+      this.failForUnconfirmedServer();
+      return;
+    }
     if (approvedRoute?.keyKind === 'shared') {
       const accepted = await this.confirmSharedKeyConnection(`file-transfer:${target}:${approvedRoute.revision}`);
       if (!accepted || this.serverProfile.captureApproved()?.revision !== approvedRoute.revision) {
@@ -6235,8 +6480,8 @@ struct RustDeskIndex {
     const probeName = `rustdesk-transfer-gate-${Date.now()}.txt`;
     const probePath = this.downloadRootManager.buildChildPath(root.path, probeName);
     if (!probePath) {
-      this.transferRootStatus = 'DOWNLOAD 路径无效';
-      this.errorText = this.transferRootStatus;
+      this.transferRootStatus = '“下载”文件夹不可用，无法传输文件。';
+      this.notifyFailure(this.transferRootStatus);
       return false;
     }
     let created = false;
@@ -6246,7 +6491,7 @@ struct RustDeskIndex {
       fileIo.closeSync(file.fd);
       const localNames = fileIo.listFileSync(root.path);
       if (!this.containsFileName(localNames, probeName)) {
-        this.transferRootStatus = 'ArkTS 无法列出 DOWNLOAD 探测文件';
+        this.transferRootStatus = '无法读取“下载”文件夹，文件传输不可用。';
         this.errorText = this.transferRootStatus;
         return false;
       }
@@ -6297,7 +6542,7 @@ struct RustDeskIndex {
         entries.push({ name, path, size: Number(stat.size) });
       }
     } catch (error) {
-      this.errorText = `读取本地文件失败：${String(error)}`;
+      this.notifyFailure('无法读取本机“下载”文件夹里的文件。', String(error));
     }
     this.transferLocalEntries = entries;
     if (!this.hasLocalTransferEntry(this.selectedTransferLocalName)) {
@@ -6437,7 +6682,7 @@ struct RustDeskIndex {
     }
     const localPath = this.downloadRootManager.buildChildPath(root.path, remote.name);
     if (!localPath) {
-      this.errorText = '本地下载文件名无效';
+      this.notifyFailure('这个文件名无法保存到本机，请换一个文件。');
       return;
     }
     const remotePath = this.joinRemoteTransferPath(this.transferRemoteDirectory, remote.name);
@@ -6807,7 +7052,7 @@ struct RustDeskIndex {
 
   private reportSessionWindowControlFailure(action: string, error: Error | BusinessError): void {
     const message = `${action}失败：${String(error)}`;
-    this.errorText = message;
+    this.notifyFailure(`${action}失败`, String(error));
     this.sessionMessage = message;
     hilog.error(DOMAIN, TAG, '%{public}s', message);
   }
@@ -7025,7 +7270,7 @@ struct RustDeskIndex {
     this.pendingResolutionDisplay = display;
     this.pendingResolutionWidth = resolution.width;
     this.pendingResolutionHeight = resolution.height;
-    this.sessionMessage = `已请求远端分辨率 ${resolution.width}x${resolution.height}`;
+    this.sessionMessage = `已请求把对方分辨率改为 ${resolution.width}x${resolution.height}`;
     this.logRelativeDebug(
       'resolution_select',
       `pending display=${display} width=${resolution.width} height=${resolution.height}`,
@@ -7067,7 +7312,7 @@ struct RustDeskIndex {
     this.declarePanelFrameRate();
     this.sessionMessage = remoteRateSupported
       ? `已请求 ${this.selectedRefreshRate} fps`
-      : `本机显示已设为 ${this.selectedRefreshRate} Hz；当前协议不支持远端采集帧率`;
+      : `本机显示已设为 ${this.selectedRefreshRate} Hz；这种连接不能调整对方的画面帧率`;
   }
 
   private syncInputEnabled(enabled: boolean): boolean {
@@ -7076,7 +7321,7 @@ struct RustDeskIndex {
       const response = this.nativeSessionBridge.setViewOnly(sessionId, !enabled);
       this.adoptInputGeneration(response, sessionId);
       if (!response.ok) {
-        this.errorText = response.message ?? '内核未接受输入开关';
+        this.notifyFailure('无法切换操作开关。', response.message ?? '');
         return false;
       }
       this.clearLocalInputState();
@@ -7084,7 +7329,7 @@ struct RustDeskIndex {
       this.reprojectVirtualCursorOverlay();
       return true;
     } catch (_) {
-      this.errorText = '原生输入开关未返回有效回执';
+      this.notifyFailure('无法切换操作开关，请重试。');
       return false;
     }
   }
@@ -7794,7 +8039,7 @@ struct RustDeskIndex {
       return;
     }
     if (mode === 'relative' && !this.relativeMouseModeSupported()) {
-      this.sessionMessage = '当前远端不支持相对鼠标模式';
+      this.sessionMessage = '对方设备不支持相对鼠标模式';
       return;
     }
     // Choosing any mode is also how input comes back on, so there is no way to
@@ -7808,7 +8053,7 @@ struct RustDeskIndex {
       this.activeSessionDefaults.inputEnabled = nextEnabled;
     }
     if (mode === 'off') {
-      this.sessionMessage = '输入已关闭，远端仍可观看';
+      this.sessionMessage = '已关闭操作，仍可观看对方画面';
       return;
     }
     const nextTouchMode = mode === 'touch';
@@ -8219,13 +8464,13 @@ struct RustDeskIndex {
       this.logRelativeDebug('input_release',
         `ok=${response.ok} pending=${String(response.release_pending)} owed=${String(response.releases_owed)} retired=${String(response.releases_retired)} unreleased=${String(response.releases_unreleased)}`);
       if (this.activeSessionId === sessionId && !response.ok) {
-        this.errorText = response.message ?? '输入释放未获内核确认';
+        this.errorText = response.message ?? '未能确认已松开对方设备上的按键';
       } else if (this.activeSessionId === sessionId && (response.releases_unreleased ?? 0) > 0) {
-        this.errorText = `仍有 ${String(response.releases_unreleased)} 个输入释放未确认`;
+        this.errorText = `对方设备上还有 ${String(response.releases_unreleased)} 个按键未确认松开`;
       }
     } catch (_) {
       if (this.activeSessionId === sessionId) {
-        this.errorText = '原生输入释放未返回有效回执';
+        this.errorText = '未能确认已松开对方设备上的按键';
       }
     }
   }
@@ -8254,7 +8499,7 @@ struct RustDeskIndex {
       const tab = this.remoteSessionTabsController.get(binding.sessionId);
       const unverifiedPeer = validInputGeneration(response.input_generation)
         && this.activeSessionKind === 'remote_control' && tab?.peerVerified === false;
-      this.errorText = unverifiedPeer ? '对端未验证，输入被引擎拒绝' : (response.message ?? failure);
+      this.errorText = unverifiedPeer ? '对方身份未验证，操作没有发送' : (response.message ?? failure);
       if (unverifiedPeer) {
         this.promptUnverifiedPeerInput(binding.sessionId);
       }
@@ -8446,7 +8691,7 @@ struct RustDeskIndex {
         `queued=${response.ok === true} down=${payload.down} press=${payload.press}`);
       return this.handleInputReceipt(response, binding, '键盘输入未被接收');
     } catch (_) {
-      this.errorText = '原生键盘输入未返回有效回执';
+      this.errorText = '键盘输入没有发送成功';
       return false;
     }
   }
@@ -8461,7 +8706,7 @@ struct RustDeskIndex {
       this.logRelativeDebug('keyboard_send_keysym', `queued=${response.ok === true} down=${down}`);
       return this.handleInputReceipt(response, binding, 'VNC 键盘输入未被接收');
     } catch (_) {
-      this.errorText = '原生 VNC 键盘输入未返回有效回执';
+      this.errorText = '键盘输入没有发送成功';
       return false;
     }
   }
@@ -8475,7 +8720,7 @@ struct RustDeskIndex {
         binding.sessionId, text, binding.inputGeneration);
       return this.handleInputReceipt(response, binding, '输入法文本未被接收');
     } catch (_) {
-      this.errorText = '原生文本输入未返回有效回执';
+      this.errorText = '文字输入没有发送成功';
       return false;
     }
   }
@@ -8585,24 +8830,6 @@ struct RustDeskIndex {
     }
   }
 
-  private selectPreferredCodec(capabilities: DecoderCapability[]): string {
-    const preferredOrder: string[] = ['H265', 'H264', 'AV1', 'VP9', 'VP8'];
-    for (let orderIndex = 0; orderIndex < preferredOrder.length; orderIndex += 1) {
-      const preferred = preferredOrder[orderIndex];
-      for (let capabilityIndex = 0; capabilityIndex < capabilities.length; capabilityIndex += 1) {
-        const capability = capabilities[capabilityIndex];
-        if (capability.codec !== preferred) {
-          continue;
-        }
-        if (capability.mimeAvailable || capability.recommendedAvailable || capability.hardwareAvailable ||
-          capability.softwareAvailable) {
-          return preferred.toLowerCase();
-        }
-      }
-    }
-    return 'auto';
-  }
-
   private configureDisplayFromPeerInfo(event: NativeEvent): void {
     if (event.platform && event.platform.length > 0) {
       this.peerPlatform = String(event.platform);
@@ -8666,7 +8893,7 @@ struct RustDeskIndex {
       this.applyDisplayConfiguration();
       this.reprojectVirtualCursorOverlay();
     } catch (error) {
-      this.errorText = `Display setup failed: ${String(error)}`;
+      this.errorText = `无法应用对方的显示器信息（${String(error)}）`;
     }
   }
 
@@ -8729,7 +8956,7 @@ struct RustDeskIndex {
     this.pendingResolutionDisplay = -1;
     this.pendingResolutionWidth = 0;
     this.pendingResolutionHeight = 0;
-    this.sessionMessage = `远端分辨率已确认 ${Math.round(width)}x${Math.round(height)}`;
+    this.sessionMessage = `对方分辨率已改为 ${Math.round(width)}x${Math.round(height)}`;
   }
 
   /**
@@ -8961,7 +9188,7 @@ struct RustDeskIndex {
       // The third argument is the opaque componentId xcomponentAttach allocated on
       // this UI environment. An empty string is the give-back request, so it is
       // never sent from here, and no node label or Surface id is substituted.
-      this.previewSurfaceBindFailure = '没有已接管的原生 XComponent holder（componentId 为空）';
+      this.previewSurfaceBindFailure = '画面窗口没有准备好';
       return false;
     }
     try {
@@ -8992,11 +9219,11 @@ struct RustDeskIndex {
         this.syncInputCapture();
       }
       if (refreshAfterBind) {
-        this.requestVideoRefresh();
+        this.requestVideoRefresh(false);
       }
       return true;
     } catch (error) {
-      this.errorText = `Surface bind failed: ${String(error)}`;
+      this.errorText = `画面窗口没有准备好（${String(error)}）`;
       return false;
     }
   }
@@ -9097,6 +9324,7 @@ struct RustDeskIndex {
       this.activeSessionId = response.session.sessionId;
       this.activeCoreSessionId = response.session.coreSessionId ?? '';
       this.sessionPhase = sessionUiPhase(response);
+      this.reflectRemoteApprovalWait();
       const epoch = response.session.lifecycleEpoch;
       if (epoch !== undefined && epoch.length > 0) {
         this.activeSessionLifecycleEpoch = epoch;
@@ -9110,7 +9338,7 @@ struct RustDeskIndex {
       this.sessionMessage = response.message ?? response.action;
     }
     if (!response.ok) {
-      this.errorText = response.message ?? 'Native action failed';
+      this.errorText = response.message ?? '操作没有完成';
       hilog.error(
         DOMAIN,
         TAG,
@@ -9121,6 +9349,32 @@ struct RustDeskIndex {
         this.errorText,
       );
     }
+  }
+
+  /**
+   * Shows the engine's own `awaiting_approval` phase: the peer answered that it
+   * takes no password and its operator has to accept the connection.
+   *
+   * Nothing can be typed to move this on, so a password form that was up is put
+   * away, and the connect timeout is stopped: how long the other person takes
+   * is not a network failure. The engine ends the wait itself when the peer
+   * answers, hangs up or goes silent.
+   */
+  private reflectRemoteApprovalWait(): void {
+    if (this.sessionPhase !== 'awaiting_approval' || this.connectionAttemptKind !== 'primary') {
+      return;
+    }
+    if (this.connectionUiPhase !== 'connecting' && this.connectionUiPhase !== 'authenticating'
+      && this.connectionUiPhase !== 'awaiting_password') {
+      return;
+    }
+    this.dismissPasswordDialogFor('primary');
+    this.clearConnectionTimeout();
+    this.connectionUiPhase = 'awaiting_approval';
+    // Empty: the overlay shows its own wording for this phase.
+    this.connectionUiMessage = '';
+    this.sessionMessage = '等待对方同意';
+    this.connectionSummary = '等待对方同意';
   }
 
   private applyPerformanceTuning(): void {
@@ -9139,6 +9393,7 @@ struct RustDeskIndex {
         this.selectedRefreshRate = this.sessionDisplayController.getRefreshRate();
       }
       this.applyCodecPreference();
+      this.applyImageQualityPreference();
       this.performanceTuningApplied = true;
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'applyPerformanceTuning failed: %{public}s', String(error));
@@ -9163,31 +9418,68 @@ struct RustDeskIndex {
     }
     try {
       const response = this.parseResponse(native.sessionSetCodecPreference(this.activeSessionId, this.preferredCodec));
-      // The answer carries the value the Core's own option store holds, not an echo
-      // of the request: a mismatch is the native side's own refusal, and a real
-      // failure is kept visible and retried after the connection is up rather than
-      // being reported as applied.
+      // The engine answers `{ok, scope, requested}`: `ok` means the preference is
+      // now this session's requested state (`next_session` before the dial, where
+      // the login carries it; `session` once running, where it is queued for the
+      // peer). It is a request, never the peer's confirmation. A refusal names
+      // its reason and is retried after the connection is up.
       this.codecPreferenceApplied = response.ok;
       this.logRelativeDebug('codec_preference',
-        `ok=${response.ok} requested=${this.preferredCodec} stored=${String(response.codec ?? '')} storedFlag=${String(response.stored === true)} coreAccepted=${String(response.coreAccepted === true)} message=${String(response.message ?? '')}`);
-      if (!response.ok && response.stored === true && response.coreAccepted === false) {
-        // The preference was verified in the Core's own option store, so it is what
-        // the next handshake carries; only the re-advertisement was refused now.
-        // That is a notice, not a failure of the operator's action, and the
-        // post-connection retry below still runs.
-        this.showSessionNotice(
-          `偏好已保存，连接建立后将重新通告（原因：${response.message ?? '原生层未接受本次通告'}）`,
-        );
-      } else if (!response.ok && response.stored !== true) {
-        // The Core did not store the preference, so it is not in force for the next
-        // handshake; the session still starts on the peer's own default.
-        this.showSessionNotice(
-          `编码偏好未生效（${response.message ?? '原生层未保存该值'}）`,
-        );
+        `ok=${response.ok} requested=${this.preferredCodec} scope=${String(response.scope ?? '')} message=${String(response.message ?? '')}`);
+      if (!response.ok) {
+        this.showSessionNotice(`编码偏好没有生效（${response.message ?? '未被接受'}）`);
       }
     } catch (error) {
       this.logRelativeDebug('codec_preference', `failed=${String(error)}`);
     }
+  }
+
+  /**
+   * Asks the other device for this session's picture trade-off.
+   *
+   * `balanced` is what a RustDesk host does unasked, so a session that starts
+   * with it sends nothing and stays exactly the session it was before this
+   * option existed. A direct VNC/RDP wire has no such option and is not asked.
+   */
+  private applyImageQualityPreference(): void {
+    if (!this.activeSessionId || this.imageQualityApplied) {
+      return;
+    }
+    if (this.isDirectWireSession() || this.selectedImageQuality === 'balanced') {
+      this.imageQualityApplied = true;
+      return;
+    }
+    try {
+      const response = this.nativeSessionBridge.setImageQuality(this.activeSessionId, this.selectedImageQuality);
+      this.imageQualityApplied = response.ok;
+      this.logRelativeDebug('image_quality',
+        `ok=${response.ok} requested=${this.selectedImageQuality} scope=${String(response.scope ?? '')} message=${String(response.message ?? '')}`);
+    } catch (error) {
+      this.logRelativeDebug('image_quality', `failed=${String(error)}`);
+    }
+  }
+
+  /** The operator picked a picture trade-off in the running session. */
+  private applyImageQualitySelection(quality: SessionImageQuality): void {
+    if (!this.activeSessionId || this.isDirectWireSession() || quality === this.selectedImageQuality) {
+      return;
+    }
+    try {
+      const response = this.nativeSessionBridge.setImageQuality(this.activeSessionId, quality);
+      if (!response.ok) {
+        this.notifyFailure('画面设置没有生效，请重试。', response.message ?? '');
+        return;
+      }
+    } catch (error) {
+      this.notifyFailure('画面设置没有生效，请重试。', String(error));
+      return;
+    }
+    this.selectedImageQuality = quality;
+    this.imageQualityApplied = true;
+    // Kept with this session, so coming back to its tab shows what it asked for.
+    this.activeSessionDefaults.imageQuality = quality;
+    this.sessionMessage = quality === 'low' ? '已切换为流畅优先'
+      : (quality === 'best' ? '已切换为清晰优先' : '已切换为均衡');
   }
 
   private pollSessionEventsOnce(limit: number): NativeEvent[] {
@@ -9195,7 +9487,8 @@ struct RustDeskIndex {
       return [];
     }
     const sessionId = this.activeSessionId;
-    const response = this.parseResponse(native.sessionPollEvents(sessionId, limit));
+    const rawPoll = native.sessionPollEvents(sessionId, limit);
+    const response = this.parseResponse(rawPoll);
     if (sessionId !== this.activeSessionId
       || (response.session !== undefined && response.session.sessionId !== sessionId)) {
       return [];
@@ -9204,6 +9497,9 @@ struct RustDeskIndex {
     this.adoptInputGeneration(response, sessionId);
     this.updateSessionState(response);
     const events = (response.events ?? []) as NativeEvent[];
+    if (!response.ok || events.some((event: NativeEvent) => event.name === 'close')) {
+      this.noteSessionFailure(rawPoll, sessionId);
+    }
     if (events.length > 0) {
       hilog.info(DOMAIN, TAG, 'pollSessionEventsOnce count=%{public}d phase=%{public}s', events.length, this.sessionPhase);
     }
@@ -9259,6 +9555,7 @@ struct RustDeskIndex {
           // could end the session, so the ordinary poll pays nothing for it.
           if (!response.ok || events.some((event: NativeEvent) => event.name === 'close')) {
             this.noteDirectWireFailure(rawPoll, response, tab.kind, tab.sessionId);
+            this.noteSessionFailure(rawPoll, tab.sessionId);
           }
           if (!response.ok) {
             this.closeRemoteAudio();
@@ -9338,7 +9635,8 @@ struct RustDeskIndex {
 
 
   private pollBackgroundSessionEvents(tab: RemoteSessionTab): void {
-    const response = this.parseResponse(native.sessionPollEvents(tab.sessionId, 20));
+    const rawPoll = native.sessionPollEvents(tab.sessionId, 20);
+    const response = this.parseResponse(rawPoll);
     if (response.session !== undefined && response.session.sessionId !== tab.sessionId) {
       return;
     }
@@ -9398,7 +9696,8 @@ struct RustDeskIndex {
       }
       if (event.name === 'close') {
         this.forgetRdpCertificateCredentials(tab.sessionId);
-        this.remoteSessionTabsController.markPhase(tab.sessionId, 'closed', '远端连接已结束');
+        this.noteSessionFailure(rawPoll, tab.sessionId);
+        this.remoteSessionTabsController.markPhase(tab.sessionId, 'closed', this.closeReasonFor(tab.sessionId));
         this.remoteSessionTabsController.enqueue(tab.sessionId, event, true);
         continue;
       }
@@ -9520,13 +9819,54 @@ struct RustDeskIndex {
    * ended without naming one keeps the generic wording.
    */
   private closeReasonForActiveSession(): string {
+    const facts = this.sessionFailureFacts.get(this.activeSessionId);
     if (this.isDirectWireSession()) {
       const reported = this.directWireFailureFor(this.activeSessionId);
       if (reported.length > 0) {
-        return reported;
+        // A cause this client has wording for is worded; any other is shown as
+        // the engine reported it, which is still the whole cause there is.
+        const direct = new SessionFailureFacts();
+        direct.error = reported;
+        return describeSessionFailure(direct, reported).text;
       }
     }
-    return '远端连接已结束';
+    return facts === undefined ? SESSION_ENDED_TEXT : describeSessionFailure(facts, SESSION_ENDED_TEXT).text;
+  }
+
+  /**
+   * Keeps what one poll answer said about why its session ended.
+   *
+   * The engine puts its own classification beside the close it reports
+   * (`rendezvous_failure`, `login_failure`, `peer_close_reason`, `error`); the
+   * typed response this client parses does not model those fields, so they are
+   * read from the raw answer, and only from an answer that could end a session.
+   */
+  private noteSessionFailure(rawPoll: string, sessionId: string): void {
+    if (sessionId.length === 0) {
+      return;
+    }
+    const facts = sessionFailureFactsFromEnvelope(rawPoll);
+    if (!hasSessionFailureFacts(facts)) {
+      return;
+    }
+    // Entries are taken when their reason is shown. One that never is (an RDP
+    // certificate decision replaces the attempt, for instance) must not pile up.
+    if (this.sessionFailureFacts.size >= 16 && !this.sessionFailureFacts.has(sessionId)) {
+      this.sessionFailureFacts.clear();
+    }
+    this.sessionFailureFacts.set(sessionId, facts);
+    hilog.warn(DOMAIN, TAG,
+      'session failure session=%{public}s rendezvous=%{public}s login=%{public}s peerClose=%{public}s error=%{public}s',
+      sessionId, facts.rendezvousFailure, facts.loginFailure, facts.peerCloseReason, facts.error);
+  }
+
+  /**
+   * The reason a background session ended. Its facts stay until that session is
+   * closed: the pane that later replays its `close` words it from the same facts.
+   */
+  private closeReasonFor(sessionId: string): string {
+    const facts = this.sessionFailureFacts.get(sessionId);
+    return facts === undefined ? SESSION_ENDED_TEXT : describeSessionFailure(facts, SESSION_ENDED_TEXT).text;
   }
 
   private handleSessionEvent(event: NativeEvent): void {
@@ -9561,7 +9901,7 @@ struct RustDeskIndex {
       if (this.relativeMouseMode) {
         this.relativeMouseMode = false;
         this.syncRelativeMouseMode(false);
-        this.sessionMessage = '远端已退出相对指针模式';
+        this.sessionMessage = '对方已退出相对鼠标模式';
       }
       return;
     }
@@ -9569,7 +9909,7 @@ struct RustDeskIndex {
       if (event.lifecycleEpoch === this.activeSessionLifecycleEpoch
         && Number(event.display ?? -1) === this.currentDisplayIndex
         && this.nativeSessionBridge.isCurrentPresentationEvent(this.activeSessionId, event)
-        && this.connectionSummary === '已连接，等待远端首帧') {
+        && this.connectionSummary === '已连接，正在等待画面') {
         // A new native submission ends waiting; it does not grant input or
         // establish physical scanout, authentication, or a new connection.
         this.connectionSummary = '已连接';
@@ -9587,7 +9927,7 @@ struct RustDeskIndex {
       if (this.connectionUiPhase === 'connecting' || this.connectionUiPhase === 'authenticating') {
         const secure = String(event.secure).trim().toLowerCase() === 'true';
         this.connectionUiMessage = secure
-          ? '安全通道已建立，正在读取远端会话信息。'
+          ? '已连接，正在读取对方设备的信息。'
           : '传输通道已建立，正在等待安全确认。';
       }
       if (this.isRemoteControlSessionActive()) {
@@ -9630,7 +9970,7 @@ struct RustDeskIndex {
       }
       this.errorText = '';
       this.connectionUiPhase = 'connected';
-      this.connectionUiMessage = '连接成功，正在准备远端画面。';
+      this.connectionUiMessage = '连接成功，正在准备画面。';
       this.sessionPhase = 'connected';
       this.remoteSessionTabsController.markPeerInfo(this.activeSessionId, event);
       const activeTab = this.remoteSessionTabsController.get(this.activeSessionId);
@@ -9655,7 +9995,7 @@ struct RustDeskIndex {
           && this.previewSurfaceId.length > 0;
         if (this.relativeMouseMode && !this.relativeMouseModeSupported()) {
           this.relativeMouseMode = false;
-          this.sessionMessage = '当前远端不支持相对指针模式，已使用普通指针';
+          this.sessionMessage = '对方设备不支持相对鼠标模式，已改用普通鼠标';
         }
         this.syncTouchMode(this.touchMode);
         this.syncRelativeMouseMode(this.relativeMouseMode);
@@ -9764,7 +10104,7 @@ struct RustDeskIndex {
         // login on a running viewer by name. The engine's own text is reported and
         // the wire is closed, so the operator retries into a fresh viewer with a
         // fresh prompt instead of a secret that would go nowhere.
-        this.handleRemoteDisconnect(message.length > 0 ? message : '远端拒绝了凭据');
+        this.handleRemoteDisconnect(message.length > 0 ? message : '对方拒绝了用户名或密码');
         return;
       }
       if (this.tryAutoSubmitHandoffPassword()) {
@@ -9811,7 +10151,7 @@ struct RustDeskIndex {
         }
       }
       this.sessionMessage = text;
-      this.connectionSummary = '已连接，等待远端首帧';
+      this.connectionSummary = '已连接，正在等待画面';
       this.errorText = '';
       return;
     }
@@ -9901,7 +10241,7 @@ struct RustDeskIndex {
       this.insecureConnectionMessage = '';
       this.insecureConnectionSessionId = '';
       this.connectionUiPhase = 'connecting';
-      this.connectionUiMessage = '已确认继续，正在等待远端会话信息。';
+      this.connectionUiMessage = '已确认继续，正在连接对方设备。';
       this.sessionMessage = '正在继续非安全连接';
       this.scheduleConnectionTimeout();
     } catch (error) {
@@ -10014,7 +10354,11 @@ struct RustDeskIndex {
     return true;
   }
 
-  private requestVideoRefresh(): void {
+  /**
+   * `byOperator` is false for the refresh this page asks for itself after it
+   * binds a Surface: a failure of that one is recorded, not announced.
+   */
+  private requestVideoRefresh(byOperator: boolean = true): void {
     if (!this.activeSessionId || this.sessionPhase !== 'connected') {
       return;
     }
@@ -10023,15 +10367,21 @@ struct RustDeskIndex {
         this.viewportModel.getCurrentDisplayIndex());
       if (this.isDirectWireSession() && response.ok) {
         if (response.requested === true) {
-          this.sessionMessage = '已请求刷新画面，等待远端更新';
+          this.sessionMessage = '已请求刷新画面';
+        } else if (byOperator) {
+          this.notifyFailure('刷新画面的请求没有被接受，请稍后重试。');
         } else {
-          this.errorText = '原生未确认刷新请求已入队';
+          this.errorText = '刷新画面的请求没有被接受。';
         }
       } else {
         this.updateSessionState(response);
       }
     } catch (error) {
-      this.errorText = `Refresh error: ${String(error)}`;
+      if (byOperator) {
+        this.notifyFailure('刷新画面失败。', String(error));
+      } else {
+        this.errorText = `刷新画面失败。（${String(error)}）`;
+      }
     }
   }
 
@@ -10141,7 +10491,7 @@ struct RustDeskIndex {
           .translate({ x: this.previewUserOffsetX, y: this.previewUserOffsetY })
           .zIndex(0);
         } else {
-          Text('Preparing preview...')
+          Text('正在准备画面…')
             .fontSize(14)
             .fontColor($r('app.color.white'));
         }
@@ -10801,7 +11151,7 @@ struct RustDeskIndex {
           && this.activeSessionKind !== 'vnc',
         resolutionUnavailableText: this.activeSessionKind === 'vnc'
           ? '桌面尺寸由 VNC 服务端决定，本机无法调整'
-          : '远端 OHOS 暂不支持修改显示器分辨率',
+          : '对方是鸿蒙设备，暂不支持修改分辨率',
         displayMode: this.previewDisplayMode,
         shareEnabled: this.canShareDisplay() && this.pendingDisplayIndex < 0,
         shareActive: shareCoordinator.isSharing(),
@@ -10829,6 +11179,8 @@ struct RustDeskIndex {
     }) {
       QualityControlSheet({
         refreshRate: this.selectedRefreshRate,
+        imageQuality: this.selectedImageQuality,
+        onImageQualityChange: (quality: SessionImageQuality) => this.applyImageQualitySelection(quality),
         refreshRateChoices: this.refreshRateChoices,
         panelRefreshRate: this.panelRefreshRate,
         telemetry: this.qualityTelemetry,
@@ -10918,12 +11270,32 @@ struct RustDeskIndex {
     });
   }
 
+  /**
+   * Goes to the settings page with one of its sections already open, e.g. the
+   * account page from "前往登录", instead of leaving the person on the list of
+   * settings to find it themselves.
+   */
+  private openSettingsSection(section: SettingsSectionRequest): void {
+    this.settingsSectionRequest = '';
+    this.openMainTab(MAIN_TAB_SETTINGS);
+    // After the page change has finished, so the sheet rises over the settings
+    // page rather than over the page being left. Same wait the first-launch
+    // guide uses for the same reason.
+    setTimeout((): void => {
+      // Someone who left the settings page meanwhile did not ask for this any
+      // more; an unspent request would open the section on a later visit.
+      if (this.mainTabInFront(MAIN_TAB_SETTINGS)) {
+        this.settingsSectionRequest = section;
+      }
+    }, SETTINGS_SECTION_OPEN_DELAY_MS);
+  }
+
   private captureSessionReturnTab(): void {
-    if (this.currentTabIndex >= 0 && this.currentTabIndex <= 3) {
+    if (this.currentTabIndex >= MAIN_TAB_HOME && this.currentTabIndex <= MAIN_TAB_SETTINGS) {
       this.sessionReturnTabIndex = this.currentTabIndex;
       return;
     }
-    this.sessionReturnTabIndex = 0;
+    this.sessionReturnTabIndex = MAIN_TAB_HOME;
   }
 
   private restoreSessionReturnTab(): void {
@@ -10990,30 +11362,30 @@ struct RustDeskIndex {
   }
 
   private mainNavigationTitle(): ResourceStr {
-    if (this.currentTabIndex === 0) {
+    if (this.currentTabIndex === MAIN_TAB_HOME) {
       return $r('app.string.navigation_home_title');
     }
-    if (this.currentTabIndex === 1) {
+    if (this.currentTabIndex === MAIN_TAB_DEVICES) {
       return '设备';
     }
-    if (this.currentTabIndex === 2) {
-      return '设置';
+    if (this.currentTabIndex === MAIN_TAB_HOST) {
+      return '本机';
     }
-    return '服务端';
+    return '设置';
   }
 
   private mainNavigationSubtitle(): ResourceStr | undefined {
-    if (this.currentTabIndex !== 3) {
+    if (this.currentTabIndex !== MAIN_TAB_HOST) {
       return undefined;
     }
-    return '仅分享本机屏幕和系统声音';
+    return '让其他设备查看或控制这台设备';
   }
 
   private activeMainScrollers(): Scroller[] {
-    if (this.currentTabIndex === 0) {
+    if (this.currentTabIndex === MAIN_TAB_HOME) {
       return [this.connectScroller];
     }
-    if (this.currentTabIndex === 1) {
+    if (this.currentTabIndex === MAIN_TAB_DEVICES) {
       return [
         this.deviceRecentScroller,
         this.deviceFavoriteScroller,
@@ -11021,10 +11393,10 @@ struct RustDeskIndex {
         this.deviceAddressBookScroller,
       ];
     }
-    if (this.currentTabIndex === 2) {
-      return [this.settingsScroller];
+    if (this.currentTabIndex === MAIN_TAB_HOST) {
+      return [this.viewedHostScroller];
     }
-    return [this.viewedHostScroller];
+    return [this.settingsScroller];
   }
 
   private mainTitleSpacerHeight(): number {
@@ -11083,6 +11455,9 @@ struct RustDeskIndex {
       onOpenTransfer: () => this.openTransferWorkspace(),
       onDisconnect: () => this.closeSession('已手动断开连接'),
       onEasyTierModeChange: (instanceId: string) => this.setEasyTierMode(instanceId),
+      onConnectPeer: (target: string, protocol: PeerProtocol, rustdeskIdOnly: boolean) =>
+        this.launchPeer(target, protocol === 'vnc' ? 'vnc' : (protocol === 'rdp' ? 'rdp' : 'remote_control'),
+          rustdeskIdOnly),
     })
   }
 
@@ -11113,8 +11488,10 @@ struct RustDeskIndex {
       onConnectRemote: (peerId: string, rustdeskIdOnly: boolean) => this.launchPeer(peerId, 'remote_control', rustdeskIdOnly),
       onConnectVnc: (peerId: string) => this.launchPeer(peerId, 'vnc'),
       onConnectRdp: (peerId: string) => this.launchPeer(peerId, 'rdp'),
+      onTransferFiles: (peerId: string, rustdeskIdOnly: boolean) =>
+        this.launchPeer(peerId, 'file_transfer', rustdeskIdOnly),
       accountController: rustDeskAccountController,
-      onOpenAccountSettings: (): void => this.openMainTab(2),
+      onOpenAccountSettings: (): void => this.openSettingsSection('account'),
     })
   }
 
@@ -11131,39 +11508,24 @@ struct RustDeskIndex {
       // The same device-derived list the session panel offers, so a default set
       // here is always one the panel can show.
       refreshRateChoices: this.refreshRateChoices,
-      controlledHostState: controlledHostCoordinator.state,
-      controlledTwoFactorState: controlledHostCoordinator.twoFactorState,
       errorText: this.errorText,
       wideLayout: this.isWideMainLayout(),
       scroller: this.settingsScroller,
       titleSpacerHeight: this.boundMainTitleSpacerHeight(),
       bottomAvoidInset: this.windowBottomAvoidInset,
       tutorialLaunchToken: this.firstLaunchTutorialRequest,
+      sectionRequest: this.settingsSectionRequest,
       onServerConfigChange: (config: ServerConfig) => this.updateServerConfigDraft(config),
       onValidateServerConfig: (config: ServerConfig) => this.testServerConfiguration(config),
       serverProbeMessage: this.serverProbeMessage,
       onFlushServerConfig: (retry?: boolean) => this.flushServerConfiguration(retry === true),
       onSessionDefaultsChange: (defaults: SessionDefaults) => this.saveSessionDefaults(defaults),
-      onControlledRefresh: () => {
-        controlledHostCoordinator.refreshPasswordState();
-        controlledHostCoordinator.refreshTwoFactorState();
-      },
-      onControlledPasswordModeChange: (mode: ControlledPasswordMode) =>
-        controlledHostCoordinator.setVerificationMethod(mode),
-      onControlledSetPermanentPassword: (password: string, confirmation: string) =>
-        controlledHostCoordinator.setPermanentPassword(password, confirmation),
-      onControlledRemovePermanentPassword: () => controlledHostCoordinator.clearPermanentPassword(),
-      onControlledBeginTwoFactor: () => controlledHostCoordinator.beginTwoFactorSetup(),
-      onControlledVerifyTwoFactor: (code: string) => controlledHostCoordinator.verifyTwoFactorSetup(code),
-      onControlledCancelTwoFactor: () => controlledHostCoordinator.cancelTwoFactorSetup(),
-      onControlledDisableTwoFactor: () => controlledHostCoordinator.disableTwoFactor(),
-      onControlledTrustedDevicesEnabledChange: (enabled: boolean) =>
-        controlledHostCoordinator.setTrustedDevicesEnabled(enabled),
-      onControlledRemoveTrustedDevice: (device: ControlledTrustedDevice) =>
-        controlledHostCoordinator.removeTrustedDevice(device),
-      onControlledClearTrustedDevices: () => controlledHostCoordinator.clearTrustedDevices(),
       onRefresh: () => void this.refreshNativeState(),
       onTutorialAutoOpened: () => this.markFirstLaunchTutorialShown(),
+      onTutorialDismissed: () => this.openMainTab(MAIN_TAB_HOME),
+      onSectionRequestHandled: (): void => {
+        this.settingsSectionRequest = '';
+      },
     })
   }
 
@@ -11171,13 +11533,20 @@ struct RustDeskIndex {
   private ViewedHostPageContent() {
     ViewedHostPage({
       state: controlledHostCoordinator.state,
+      twoFactorState: controlledHostCoordinator.twoFactorState,
+      serverConfirmed: this.serverProfile.captureApproved() !== undefined,
+      serverUsesOfficial: this.serverConfig.mode === 'official',
+      serverSaving: this.serverSaving,
+      serverError: this.serverConfig.resultState === 'error' ? this.serverConfig.message : '',
+      onConfirmServer: (): void => this.flushServerConfiguration(true),
+      onOpenServerSettings: (): void => this.openSettingsSection('server'),
       scroller: this.viewedHostScroller,
       titleSpacerHeight: this.mainTitleSpacerHeight(),
       bottomAvoidInset: this.windowBottomAvoidInset,
       wideLayout: this.isWideMainLayout(),
       onStart: () => void controlledHostCoordinator.start(),
       onStartWithInput: () => void controlledHostCoordinator.startWithInput(),
-      onStop: () => void controlledHostCoordinator.stop('已由用户停止被看服务'),
+      onStop: () => void controlledHostCoordinator.stop('已停止共享'),
       onAccept: (requestId: string, peerId: string) => controlledHostCoordinator.acceptIncoming(requestId, peerId),
       onReject: (requestId: string, peerId: string) => controlledHostCoordinator.rejectIncoming(requestId, peerId),
       onRefreshPassword: () => controlledHostCoordinator.refreshTemporaryPassword(),
@@ -11273,10 +11642,10 @@ struct RustDeskIndex {
             .alignItems(HorizontalAlign.Center)
             .margin({ bottom: 8 });
 
-            this.WideNavigationItem(0, '首页', $r('sys.symbol.house'))
-            this.WideNavigationItem(1, '设备', $r('sys.symbol.person_crop_circle_fill'))
-            this.WideNavigationItem(2, '设置', $r('sys.symbol.gearshape'))
-            this.WideNavigationItem(3, '服务端', $r('sys.symbol.display'))
+            this.WideNavigationItem(MAIN_TAB_HOME, '首页', $r('sys.symbol.house'))
+            this.WideNavigationItem(MAIN_TAB_DEVICES, '设备', $r('sys.symbol.person_crop_circle_fill'))
+            this.WideNavigationItem(MAIN_TAB_HOST, '本机', $r('sys.symbol.display'))
+            this.WideNavigationItem(MAIN_TAB_SETTINGS, '设置', $r('sys.symbol.gearshape'))
           }
           .width('100%')
           .padding({ left: 10, right: 10, top: 14, bottom: 16 });
@@ -11372,17 +11741,10 @@ struct RustDeskIndex {
           .width(20)
           .height(20)
           .objectFit(ImageFit.Contain)
-        Text('RustDesk')
+        Text('Resk')
           .fontSize(14)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.text_primary'))
-        Text('多窗')
-          .fontSize(9)
-          .fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.text_secondary'))
-          .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-          .backgroundColor($r('app.color.mica_control'))
-          .borderRadius(6)
       }
         .height('100%')
         .padding({ left: 14 })
@@ -11421,7 +11783,7 @@ struct RustDeskIndex {
   @Builder
   private SelectedMainPage() {
     Stack() {
-      if (this.currentTabIndex === 0) {
+      if (this.currentTabIndex === MAIN_TAB_HOME) {
         Stack() {
           this.ConnectPageContent();
         }
@@ -11435,7 +11797,7 @@ struct RustDeskIndex {
             x: -this.mainTabTransitionDirection * MAIN_PAGE_TRANSITION_DISTANCE_VP,
           })),
         ));
-      } else if (this.currentTabIndex === 1) {
+      } else if (this.currentTabIndex === MAIN_TAB_DEVICES) {
         Stack() {
           this.DevicesPageContent();
         }
@@ -11449,7 +11811,7 @@ struct RustDeskIndex {
             x: -this.mainTabTransitionDirection * MAIN_PAGE_TRANSITION_DISTANCE_VP,
           })),
         ));
-      } else if (this.currentTabIndex === 2) {
+      } else if (this.currentTabIndex === MAIN_TAB_SETTINGS) {
         Stack() {
           this.SettingsPageContent();
         }
@@ -11489,22 +11851,22 @@ struct RustDeskIndex {
       TabContent() {
         this.ConnectPageContent();
       }
-      .tabBar(this.TabBuilder(0, '首页', $r('sys.symbol.house')))
+      .tabBar(this.TabBuilder(MAIN_TAB_HOME, '首页', $r('sys.symbol.house')))
 
       TabContent() {
         this.DevicesPageContent();
       }
-      .tabBar(this.TabBuilder(1, '设备', $r('sys.symbol.person_crop_circle_fill')))
-
-      TabContent() {
-        this.SettingsPageContent();
-      }
-      .tabBar(this.TabBuilder(2, '设置', $r('sys.symbol.gearshape')))
+      .tabBar(this.TabBuilder(MAIN_TAB_DEVICES, '设备', $r('sys.symbol.person_crop_circle_fill')))
 
       TabContent() {
         this.ViewedHostPageContent();
       }
-      .tabBar(this.TabBuilder(3, '服务端', $r('sys.symbol.display')))
+      .tabBar(this.TabBuilder(MAIN_TAB_HOST, '本机', $r('sys.symbol.display')))
+
+      TabContent() {
+        this.SettingsPageContent();
+      }
+      .tabBar(this.TabBuilder(MAIN_TAB_SETTINGS, '设置', $r('sys.symbol.gearshape')))
     }
     .barOverlap(true)
     .barPosition(BarPosition.End)
@@ -11681,17 +12043,32 @@ struct RustDeskIndex {
       this.remoteSessionResumeOverlay();
 
       ConnectionAttemptOverlay({
-        visible: this.connectionUiPhase !== 'idle' && !this.showPreviewModal && !this.passwordDialogVisible
-          && !this.insecureConnectionDialogVisible && !this.directCredentialsVisible && !this.rdpCertificateDialogVisible,
+        visible: this.connectionAttemptOverlayVisible(),
         phase: this.connectionUiPhase,
         target: this.connectionUiTarget,
         message: this.connectionUiMessage,
+        relayHint: this.connectionRelayHint,
+        serverHint: this.connectionServerHint,
         bottomAvoidInset: this.windowBottomAvoidInset,
         onCancel: () => this.cancelConnectionAttempt(),
         onRetry: () => this.retryConnectionAttempt(),
+        onRetryViaRelay: () => this.retryConnectionAttempt(true),
+        onConfirmServer: () => this.confirmServerAndRetry(),
         onDismiss: () => this.dismissConnectionAttempt(),
       })
       .zIndex(1500)
+
+      // Someone asking to connect to this device is shown over whatever is in
+      // front, a remote session included. The host page already shows the same
+      // request inline, so it is not doubled there.
+      IncomingRequestDialog({
+        state: controlledHostCoordinator.state,
+        showOverlay: this.showPreviewModal || this.showTransferWorkspace || this.currentTabIndex !== MAIN_TAB_HOST,
+        onAccept: (requestId: string, peerId: string) => controlledHostCoordinator.acceptIncoming(requestId, peerId),
+        onReject: (requestId: string, peerId: string) => controlledHostCoordinator.rejectIncoming(requestId, peerId),
+        onPresentedChange: () => this.syncInputCapture(),
+      })
+      .zIndex(1700)
 
       DirectCredentialsDialog({
         visible: this.directCredentialsVisible,

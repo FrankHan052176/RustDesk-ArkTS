@@ -142,6 +142,14 @@ export interface ActionResponse {
   stored?: boolean;
   /** `sessionSetCodecPreference`: the Core's own codec path accepted the change. */
   coreAccepted?: boolean;
+  /**
+   * Poll / close: the engine's own classification of why the session ended or
+   * was never established. Absent or null when it named nothing.
+   */
+  rendezvous_failure?: string | null;
+  login_failure?: string | null;
+  peer_close_reason?: string | null;
+  error?: string | null;
 }
 
 /** UI connection state only. Authentication does not grant input permission. */

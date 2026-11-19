@@ -94,7 +94,7 @@ export function shareReasonText(reason: string): string {
     case 'unsupported_codec': return '不支持该视频编码，转分享已停止';
     case 'lifecycle_fence': return '系统生命周期回收，转分享已停止';
     case 'invite_expired': return '分享邀请码已过期';
-    case 'auth_failed': return '远端认证失败超限，转分享已停止';
+    case 'auth_failed': return '对方验证失败次数过多，转分享已停止';
     case 'viewer_gone': return '观看端已断开连接';
     case 'transport_failed': return '近场连接已中断，请重新分享';
     case 'send_failed': return '近场数据发送失败，分享已停止，请重新分享';

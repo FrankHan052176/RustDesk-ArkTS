@@ -10,6 +10,7 @@ import {
 import { ApprovedServerProfile } from './RustDeskDirectoryTypes';
 import { ActionResponse, NativeEvent } from './RustDeskTypes';
 import { RemoteFilePath } from './RemoteFilePath';
+import { SessionFailureFacts, describeSessionFailure, sessionFailureFactsFromResponse } from './SessionFailureText';
 
 type TransferSessionState = 'idle' | 'connecting' | 'awaiting_password' | 'awaiting_2fa' | 'ready' | 'failed' | 'closing';
 
@@ -65,6 +66,8 @@ export class TransferManager {
   private secondFactorTrustEnrollmentSupported: boolean = false;
   private sessionState: TransferSessionState = 'idle';
   private statusMessage: string = '文件传输未连接';
+  /** What the last poll answer said about why this session ended, if anything. */
+  private pollFailureFacts: SessionFailureFacts = new SessionFailureFacts();
   private transferErrorMessage: string = '';
   private closeInProgress: boolean = false;
   /** The lifecycle epoch native issued for this session; the ACK echoes it. */
@@ -161,9 +164,11 @@ export class TransferManager {
       return false;
     }
     const response = this.bridge.pollEvents(this.fileSessionId, 20);
+    this.pollFailureFacts = sessionFailureFactsFromResponse(response);
     if (!response.ok) {
       this.sessionState = 'failed';
-      this.statusMessage = response.message?.trim() || '文件传输事件通道已断开';
+      this.statusMessage = describeSessionFailure(this.pollFailureFacts,
+        response.message?.trim() || '文件传输事件通道已断开').text;
       return false;
     }
     const events = response.events ?? [];
@@ -272,7 +277,7 @@ export class TransferManager {
     this.secondFactorMessage = '';
     this.secondFactorTrustEnrollmentSupported = false;
     this.sessionState = 'connecting';
-    this.statusMessage = '2FA 验证码已提交，正在等待远端验证';
+    this.statusMessage = '验证码已提交，正在等待对方设备验证';
     return { queued: true, message: '' };
   }
 
@@ -351,7 +356,7 @@ export class TransferManager {
       return true;
     }
     if (event.name === 'connection_ready') {
-      this.statusMessage = '安全通道已建立，正在读取远端文件';
+      this.statusMessage = '已连接，正在读取对方的文件';
       return true;
     }
     if (event.name === 'peer_info' || event.name === 'sync_peer_info') {
@@ -372,7 +377,8 @@ export class TransferManager {
       this.secondFactorMessage = '';
       this.secondFactorTrustEnrollmentSupported = false;
       this.sessionState = 'failed';
-      this.statusMessage = '文件传输连接已结束';
+      // The engine's own reason (offline, wrong ID, refused...) when it gave one.
+      this.statusMessage = describeSessionFailure(this.pollFailureFacts, '文件传输连接已结束').text;
       return true;
     }
     if (event.name === 'file_dir') {
@@ -693,7 +699,7 @@ export class TransferManager {
     if (response.ok) {
       this.pendingTransfers.push(item);
       this.statusMessage = direction === 'upload'
-        ? '正在验证远端目录是否可写'
+        ? '正在检查对方的文件夹能否写入'
         : '正在验证本地目录是否可写';
       return true;
     }
@@ -801,7 +807,7 @@ export class TransferManager {
   }
 
   private transferStartErrorMessage(direction: TransferDirection, error: string): string {
-    const destination = direction === 'upload' ? '远端目录' : '本地目录';
+    const destination = direction === 'upload' ? '对方文件夹' : '本地目录';
     return `${destination}无法创建文件或文件夹，无法开始传输：${error}`;
   }
 

@@ -495,7 +495,7 @@ export struct RemoteSoftKeyboard {
   @Builder
   private DragHandle() {
     Row() {
-      Text(`远端键盘 · ${this.layerTitle()}`)
+      Text(`远程键盘 · ${this.layerTitle()}`)
         .fontSize(13)
         .fontWeight(FontWeight.Bold)
         .fontColor($r('app.color.neu_text_primary'))
@@ -504,7 +504,7 @@ export struct RemoteSoftKeyboard {
     .layoutWeight(1)
     .height('100%')
     .alignItems(VerticalAlign.Center)
-    .accessibilityText('拖动远端键盘')
+    .accessibilityText('拖动远程键盘')
     .gesture(
       PanGesture({ fingers: 1, direction: PanDirection.All, distance: 4 })
         .onActionStart((_event: GestureEvent): void => {
@@ -565,7 +565,7 @@ export struct RemoteSoftKeyboard {
               .border({ width: 1, color: $r('app.color.mica_border') })
               .borderRadius(10)
               .responseRegion({ x: 0, y: -3, width: '100%', height: 34 })
-              .accessibilityText('收起远端键盘')
+              .accessibilityText('收起远程键盘')
               .onClick((): void => this.collapse());
           }
           .width('100%')

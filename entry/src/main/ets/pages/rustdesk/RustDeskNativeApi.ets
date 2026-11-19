@@ -6,6 +6,10 @@ import {
   accountOidcStart as bridgeAccountOidcStart,
   accountOidcResult as bridgeAccountOidcResult,
   accountOidcCancel as bridgeAccountOidcCancel,
+  accountLoginPassword as bridgeAccountLoginPassword,
+  accountLoginVerify as bridgeAccountLoginVerify,
+  accountLoginCancel as bridgeAccountLoginCancel,
+  accountRefreshUser as bridgeAccountRefreshUser,
   accountLogout as bridgeAccountLogout,
   cloudAddressBookList as bridgeCloudAddressBookList,
   cloudAddressBookLoad as bridgeCloudAddressBookLoad,
@@ -115,6 +119,22 @@ export class RustDeskNativeApi implements RustDeskMouseSink {
 
   accountOidcCancel(attemptReceipt: string): Promise<string> {
     return bridgeAccountOidcCancel(attemptReceipt);
+  }
+
+  accountLoginPassword(receipt: string, username: string, password: string, rememberMe: boolean): Promise<string> {
+    return bridgeAccountLoginPassword(receipt, username, password, rememberMe);
+  }
+
+  accountLoginVerify(challengeReceipt: string, code: string, trustDevice: boolean): Promise<string> {
+    return bridgeAccountLoginVerify(challengeReceipt, code, trustDevice);
+  }
+
+  accountLoginCancel(challengeReceipt: string): Promise<string> {
+    return bridgeAccountLoginCancel(challengeReceipt);
+  }
+
+  accountRefreshUser(receipt: string): Promise<string> {
+    return bridgeAccountRefreshUser(receipt);
   }
 
   accountLogout(receipt: string): Promise<string> {

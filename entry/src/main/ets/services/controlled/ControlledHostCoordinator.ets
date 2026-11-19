@@ -40,7 +40,7 @@ const STOPPING_RECHECK_LIMIT = 120;
  * grant only; the viewed-host run keeps listening and capturing, so nothing here
  * claims a close the engine never requested.
  */
-const BACKGROUND_KEEPALIVE_TEXT = '已进入后台，被看服务继续运行';
+const BACKGROUND_KEEPALIVE_TEXT = '应用已在后台，屏幕共享仍在继续';
 
 /**
  * The start request the legacy UI built.
@@ -223,18 +223,18 @@ function runtimeAdmits(runtime: RustDeskRuntimeState): boolean {
 /** Why a start is refused right now, from the same lifecycle state. */
 function runtimeBlockText(runtime: RustDeskRuntimeState): string {
   if (!runtime.privacyAccepted) {
-    return '尚未获得隐私授权，无法启用被看服务。';
+    return '需要先同意隐私说明，才能共享这台设备的屏幕。';
   }
   if (!runtime.foreground) {
-    return '应用不在前台，无法启用被看服务。';
+    return '应用不在前台，暂时不能开始共享。';
   }
   if (runtime.pending) {
-    return 'RustDesk Core 正在初始化，请稍后重试。';
+    return '应用正在初始化，请稍后重试。';
   }
   if (runtime.error.length > 0) {
-    return `RustDesk Core 初始化失败：${runtime.error}`;
+    return `应用初始化失败：${runtime.error}`;
   }
-  return 'RustDesk Core 尚未就绪，请稍后重试。';
+  return '应用尚未就绪，请稍后重试。';
 }
 
 /**
@@ -243,7 +243,7 @@ function runtimeBlockText(runtime: RustDeskRuntimeState): string {
  * A withdrawn consent is the only lifecycle fact that makes the native fence close
  * the viewed-host run, and it is reported as exactly that.
  */
-const PRIVACY_WITHDRAWN_TEXT = '隐私授权已撤回：已请求关闭被看服务';
+const PRIVACY_WITHDRAWN_TEXT = '已撤回隐私同意，正在停止共享';
 
 /** One queued security operation and the panel generation it was queued for. */
 class SecurityTicket {
@@ -307,7 +307,7 @@ export class ControlledHostCoordinator {
   private runtimeReady: boolean = false;
   /** The native discovery/lifecycle owner generation `runtimeReady` was granted for. */
   private runtimeOwner: string = '';
-  private runtimeBlock: string = 'RustDesk Core 尚未就绪，请稍后重试。';
+  private runtimeBlock: string = '应用尚未就绪，请稍后重试。';
   /**
    * The app-foreground fact the current lifecycle state reports.
    *
@@ -344,7 +344,7 @@ export class ControlledHostCoordinator {
     }
     this.context = context;
     this.backgroundService = new ControlledHostBackgroundService(context, (): void => {
-      void this.failClosed('系统已终止被看服务后台任务');
+      void this.failClosed('系统结束了后台运行，共享已停止');
     });
     this.initialized = true;
     this.runtimeReady = false;
@@ -358,7 +358,7 @@ export class ControlledHostCoordinator {
     this.twoFactorState.verificationCode = '';
     this.state.phase = 'disabled';
     this.state.audioEnabled = false;
-    this.state.statusText = '可启用屏幕共享（设备内音频尚未实现）';
+    this.state.statusText = '尚未开始共享';
     this.state.lastError = '';
     this.emitState();
     // The listener is handed the current lifecycle state at once, so a runtime
@@ -444,7 +444,7 @@ export class ControlledHostCoordinator {
       // A start admitted for the withdrawn generation cannot complete: native
       // refuses it at resolution and closes whatever that attempt really created.
       // It is abandoned like any other superseded attempt.
-      return '被看服务启动已被系统生命周期中断，正在请求关闭';
+      return '共享在启动时被系统中断，正在关闭';
     }
     if (!this.running()) {
       return ''; // Nothing is owned here: no run and no close to observe.
@@ -453,11 +453,11 @@ export class ControlledHostCoordinator {
     try {
       payload = this.parse(this.bridge.status());
     } catch (error) {
-      return `无法读取原生被看服务状态：${String(error)}`;
+      return `无法读取共享状态：${String(error)}`;
     }
     if (payload.ok !== true || payload.serverRunning !== true || payload.state !== 'listening' ||
       runEpochOf(payload) !== this.runEpoch) {
-      return '原生被看服务已不在监听，正在确认关闭';
+      return '共享已停止接受连接，正在确认关闭';
     }
     this.stoppingAttempts = 0;
     this.clearStoppingTimer();
@@ -476,7 +476,7 @@ export class ControlledHostCoordinator {
 
   /** The background fact a live status text names, or nothing. */
   private backgroundSuffix(): string {
-    return this.appInBackground ? '；应用在后台，被看服务继续运行' : '';
+    return this.appInBackground ? '；应用在后台，共享仍在继续' : '';
   }
 
   /**
@@ -545,7 +545,7 @@ export class ControlledHostCoordinator {
   /** Called only by the foreground card's explicit authorization/start action. */
   startWithInput(): Promise<void> {
     if (this.running()) {
-      this.state.lastError = '请先停止当前服务，确认停止后再授权并启用远程控制。';
+      this.state.lastError = '请先停止当前共享，再选择“共享屏幕并允许对方操作”。';
       this.emitState();
       return Promise.resolve();
     }
@@ -583,7 +583,7 @@ export class ControlledHostCoordinator {
       this.stoppingAttempts = 0;
       this.reconcileStoppedRun();
       if (this.state.phase === 'stopping') {
-        this.state.lastError = '被看服务正在停止，请稍后重试。';
+        this.state.lastError = '共享正在停止，请稍后重试。';
         this.state.statusText = this.state.lastError;
         this.emitState();
         return;
@@ -603,7 +603,7 @@ export class ControlledHostCoordinator {
     this.stoppingAttempts = 0;
     this.clearStoppingTimer();
     this.state.phase = 'starting';
-    this.state.statusText = '正在启动被看服务（等待本机监听就绪）';
+    this.state.statusText = '正在开始共享…';
     this.state.lastError = '';
     this.emitState();
     let attemptedEpoch: string = '';
@@ -619,7 +619,7 @@ export class ControlledHostCoordinator {
         throw new Error(this.failureText(config, '无法读取服务器配置'));
       }
       if (config.approved !== true || config.approvedProfile === undefined) {
-        throw new Error('尚未保存并确认服务器配置：请先在设置中保存 ID/中继服务器后再启用被看服务');
+        throw new Error('还没有确认使用的服务器，确认后才能开始共享。');
       }
       const backgroundFailure = await backgroundService?.start();
       if (currentGeneration !== this.generation) {
@@ -629,7 +629,7 @@ export class ControlledHostCoordinator {
         return;
       }
       if (backgroundFailure === undefined) {
-        throw new Error('被看服务后台任务不可用');
+        throw new Error('无法在后台保持共享');
       }
       if (backgroundFailure.length > 0) {
         // The system's own reason (a mode this UIAbility has not declared, a
@@ -687,18 +687,18 @@ export class ControlledHostCoordinator {
         }
       }
       this.applyInputPolicy(rawStartReply);
-      const startReply = this.requireSuccess(rawStartReply, 'RustDesk 被看服务启动失败');
+      const startReply = this.requireSuccess(rawStartReply, '共享没有成功开始');
       if (startReply.serverRunning !== true || startReply.state !== 'listening') {
-        throw new Error(this.failureText(startReply, '原生被看服务未进入监听状态'));
+        throw new Error(this.failureText(startReply, '共享没有成功开始'));
       }
       const epoch: string = runEpochOf(startReply);
       if (epoch.length === 0) {
-        throw new Error('原生被看服务未返回本次运行的 epoch，无法停止或复核该次运行');
+        throw new Error('共享没有成功开始（未能确认本次共享的状态）');
       }
       this.runEpoch = epoch;
       if (this.state.inputEnabled !== enableInput ||
         (enableInput && this.state.inputAuthorization !== 'authorized')) {
-        throw new Error('原生服务未确认本次远程控制模式，正在停止；未将其视为控制成功。');
+        throw new Error('未能确认“允许对方操作”已生效，正在停止共享。');
       }
       this.runRequiresInput = enableInput;
       // A listening run is one the engine really owns: an unconfirmed earlier
@@ -731,7 +731,7 @@ export class ControlledHostCoordinator {
     }
   }
 
-  async stop(reason: string = '被看服务已停止'): Promise<void> {
+  async stop(reason: string = '已停止共享'): Promise<void> {
     this.generation += 1;
     this.cancelPendingInputAuthorization();
     const stopGeneration = this.generation;
@@ -741,7 +741,7 @@ export class ControlledHostCoordinator {
     this.stoppingAttempts = 0;
     const backgroundService = this.backgroundService;
     this.state.phase = 'stopping';
-    this.state.statusText = '正在停止被看服务，等待原生确认';
+    this.state.statusText = '正在停止共享…';
     this.emitState();
     backgroundService?.stop();
     this.state.runningInBackground = false;
@@ -824,7 +824,7 @@ export class ControlledHostCoordinator {
       this.requireSuccess(
         this.parse(allow ? this.bridge.acceptIncoming(incoming.requestId) :
           this.bridge.rejectIncoming(incoming.requestId)),
-        allow ? '无法同意远端观看请求' : '无法拒绝远端观看请求',
+        allow ? '无法同意这个连接请求' : '无法拒绝这个连接请求',
       );
       this.resolvingRequestId = incoming.requestId;
       this.resolvingAccepted = allow;
@@ -1098,7 +1098,7 @@ export class ControlledHostCoordinator {
 
   onAbilityDestroy(): void {
     rustDeskRuntimeController.removeListener(this.runtimeListener);
-    void this.stop('应用已退出，被看服务已停止');
+    void this.stop('应用已退出，共享已停止');
     this.panelGeneration += 1;
     this.twoFactorSetupGeneration += 1;
     this.state.temporaryPassword = '';
@@ -1348,7 +1348,7 @@ export class ControlledHostCoordinator {
       return '本次屏幕共享已结束';
     }
     if (captureState === 'quarantined') {
-      return '屏幕共享异常结束，需重新启动服务';
+      return '屏幕共享意外结束，请重新开始共享';
     }
     return '';
   }
@@ -1393,13 +1393,13 @@ export class ControlledHostCoordinator {
   private approveModeText(): string {
     const scoped: string = this.state.approveModeScoped ? '（仅本次服务）' : '';
     if (this.state.approveMode === 'password') {
-      return `远端需输入密码${scoped}`;
+      return `对方需输入密码${scoped}`;
     }
     if (this.state.approveMode === 'click') {
       return `需在本机点击同意${scoped}`;
     }
     if (this.state.approveMode === 'both') {
-      return `远端密码或本机点击同意${scoped}`;
+      return `对方输入密码，或在本机点击同意${scoped}`;
     }
     return '';
   }
@@ -1410,28 +1410,28 @@ export class ControlledHostCoordinator {
       return '需在本机点击同意';
     }
     if (this.state.approveMode === 'password') {
-      return '需由远端输入密码';
+      return '需要对方输入密码';
     }
     if (this.state.approveMode === 'both') {
-      return '需由远端输入密码，或在本机同意';
+      return '需要对方输入密码，或在本机同意';
     }
     // No policy was reported: say so instead of inventing a weaker path.
-    return '等待本机审批';
+    return '等待在本机同意';
   }
 
   /** The ready text, naming the real approval policy and the real audio state. */
   private readyStatusText(): string {
-    const parts: string[] = [this.state.inputEnabled ? '远程控制已开启' : '仅观看'];
+    const parts: string[] = [this.state.inputEnabled ? '允许对方操作' : '对方只能观看'];
     const approval: string = this.approveModeText();
     if (approval.length > 0) {
       parts.push(approval);
     }
     if (!this.state.audioEnabled) {
-      parts.push('仅屏幕，设备内音频未共享');
+      parts.push('只共享画面，不含声音');
     }
     return parts.length > 0
-      ? `被看服务已启用（${parts.join('；')}），等待远端认证`
-      : '被看服务已启用，等待远端认证';
+      ? `正在共享（${parts.join('；')}），等待对方连接`
+      : '正在共享，等待对方连接';
   }
 
   private schedulePoll(delayMs: number): void {
@@ -1468,30 +1468,30 @@ export class ControlledHostCoordinator {
     }
     const epoch: string = runEpochOf(payload);
     if (epoch !== this.runEpoch) {
-      throw new Error('原生服务状态不属于本次运行，不能继续报告远程控制状态。');
+      throw new Error('共享状态已变化，请重新开始共享。');
     }
     this.applyHostPolicy(payload);
     this.applyInputPolicy(payload);
     if (this.runRequiresInput &&
       (!this.state.inputEnabled || this.state.inputAuthorization !== 'authorized')) {
-      throw new Error('系统远程控制授权已失效或输入已关闭，正在停止本次服务。');
+      throw new Error('系统的远程控制授权已失效，正在停止共享。');
     }
     this.state.terminalReason = payload.terminalReason ?? payload.error ?? '';
     const nativeState: string = payload.state ?? '';
     if (payload.ok !== true || payload.serverRunning !== true || nativeState !== 'listening') {
       if (nativeState === 'disabled') {
-        throw new Error('原生被看服务已停止；本次共享已结束，请重新启动');
+        throw new Error('本次共享已结束，请重新开始共享');
       }
       if (nativeState === 'stopping') {
-        throw new Error('原生被看服务正在停止');
+        throw new Error('共享正在停止');
       }
-      throw new Error(this.failureText(payload, '原生被看服务已停止监听'));
+      throw new Error(this.failureText(payload, '共享已停止'));
     }
     if (this.state.teardownUnconfirmed.length > 0) {
       throw new Error(this.state.teardownUnconfirmed);
     }
     if ((payload.lastError ?? '').length > 0) {
-      throw new Error(payload.lastError ?? '原生服务报告失败');
+      throw new Error(payload.lastError ?? '共享出错');
     }
     return payload;
   }
@@ -1513,7 +1513,7 @@ export class ControlledHostCoordinator {
       this.applyHostPolicy(capture);
       const incomingPayload = this.parse(this.bridge.pollIncoming(256));
       if (incomingPayload.ok !== true) {
-        throw new Error(this.failureText(incomingPayload, '无法读取被看连接列表'));
+        throw new Error(this.failureText(incomingPayload, '无法读取连接请求'));
       }
       this.applyIncoming(incomingPayload, status);
       this.emitState();
@@ -1573,7 +1573,7 @@ export class ControlledHostCoordinator {
     }
     const capture: string = this.captureText(status);
     const captureSuffix: string = capture.length > 0 ? `；${capture}` : '';
-    const inputSuffix: string = this.state.inputEnabled ? '；远程控制已开启' : '；仅观看';
+    const inputSuffix: string = this.state.inputEnabled ? '；允许对方操作' : '；对方只能观看';
     if (nextRequest !== undefined) {
       this.state.incoming = nextRequest;
       this.state.incomingResolving = resolutionStillPending && nextRequest.requestId === this.resolvingRequestId;
@@ -1603,11 +1603,11 @@ export class ControlledHostCoordinator {
     }
     const plainClient: boolean = clients.some((peer: ControlledIncomingPeer): boolean => peer.encrypted === false);
     if (nextRequest?.encrypted === false || plainClient) {
-      this.state.statusText += '；未加密连接，控制端身份未验证';
+      this.state.statusText += '；连接未加密，无法确认对方身份';
     } else if (activePeer?.encrypted === true || nextRequest?.encrypted === true) {
       this.state.statusText += '；传输已加密';
       if (activePeer?.peerVerified === false || nextRequest?.peerVerified === false) {
-        this.state.statusText += '，控制端身份未验证';
+        this.state.statusText += '，无法确认对方身份';
       }
     }
     // The app being in the background does not end this run: every text above
@@ -1623,7 +1623,7 @@ export class ControlledHostCoordinator {
    * disabled service is reported as disabled and an unconfirmed reclamation is
    * reported as a failure instead of a silent success.
    */
-  private reconcileStoppedRun(reason: string = '被看服务已随系统生命周期停止'): void {
+  private reconcileStoppedRun(reason: string = '共享已被系统停止'): void {
     if (!this.initialized || this.state.phase !== 'stopping') {
       return;
     }
@@ -1632,7 +1632,7 @@ export class ControlledHostCoordinator {
       payload = this.parse(this.bridge.status());
     } catch (error) {
       this.state.phase = 'failed';
-      this.state.lastError = `读取原生被看服务状态失败：${String(error)}`;
+      this.state.lastError = `读取共享状态失败：${String(error)}`;
       this.state.statusText = this.state.lastError;
       this.emitState();
       return;
@@ -1642,7 +1642,7 @@ export class ControlledHostCoordinator {
     if (payload.ok === true && nativeState === 'disabled' && payload.serverRunning === false) {
       if (this.runEpoch.length > 0 && runEpochOf(payload) !== this.runEpoch) {
         this.state.phase = 'failed';
-        this.state.lastError = '原生停止状态不属于本次运行，尚未确认回收';
+        this.state.lastError = '还不能确认共享已经停止';
         this.state.statusText = this.state.lastError;
         this.emitState();
         return;
@@ -1673,12 +1673,12 @@ export class ControlledHostCoordinator {
     if (nativeState === 'failed') {
       this.state.phase = 'failed';
       this.state.runningInBackground = false;
-      this.state.lastError = this.failureText(payload, '原生被看服务已停止');
+      this.state.lastError = this.failureText(payload, '共享已停止');
       this.state.statusText = this.state.lastError;
       this.emitState();
       return;
     }
-    this.state.statusText = '系统生命周期已请求关闭被看服务，正在等待原生确认';
+    this.state.statusText = '系统要求停止共享，正在关闭…';
     this.emitState();
     this.scheduleStoppingRecheck();
   }
@@ -1688,7 +1688,7 @@ export class ControlledHostCoordinator {
       return;
     }
     if (this.stoppingAttempts >= STOPPING_RECHECK_LIMIT) {
-      this.state.lastError = '原生被看服务未在限定时间内确认停止；请稍后刷新或重新启动。';
+      this.state.lastError = '共享没有在预期时间内停止，请稍后再试。';
       this.state.statusText = this.state.lastError;
       this.emitState();
       return;
@@ -1722,21 +1722,21 @@ export class ControlledHostCoordinator {
         this.runEpoch = replyEpoch;
       }
       if (payload.ok !== true) {
-        message = this.failureText(payload, '原生被看服务停止失败');
+        message = this.failureText(payload, '停止共享失败');
       } else if (replyEpoch !== epoch) {
-        message = '原生关闭回执不属于本次运行，尚未确认停止';
+        message = '还不能确认共享已经停止';
       } else if ((payload.teardownUnconfirmed ?? '').length > 0) {
         // The owner stopped but did not confirm reclamation: reported as such,
         // never as a confirmed close.
         message = payload.teardownUnconfirmed ?? '';
       } else if (payload.state !== 'disabled' || payload.serverRunning !== false) {
-        message = this.failureText(payload, '原生尚未确认本次运行已停止');
+        message = this.failureText(payload, '还不能确认共享已经停止');
       }
       if (message.length === 0 && generation === this.generation) {
         this.runRequiresInput = false;
       }
     } catch (error) {
-      message = `原生被看服务停止失败：${String(error)}`;
+      message = `停止共享失败：${String(error)}`;
     }
     return message;
   }
@@ -1925,7 +1925,7 @@ export class ControlledHostCoordinator {
    */
   private applyPassword(payload: HostPayload, includeTemporary: boolean, failure: string): boolean {
     if (payload.ok !== true) {
-      this.state.passwordError = `${failure}：${this.failureText(payload, 'Core 拒绝了密码设置操作')}；请重试`;
+      this.state.passwordError = `${failure}：${this.failureText(payload, '操作被拒绝')}；请重试`;
       return false;
     }
     if (includeTemporary) {
@@ -1988,7 +1988,7 @@ export class ControlledHostCoordinator {
     const uri: string = payload.uri ?? '';
     if (payload.ok !== true || uri.length === 0) {
       this.twoFactorState.errorText =
-        `启动双重认证设置失败：${this.failureText(payload, 'Core 未能生成双重认证设置')}；请重试`;
+        `启动双重认证设置失败：${this.failureText(payload, '未能生成设置信息')}；请重试`;
       this.emitState();
       return;
     }
@@ -2053,7 +2053,7 @@ export class ControlledHostCoordinator {
     this.twoFactorState.busy = false;
     if (payload.ok !== true || payload.enabled === true) {
       this.twoFactorState.errorText =
-        `关闭双重认证失败：${this.failureText(payload, 'Core 未能关闭双重认证')}；请重试`;
+        `关闭双重认证失败：${this.failureText(payload, '未能关闭')}；请重试`;
       this.emitState();
       return;
     }
@@ -2126,7 +2126,7 @@ export class ControlledHostCoordinator {
     this.twoFactorState.busy = false;
     if (payload.ok !== true) {
       this.twoFactorState.errorText =
-        `更新信任设备设置失败：${this.failureText(payload, 'Core 未能更新信任设备设置')}；请重试`;
+        `更新信任设备设置失败：${this.failureText(payload, '未能更新')}；请重试`;
       this.emitState();
       return;
     }
@@ -2142,7 +2142,7 @@ export class ControlledHostCoordinator {
    */
   private applyTwoFactor(payload: HostPayload, failure: string): boolean {
     if (payload.ok !== true) {
-      this.twoFactorState.errorText = `${failure}：${this.failureText(payload, 'Core 拒绝了双重认证操作')}；请重试`;
+      this.twoFactorState.errorText = `${failure}：${this.failureText(payload, '操作被拒绝')}；请重试`;
       return false;
     }
     this.twoFactorState.enabled = payload.enabled === true;

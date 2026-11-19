@@ -301,7 +301,7 @@ export struct DisplaySelectorSheet {
   @Param selectedResolution: ResolutionInfo | undefined = undefined;
   @Param resolutionEnabled: boolean = false;
   /** Why sizes cannot be chosen when `resolutionEnabled` is off; each wire states its own reason. */
-  @Param resolutionUnavailableText: string = '远端 OHOS 暂不支持修改显示器分辨率';
+  @Param resolutionUnavailableText: string = '对方是鸿蒙设备，暂不支持修改分辨率';
   @Param displayMode: RustDeskDisplayMode = 'fit';
   /** Source session owning each card's persistent system picker entry. */
   @Param sessionId: string = '';
@@ -456,7 +456,7 @@ export struct DisplaySelectorSheet {
     return mode === 'stretch'
       ? '铺满窗口，比例可能失真'
       : mode === 'original'
-        ? '按远端像素显示，可拖动查看'
+        ? '按对方的原始大小显示，可拖动查看'
         : '保持比例并留黑边';
   }
 
@@ -508,7 +508,7 @@ export struct DisplaySelectorSheet {
             .fontColor($r('app.color.text_primary'));
 
           if (this.displays.length === 0) {
-            Text('暂未获取到远端显示器信息')
+            Text('还没有获取到对方的显示器信息')
               .fontSize($r('app.float.font_body'))
               .fontColor($r('app.color.text_secondary'))
               .padding({ top: $r('app.float.space_8'), bottom: $r('app.float.space_8') });
@@ -525,7 +525,7 @@ export struct DisplaySelectorSheet {
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'));
 
-          Text('只影响本机显示，不改变远端采集设置。')
+          Text('只影响本机显示，不改变对方设备的设置。')
             .fontSize($r('app.float.font_caption'))
             .fontColor($r('app.color.text_secondary'));
 
@@ -547,7 +547,7 @@ export struct DisplaySelectorSheet {
               .padding({ top: $r('app.float.space_8'), bottom: $r('app.float.space_8') });
           } else {
             if (this.resolutions.length === 0) {
-              Text('远端未提供可选分辨率')
+              Text('对方没有提供可选的分辨率')
                 .fontSize($r('app.float.font_body'))
                 .fontColor($r('app.color.text_secondary'))
                 .padding({ top: $r('app.float.space_8'), bottom: $r('app.float.space_8') });

@@ -19,6 +19,8 @@ import remoteSessionHandoffServiceTest from './RemoteSessionHandoffService.test'
 import remoteSessionTabsControllerTest from './RemoteSessionTabsController.test';
 import sessionDisplayControllerTest from './SessionDisplayController.test';
 import sessionOverlayStateTest from './SessionOverlayState.test';
+import sessionFailureTextTest from './SessionFailureText.test';
+import decoderCapabilityReportTest from './DecoderCapabilityReport.test';
 import sessionToolbarMetricsTest from './SessionToolbarMetrics.test';
 import softwarePresentStateTest from './SoftwarePresentState.test';
 import frameRateTelemetryTest from './FrameRateTelemetry.test';
@@ -55,6 +57,8 @@ export default function testsuite(): void {
   remoteSessionTabsControllerTest();
   sessionDisplayControllerTest();
   sessionOverlayStateTest();
+  sessionFailureTextTest();
+  decoderCapabilityReportTest();
   sessionToolbarMetricsTest();
   softwarePresentStateTest();
   frameRateTelemetryTest();

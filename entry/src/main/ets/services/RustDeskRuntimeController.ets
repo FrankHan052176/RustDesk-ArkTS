@@ -1,5 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { deviceInfo } from '@kit.BasicServicesKit';
 import {
   appInit,
   appSetLifecycle,
@@ -8,7 +9,14 @@ import {
   lanScanStart,
   lanScanStop,
   queryDecoderCapabilities,
+  runtimeSetDeviceName,
 } from 'rustdesk-ohrs';
+
+interface DeviceNameReply {
+  ok: boolean;
+  name?: string;
+  error?: string;
+}
 
 interface LifecycleReply {
   ok: boolean;
@@ -125,6 +133,7 @@ class RustDeskRuntimeController {
   private listeners: RustDeskRuntimeObserver[] = [];
   private filesDir: string | undefined = undefined;
   private pending: boolean = false;
+  private deviceNameDeclared: boolean = false;
   private privacyAccepted: boolean = false;
   private foreground: boolean = false;
   private ready: boolean = false;
@@ -256,6 +265,9 @@ class RustDeskRuntimeController {
       this.discoveryAllowed = reply.discoveryAllowed;
       this.owner = reply.ownerGeneration;
       this.pending = false;
+      if (this.ready) {
+        this.declareDeviceName();
+      }
       this.emit();
     } catch (error) {
       if (lifecycle !== this.lifecycle) {
@@ -266,6 +278,35 @@ class RustDeskRuntimeController {
       this.emit();
       const failure: Error = error instanceof Error ? error : new Error(String(error));
       throw failure;
+    }
+  }
+
+  /**
+   * Tells the engine what this device is called, once per process.
+   *
+   * The engine cannot ask the platform for it, and without it the other side's
+   * approval prompt names every connection from this app by one fixed
+   * placeholder. The market name is what the device's own settings show its
+   * owner. A refusal leaves the placeholder in force and is tried again on the
+   * next initialization.
+   */
+  private declareDeviceName(): void {
+    if (this.deviceNameDeclared) {
+      return;
+    }
+    const market: string = (deviceInfo.marketName ?? '').trim();
+    const name: string = market.length > 0 ? market : (deviceInfo.productModel ?? '').trim();
+    if (name.length === 0) {
+      return;
+    }
+    try {
+      const reply = JSON.parse(runtimeSetDeviceName(name)) as DeviceNameReply;
+      this.deviceNameDeclared = reply.ok === true;
+      if (!this.deviceNameDeclared) {
+        hilog.warn(DOMAIN, TAG, 'device name was not accepted: %{public}s', reply.error ?? '');
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'device name could not be declared: %{public}s', String(error));
     }
   }
 
