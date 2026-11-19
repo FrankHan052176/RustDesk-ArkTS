@@ -40,6 +40,7 @@ const DEFAULT_GESTURES_ENABLED_KEY = 'default_gestures_enabled';
 const DEFAULT_TOOLBAR_EXPANDED_KEY = 'default_toolbar_expanded';
 const SESSION_SHARING_ENABLED_KEY = 'session_sharing_enabled';
 const DEFAULT_KEEP_SCREEN_ORIENTATION_KEY = 'default_keep_screen_orientation';
+const DEFAULT_AUTO_OPEN_SYSTEM_IME_KEY = 'default_auto_open_system_ime';
 const DEFAULT_TOUCH_SCROLL_DIVISOR_KEY = 'default_touch_scroll_divisor';
 const DEFAULT_SESSION_FULLSCREEN_KEY = 'default_session_fullscreen_layout';
 const ANDROID_NAVIGATION_VISIBLE_KEY = 'android_navigation_visible';
@@ -449,6 +450,10 @@ export class RustDeskPreferences {
         DEFAULT_KEEP_SCREEN_ORIENTATION_KEY,
         defaults.keepScreenOrientation,
       ) as boolean;
+      defaults.autoOpenSystemIme = store.getSync(
+        DEFAULT_AUTO_OPEN_SYSTEM_IME_KEY,
+        defaults.autoOpenSystemIme,
+      ) as boolean;
       const resolution = store.getSync(RDP_RESOLUTION_KEY, defaults.rdpResolution) as string;
       if (RDP_RESOLUTION_CHOICES.indexOf(resolution) >= 0) {
         defaults.rdpResolution = resolution;
@@ -486,6 +491,7 @@ export class RustDeskPreferences {
       store.putSync(DEFAULT_TOOLBAR_EXPANDED_KEY, defaults.toolbarExpanded);
       store.putSync(SESSION_SHARING_ENABLED_KEY, defaults.sessionSharingEnabled);
       store.putSync(DEFAULT_KEEP_SCREEN_ORIENTATION_KEY, defaults.keepScreenOrientation);
+      store.putSync(DEFAULT_AUTO_OPEN_SYSTEM_IME_KEY, defaults.autoOpenSystemIme);
       store.putSync(RDP_RESOLUTION_KEY, defaults.rdpResolution);
       store.putSync(RDP_SCALE_KEY, defaults.rdpScaleFactor);
       store.putSync(RDP_AUDIO_KEY, defaults.rdpAudioEnabled);

@@ -384,6 +384,13 @@ struct RustDeskIndex {
   private previewKeyboardBlurTimer: number = -1;
   private systemImeBlurTimer: number = -1;
   private systemImeSessionId: string = '';
+  /**
+   * The sessions the auto-open preference has already been applied to.
+   *
+   * A reconnect dials a new session id, so it is a new session and may trigger
+   * again; a switch back to an existing tab re-adopts its id and stays marked.
+   */
+  private autoSystemImeTriggeredSessions: Set<string> = new Set<string>();
   private softKeyboardPressedKeys: string[] = [];
   /**
    * The modifier latches the remote soft keyboard draws.
@@ -1124,6 +1131,7 @@ struct RustDeskIndex {
     rustDeskAccountController.destroy();
     this.clipboardFileRootQueuedSessionId = '';
     this.clipboardPeerUpdateSessions.clear();
+    this.autoSystemImeTriggeredSessions.clear();
     this.unregisterWindowAvoidAreaListener();
     this.unregisterFoldHoverListeners();
     this.clearSurfaceBinding();
@@ -5361,11 +5369,47 @@ struct RustDeskIndex {
       this.hideSystemIme();
       return;
     }
+    this.openSystemIme();
+  }
+
+  /** The open path both the toolbar toggle and the session-start auto-open use. */
+  private openSystemIme(): void {
     this.hideSoftKeyboard();
     this.systemImeText = this.imeInputController.reset();
     this.systemImeSessionId = this.activeSessionId;
     this.systemImeActive = true;
     setTimeout(() => this.requestSystemImeFocus(), 40);
+  }
+
+  /**
+   * Opens the system IME once per session when the preference asks for it.
+   *
+   * It is evaluated at the points where a session settles into an interactive
+   * state: peer info, the first Surface bind, and a keyboard permission being
+   * granted. A session that is not fully interactive yet stays unmarked, so a
+   * later point can retry; once conditions hold the session is remembered even
+   * if the peer takes the permission back, because the existing hide path owns
+   * that teardown.
+   */
+  private autoOpenSystemImeOnce(): void {
+    if (!this.sessionDefaults.autoOpenSystemIme) {
+      return;
+    }
+    const sessionId = this.activeSessionId;
+    if (sessionId.length === 0 || this.autoSystemImeTriggeredSessions.has(sessionId)) {
+      return;
+    }
+    // View-only dials never auto-open; the manual path still follows the peer's
+    // own keyboard permission rather than this local switch.
+    if (!this.systemImeAvailable() || !this.inputEnabled || !this.shouldCaptureInput()) {
+      return;
+    }
+    this.autoSystemImeTriggeredSessions.add(sessionId);
+    if (this.systemImeActive) {
+      return;
+    }
+    this.logRelativeDebug('system_ime_auto', `session=${sessionId}`);
+    this.openSystemIme();
   }
 
   private requestSystemImeFocus(): void {
@@ -8990,6 +9034,8 @@ struct RustDeskIndex {
         this.remoteInteractionReady = true;
         this.syncClipboardController();
         this.syncInputCapture();
+        // A settled Surface bind is this session's first fully rendered moment.
+        this.autoOpenSystemImeOnce();
       }
       if (refreshAfterBind) {
         this.requestVideoRefresh();
@@ -9553,6 +9599,9 @@ struct RustDeskIndex {
           this.hideSoftKeyboard();
         } else if (keyboardPermission === 'true') {
           this.remoteKeyboardPermissionAllowed = true;
+          // A keyboard permission that arrives late is the last condition the
+          // auto-open path may still have been waiting for.
+          this.autoOpenSystemImeOnce();
         }
       }
       return;
@@ -9664,6 +9713,9 @@ struct RustDeskIndex {
         if (this.isRemoteControlSessionActive()) {
           this.ensureRemoteCursorEnabled();
         }
+        // Peer info settles authentication: a preview that was already bound can
+        // now become interactive, so the auto-open preference gets its chance.
+        this.autoOpenSystemImeOnce();
       }
       if (!this.showPreviewModal || !this.previewSurfaceVisible) {
         this.enterPreviewMode(event);
