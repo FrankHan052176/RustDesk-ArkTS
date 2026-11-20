@@ -34,6 +34,7 @@ export struct SessionDefaultsCard {
   @Local displayedToolbarExpanded: boolean = false;
   @Local displayedSessionSharingEnabled: boolean = false;
   @Local displayedKeepScreenOrientation: boolean = false;
+  @Local displayedAutoOpenSystemIme: boolean = false;
   @Event onDefaultsChange: (defaults: SessionDefaults) => void = (_defaults: SessionDefaults) => {};
 
   aboutToAppear(): void {
@@ -52,6 +53,7 @@ export struct SessionDefaultsCard {
     this.displayedToolbarExpanded = this.defaults.toolbarExpanded;
     this.displayedSessionSharingEnabled = this.defaults.sessionSharingEnabled;
     this.displayedKeepScreenOrientation = this.defaults.keepScreenOrientation;
+    this.displayedAutoOpenSystemIme = this.defaults.autoOpenSystemIme;
   }
 
   /** Real device class, not a viewport width: a phone in landscape is still a phone. */
@@ -154,6 +156,13 @@ export struct SessionDefaultsCard {
     this.displayedKeepScreenOrientation = enabled;
     const next = this.copyDefaults();
     next.keepScreenOrientation = enabled;
+    this.emit(next);
+  }
+
+  private updateAutoOpenSystemIme(enabled: boolean): void {
+    this.displayedAutoOpenSystemIme = enabled;
+    const next = this.copyDefaults();
+    next.autoOpenSystemIme = enabled;
     this.emit(next);
   }
 
@@ -331,6 +340,21 @@ export struct SessionDefaultsCard {
     })
     .width(this.toggleRowWidth())
     .height(52)
+    .clip(false);
+  }
+
+  @Builder
+  private AutoOpenSystemImeToggleRow() {
+    LuminousSwitch({
+      label: '会话开始时自动打开系统输入法',
+      description: '远控画面就绪后自动调起系统键盘，无需再点工具栏的输入法按钮',
+      isOn: this.displayedAutoOpenSystemIme,
+      rowWidth: this.toggleRowWidth(),
+      motionEnabled: true,
+      onChange: (enabled: boolean): void => this.updateAutoOpenSystemIme(enabled),
+    })
+    .width(this.toggleRowWidth())
+    .height(64)
     .clip(false);
   }
 
@@ -658,6 +682,11 @@ export struct SessionDefaultsCard {
                 }
                 .width('100%');
               }
+
+              Row() {
+                this.AutoOpenSystemImeToggleRow()
+              }
+              .width('100%');
             }
             .width('100%');
           } else {
@@ -670,6 +699,7 @@ export struct SessionDefaultsCard {
               if (this.showsKeepScreenOrientation()) {
                 this.KeepScreenOrientationToggleRow()
               }
+              this.AutoOpenSystemImeToggleRow()
             }
             .width('100%');
           }

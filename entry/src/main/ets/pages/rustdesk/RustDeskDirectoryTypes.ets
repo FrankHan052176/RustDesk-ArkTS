@@ -384,6 +384,8 @@ export class SessionDefaults {
   sessionSharingEnabled: boolean = false;
   /** Phone/tablet keep their connection-time screen direction; the session stays locked. */
   keepScreenOrientation: boolean = false;
+  /** Whether a session auto-opens the system IME once it first becomes interactive. */
+  autoOpenSystemIme: boolean = false;
   rdpResolution: string = 'follow';
   /** Zero means derive the whitelisted percent from this pane's pixel density. */
   rdpScaleFactor: number = 0;
